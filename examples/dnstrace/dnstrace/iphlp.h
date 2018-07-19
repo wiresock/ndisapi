@@ -3,6 +3,7 @@
 /*                           All Rights Reserved.                        */
 /*                          http://www.ntkernel.com                      */
 /*                           ndisrd@ntkernel.com                         */
+/*                                                                       */
 /* Module Name:  iphlp.h                                                 */
 /*                                                                       */
 /* Abstract: IP helper definitions                                       */
