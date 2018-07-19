@@ -63,7 +63,7 @@ public:
 		return SetEvent(get()) ? true : false;
 	}
 
-	bool reset() const
+	bool reset_event() const
 	{
 		return ResetEvent(get()) ? true : false;
 	}
@@ -99,7 +99,7 @@ struct mac_address {
 	static constexpr int ETH_ALEN = 6;
 #endif //ETH_ALEN
 
-	mac_address() { memset(&data[0], 0, ETH_ALEN); }
+	mac_address() noexcept { memset(&data[0], 0, ETH_ALEN); }
 	mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, ETH_ALEN); }
 
 	unsigned char& operator[](std::size_t index) { return data[index]; }

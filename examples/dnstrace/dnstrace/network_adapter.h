@@ -34,7 +34,8 @@ public:
 		m_dwNetworkFilter(dwFilter),
 		m_Event(CreateEvent(NULL, TRUE, FALSE, NULL)),
 		m_InternalName(InternalName),
-		m_FriendlyName(FriendlyName)
+		m_FriendlyName(FriendlyName),
+		m_CurrentMode({0})
 	{
 		InitializeInterface();
 	}
@@ -46,7 +47,7 @@ public:
 	void						Release(); // Stops filtering the network interface and tries tor restore its original state
 	void						SetMode(unsigned dwFlags); // Set filtering mode for the network interface
 	unsigned					WaitEvent(unsigned dwMilliseconds) const {return m_Event.wait(dwMilliseconds);} // Waits for network interface event to be signalled
-	bool						ResetEvent() const { return m_Event.reset(); }
+	bool						ResetEvent() const { return m_Event.reset_event(); }
 	bool						SetPacketEvent() const { return m_pApi->SetPacketEvent(m_hAdapter, m_Event)?true:false; }
 	const std::string&			GetInternalName() const { return m_InternalName; }
 	const std::string&			GetFriendlyName() const { return m_FriendlyName; }

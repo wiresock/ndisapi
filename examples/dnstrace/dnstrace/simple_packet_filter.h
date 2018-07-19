@@ -24,7 +24,7 @@ enum class PacketAction
 
 class simple_packet_filter : public CNdisApi
 {
-	simple_packet_filter() : CNdisApi() { initialize_network_interfaces(); }
+	simple_packet_filter() noexcept: CNdisApi() { initialize_network_interfaces(); }
 
 public:
 	template<typename F1, typename F2>

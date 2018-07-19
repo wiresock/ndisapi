@@ -27,7 +27,7 @@ namespace net
 	{
 		static constexpr size_t IPV4_ADDRESS_MAX_LENGTH = 16;
 
-		ip_address_v4() { S_un.S_addr = 0; }
+		ip_address_v4() noexcept { S_un.S_addr = 0; }
 		ip_address_v4(const in_addr& ip) { *static_cast<in_addr*>(this) = ip; }
 		ip_address_v4(const std::string& ip)
 		{
@@ -70,7 +70,7 @@ namespace net
 	{
 		static constexpr size_t IPV6_ADDRESS_MAX_LENGTH = 48;
 
-		ip_address_v6() { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
+		ip_address_v6() noexcept { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
 		ip_address_v6(const in_addr6& ip) { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
 		ip_address_v6(const std::string& ip)
 		{
