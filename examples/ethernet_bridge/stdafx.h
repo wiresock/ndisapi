@@ -27,6 +27,7 @@
 
 #include <utility>
 #include <vector>
+#include <array>
 #include <unordered_map>
 #include <memory>
 #include <tuple>
@@ -35,6 +36,9 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <algorithm>
+#include <shared_mutex>
+#include <optional>
 
 using namespace std;
 
@@ -43,5 +47,5 @@ using namespace std;
 #include "iphlp.h"
 #include "dhcp_typedefs.h"
 #include "NetworkAdapter.h"
-#include "ebridge.h"
+#include "EthernetBridge.h"
 

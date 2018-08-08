@@ -92,29 +92,77 @@ namespace std
 // Simple wrapper for MAC address
 //
 struct mac_address {
-	mac_address() noexcept { memset(data, 0, ETH_ALEN); }
-	mac_address(const mac_address& rhs) { memmove(data, rhs.data, ETH_ALEN); }
-	mac_address(const unsigned char* ptr) { memmove(data, ptr, ETH_ALEN); }
-	
-	const mac_address& operator = (const mac_address& rhs){
-		memmove(data, rhs.data, ETH_ALEN); 
-		return *this;
+	mac_address() { memset(&data[0], 0, ETH_ALEN); }
+	mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, ETH_ALEN); }
+
+	unsigned char& operator[](size_t index) { return data[index]; }
+	const unsigned char& operator[](size_t index)const { return data[index]; }
+
+	bool operator ==(const mac_address& rhs) const {
+		return data == rhs.data;
 	}
 
-	unsigned char& operator[](std::size_t index) { return data[index]; }
-	const unsigned char& operator[](std::size_t index)const { return data[index]; }
-
-	bool operator ==(const mac_address& rhs) {
-		return (memcmp(data, rhs.data, ETH_ALEN) == 0)?true:false;
-	}
-
-	bool operator !=(const mac_address& rhs) {
+	bool operator !=(const mac_address& rhs) const {
 		return !(*this == rhs);
 	}
 
-	static const mac_address empty;
-	unsigned char data[ETH_ALEN];
+	bool operator <(const mac_address& rhs) const {
+		return (memcmp(&data[0], &rhs.data[0], ETH_ALEN) < 0);
+	}
+
+	operator bool () const{
+		return (*this != mac_address());
+	}
+
+	operator std::array<unsigned char, ETH_ALEN>() const { return data; }
+
+	template<typename T>
+	operator std::basic_string<T>() const {
+		std::basic_ostringstream<T> oss;
+		oss << std::hex
+			<< std::uppercase
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[0]) //<< ":"
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[1]) //<< ":"
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[2]) //<< ":"
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[3]) //<< ":"
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[4]) //<< ":"
+			<< std::setfill(T('0')) << std::setw(2)
+			<< static_cast<unsigned> (data[5]);
+		return oss.str();
+	}
+
+	const mac_address& reverse() { std::reverse(data.begin(), data.end()); return *this; }
+	std::array<unsigned char, ETH_ALEN> data;
 };
+
+namespace std
+{
+	template<> struct hash<mac_address>
+	{
+		typedef mac_address argument_type;
+		typedef std::size_t result_type;
+		result_type operator()(argument_type const& mac) const
+		{
+			uint64_t arg = (static_cast<uint64_t>(mac[0]) << 40) +
+				(static_cast<uint64_t>(mac[1]) << 32) +
+				(static_cast<uint64_t>(mac[2]) << 24) +
+				(static_cast<uint64_t>(mac[3]) << 16) +
+				(static_cast<uint64_t>(mac[4]) << 8) +
+				mac[5];
+
+			result_type const h1(
+				std::hash<uint64_t>{}(arg)
+			);
+
+			return h1;
+		}
+	};
+}
 
 //
 // Class representing network interface

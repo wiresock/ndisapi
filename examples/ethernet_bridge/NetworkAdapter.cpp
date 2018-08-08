@@ -14,9 +14,6 @@
 /*************************************************************************/
 
 #include "stdafx.h"
-#include "NetworkAdapter.h"
-
-const mac_address mac_address::empty;
 
 // Set network filter for the interface
 inline unsigned long CNetworkAdapter::GetHwFilter() 
@@ -33,9 +30,11 @@ void CNetworkAdapter::Release()
 	// This function releases packets in the adapter queue and stops listening the interface
 	m_Event.signal();
 
-	// Restore old packet filter
-	if (m_dwNetworkFilter) 
+	// Restore old packet filter (not for WLAN as we don't modify it)
+	if (!IsWLAN() && m_dwNetworkFilter)
+	{
 		SetHwFilter(m_dwNetworkFilter);
+	}
 
 	// Reset adapter mode and flush the packet queue
 	m_CurrentMode.dwFlags = 0;

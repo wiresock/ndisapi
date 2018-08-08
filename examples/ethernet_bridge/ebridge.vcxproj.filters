@@ -24,13 +24,13 @@
     <ClInclude Include="dhcp_typedefs.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ebridge.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="iphlp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NetworkAdapter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="EthernetBridge.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -42,6 +42,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="NetworkAdapter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="EthernetBridge.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
