@@ -324,7 +324,7 @@ void EthernetBridge::BridgeWorkingThread(size_t index)
 									&pArpHdr->arp_sha[0]
 								);
 
-								// Replace target MAC in ARP request to WLAN adapter one
+								// Replace source MAC in ARP reply to WLAN adapter one
 								memmove(&pArpHdr->arp_sha[0], &Adapters[a]->GetHwAddress()[0], ETH_ALEN);
 							}
 
