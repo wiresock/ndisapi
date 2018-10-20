@@ -42,10 +42,10 @@
 
 using namespace std;
 
-#include "..\..\include\common.h"
-#include "..\..\include\ndisapi.h"
-#include "iphlp.h"
-#include "dhcp_typedefs.h"
+#include "..\..\..\include\common.h"
+#include "..\..\..\include\ndisapi.h"
+#include "..\common\iphlp.h"
+#include "..\common\dhcp_typedefs.h"
 #include "NetworkAdapter.h"
 #include "EthernetBridge.h"
 

@@ -1,8 +1,5 @@
 #pragma once
 
-#include "stdint.h"
-#include "iphlp.h"
-
 /* options: */
 #define DEFAULT_LEASE_TIME      (1 * 356 * 24 * 60 * 60) /* 1 year */
 #define DEFAULT_SUBNET_MASK     "255.255.255.0"

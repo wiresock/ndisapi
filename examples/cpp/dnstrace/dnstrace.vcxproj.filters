@@ -7,11 +7,20 @@
     </Filter>
     <Filter Include="Header Files">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
     </Filter>
     <Filter Include="Resource Files">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Header Files\common">
+      <UniqueIdentifier>{9960ff66-54ef-4b8a-85fe-c498ba096f26}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\net">
+      <UniqueIdentifier>{59f322fa-1d78-4e8f-beb8-ae04922a0d8d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\ndisapi">
+      <UniqueIdentifier>{2e08aa19-4065-47eb-b59f-7787cf771c51}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -21,30 +30,27 @@
     <ClInclude Include="targetver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="dhcp_typedefs.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\common\net\ip_address.h">
+      <Filter>Header Files\common\net</Filter>
     </ClInclude>
-    <ClInclude Include="iphlp.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\common\ndisapi\network_adapter.h">
+      <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
-    <ClInclude Include="NetworkAdapter.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\common\ndisapi\network_helpers.h">
+      <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
-    <ClInclude Include="EthernetBridge.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h">
+      <Filter>Header Files\common\ndisapi</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\iphlp.h">
+      <Filter>Header Files\common</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ebridge.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="NetworkAdapter.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="EthernetBridge.cpp">
+    <ClCompile Include="dnstrace.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
