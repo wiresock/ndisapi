@@ -15,34 +15,34 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\ndisapi\include\Common.h">
+    <ClInclude Include="..\include\Common.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\ndisapi\include\ndisapi.h">
+    <ClInclude Include="..\include\ndisapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\ndisapi\ndisapi\iphlp.h">
+    <ClInclude Include="..\ndisapi\iphlp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\ndisapi\ndisapi\precomp.h">
+    <ClInclude Include="..\ndisapi\precomp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\ndisapi\ndisapi\resource.h">
+    <ClInclude Include="..\ndisapi\resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\ndisapi\ndisapi\ndisapi.cpp">
+    <ClCompile Include="..\ndisapi\ndisapi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="..\..\..\ndisapi\ndisapi\ndisapi.rc">
+    <ResourceCompile Include="..\ndisapi\ndisapi.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\..\ndisapi\ndisapi.dll\ndisapi.def">
+    <None Include=".\ndisapi.def">
       <Filter>Source Files</Filter>
     </None>
   </ItemGroup>
