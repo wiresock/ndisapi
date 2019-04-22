@@ -1,91 +1,137 @@
-/*************************************************************************/
-/*              Copyright (c) 2000-2018 NT Kernel Resources.             */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  network_adapter.h                                       */
-/*                                                                       */
-/* Abstract: Network interface wrapper class declaration                 */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode                                                           */
-/*                                                                       */
-/*************************************************************************/
+/// <summary>
+/// Module Name:  network_adapter.h 
+/// Abstract: Network interface wrapper class declaration 
+/// </summary>
+// --------------------------------------------------------------------------------
 
 #pragma once
 
 namespace ndisapi
 {
-	//
-	// Class representing network interface
-	//
-
+	// --------------------------------------------------------------------------------
+	/// <summary>
+	/// Class representing network interface
+	/// </summary>
+	// --------------------------------------------------------------------------------
 	class network_adapter {
 	public:
 		network_adapter(
 			CNdisApi* api,
-			HANDLE hAdapter,
+			HANDLE adapter_handle,
 			unsigned char* mac_addr,
-			const std::string& InternalName,
-			const std::string& FriendlyName,
-			unsigned dwFilter = 0
-		) : m_pApi(api),
-			m_hAdapter(hAdapter),
-			m_HwAddress(mac_addr),
-			m_dwNetworkFilter(dwFilter),
-			m_Event(CreateEvent(NULL, TRUE, FALSE, NULL)),
-			m_InternalName(InternalName),
-			m_FriendlyName(FriendlyName),
-			m_CurrentMode({ 0 })
-		{
-			InitializeInterface();
-		}
+			std::string internal_name,
+			std::string friendly_name
+		) : api_(api),
+			hardware_address_{ mac_addr },
+			packet_event_(CreateEvent(nullptr, TRUE, FALSE, nullptr)),
+			internal_name_(std::move(internal_name)),
+			friendly_name_(std::move(friendly_name)),
+			current_mode_({ adapter_handle, 0}) {}
 
-		~network_adapter() {}
+		~network_adapter() = default;
 
-		void						InitializeInterface() noexcept {}; // Initialize additional network interface parameters 
-		HANDLE						GetAdapter() const { return m_hAdapter; } // Returnes network interface handle value
-		void						Release(); // Stops filtering the network interface and tries tor restore its original state
-		void						SetMode(unsigned dwFlags); // Set filtering mode for the network interface
-		unsigned					WaitEvent(unsigned dwMilliseconds) const { return m_Event.wait(dwMilliseconds); } // Waits for network interface event to be signalled
-		bool						ResetEvent() const { return m_Event.reset_event(); }
-		bool						SetPacketEvent() const { return m_pApi->SetPacketEvent(m_hAdapter, m_Event) ? true : false; }
-		const std::string&			GetInternalName() const { return m_InternalName; }
-		const std::string&			GetFriendlyName() const { return m_FriendlyName; }
-		mac_address					GetHwAddress() const { return m_HwAddress; }
+		network_adapter(const network_adapter& other) = delete;
+		network_adapter(network_adapter&& other) noexcept = default;
+		network_adapter& operator=(const network_adapter& other) = delete;
+		network_adapter& operator=(network_adapter&& other) noexcept = default;
+
+		// ********************************************************************************
+		/// <summary>
+		/// Returns network interface handle value
+		/// </summary>
+		/// <returns>network adapter handle</returns>
+		// ********************************************************************************
+		HANDLE get_adapter() const { return current_mode_.hAdapterHandle; }
+		// ********************************************************************************
+		/// <summary>
+		/// Stops filtering the network interface and tries tor restore its original state
+		/// </summary>
+		// ********************************************************************************
+		void release(); 
+		// ********************************************************************************
+		/// <summary>
+		/// Set filtering mode for the network interface
+		/// </summary>
+		/// <param name="flags">filter mode flags value</param>
+		// ********************************************************************************
+		void set_mode(unsigned flags);
+		// ********************************************************************************
+		/// <summary>
+		/// Waits for network interface event to be signaled
+		/// </summary>
+		/// <param name="milliseconds"></param>
+		/// <returns>wait status</returns>
+		// ********************************************************************************
+		unsigned wait_event(const unsigned milliseconds) const { return packet_event_.wait(milliseconds); } 
+		// ********************************************************************************
+		/// <summary>
+		/// resets packet event
+		/// </summary>
+		/// <returns>status of the operation</returns>
+		// ********************************************************************************
+		bool reset_event() const { return packet_event_.reset_event(); }
+		// ********************************************************************************
+		/// <summary>
+		/// submits packet event into the driver
+		/// </summary>
+		/// <returns>status of the operation</returns>
+		// ********************************************************************************
+		bool set_packet_event() const { return api_->SetPacketEvent(current_mode_.hAdapterHandle, static_cast<HANDLE>(packet_event_)) ? true : false; }
+		// ********************************************************************************
+		/// <summary>
+		/// Network adapter internal name getter
+		/// </summary>
+		/// <returns>internal name string reference</returns>
+		// ********************************************************************************
+		const std::string& get_internal_name() const { return internal_name_; }
+		// ********************************************************************************
+		/// <summary>
+		/// Network adapter user friendly name getter
+		/// </summary>
+		/// <returns>user friendly name string reference</returns>
+		// ********************************************************************************
+		const std::string& get_friendly_name() const { return friendly_name_; }
+		// ********************************************************************************
+		/// <summary>
+		/// Queries network adapter hardware address
+		/// </summary>
+		/// <returns>network adapter MAC address</returns>
+		// ********************************************************************************
+		mac_address	get_hw_address() const { return hardware_address_; }
 
 	private:
 
-		CNdisApi*					m_pApi;				// Driver interface pointer
-		HANDLE						m_hAdapter;			// Network interface handle value
-		mac_address					m_HwAddress;		// Network interface current MAC address
-		unsigned long				m_dwNetworkFilter;	// Network interface original filter value
-		safe_event					m_Event;			// Packet in the adapter queue event
-		std::string					m_InternalName;		// Internal network interface name
-		std::string					m_FriendlyName;		// User-friendly name
-		ADAPTER_MODE				m_CurrentMode;		// Used to manipulate network interface mode
+		/// <summary>Driver interface pointer</summary>
+		CNdisApi*		api_;
+		/// <summary>Network interface current MAC address</summary>
+		mac_address		hardware_address_;
+		/// <summary>Packet in the adapter queue event</summary>
+		safe_event		packet_event_;
+		/// <summary>Internal network interface name</summary>
+		std::string		internal_name_;	
+		/// <summary>User-friendly name</summary>
+		std::string		friendly_name_;	
+		/// <summary>Used to manipulate network interface mode</summary>
+		ADAPTER_MODE	current_mode_;		
 	};
 
-	inline void network_adapter::Release()
+	inline void network_adapter::release()
 	{
 		// This function releases packets in the adapter queue and stops listening the interface
-		m_Event.signal();
+		[[maybe_unused]] auto result = packet_event_.signal();
 
 		// Reset adapter mode and flush the packet queue
-		m_CurrentMode.dwFlags = 0;
-		m_CurrentMode.hAdapterHandle = m_hAdapter;
+		current_mode_.dwFlags = 0;
 
-		m_pApi->SetAdapterMode(&m_CurrentMode);
-		m_pApi->FlushAdapterPacketQueue(m_hAdapter);
+		api_->SetAdapterMode(&current_mode_);
+		api_->FlushAdapterPacketQueue(current_mode_.hAdapterHandle);
 	}
 
-	inline void network_adapter::SetMode(unsigned dwFlags)
+	inline void network_adapter::set_mode(unsigned flags)
 	{
-		m_CurrentMode.dwFlags = dwFlags;
-		m_CurrentMode.hAdapterHandle = m_hAdapter;
+		current_mode_.dwFlags = flags;
 
-		m_pApi->SetAdapterMode(&m_CurrentMode);
+		api_->SetAdapterMode(&current_mode_);
 	}
 }
 

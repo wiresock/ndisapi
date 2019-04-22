@@ -1,58 +1,56 @@
-/*************************************************************************/
-/*                Copyright (c) 2000-2018 NT Kernel Resources.           */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  ip_address.h                                            */
-/*                                                                       */
-/* Abstract: IP address wrappers definitions                             */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode, Kernel mode                                              */
-/*                                                                       */
-/*************************************************************************/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Module Name:  ip_address.h
+/// Abstract: IP address wrappers definitions
+/// </summary>
+// --------------------------------------------------------------------------------
 
-#ifndef _NET_IP_ADDRESS_H
-#define _NET_IP_ADDRESS_H
+#pragma once
+
+#include <in6addr.h>
+#include <ip2string.h>
 
 #pragma comment(lib, "ntdll.lib")
 
 namespace net
 {
-	//
-	// Wrapper for in_addr. Represents IP version 4 address.
-	//
-	struct ip_address_v4 : public in_addr
+	// --------------------------------------------------------------------------------
+	/// <summary>
+	/// Wrapper for in_addr. Represents IP version 4 address.
+	/// </summary>
+	// --------------------------------------------------------------------------------
+	struct ip_address_v4 : in_addr
 	{
-		static constexpr size_t IPV4_ADDRESS_MAX_LENGTH = 16;
+		static constexpr size_t ipv4_address_max_length = 16;
 
-		ip_address_v4() noexcept { S_un.S_addr = 0; }
-		ip_address_v4(const in_addr& ip) { *static_cast<in_addr*>(this) = ip; }
-		ip_address_v4(const std::string& ip)
+		explicit ip_address_v4(const uint32_t addr = 0) { S_un.S_addr = addr; }
+		explicit ip_address_v4(const in_addr& ip) { *static_cast<in_addr*>(this) = ip; }
+
+		explicit ip_address_v4(const std::string& ip)
 		{
-			PCSTR Terminator = NULL;
+			PCSTR terminator = nullptr;
 
-			::RtlIpv4StringToAddressA(ip.c_str(), TRUE, &Terminator, this);
-		}
-		ip_address_v4(const std::wstring& ip)
-		{
-			LPCWSTR Terminator = NULL;
-
-			::RtlIpv4StringToAddressW(ip.c_str(), TRUE, &Terminator, this);
+			assert(0 == ::RtlIpv4StringToAddressA(ip.c_str(), TRUE, &terminator, this));
 		}
 
-		operator std::string() const
+		explicit ip_address_v4(const std::wstring& ip)
 		{
-			std::vector<char> ip_vec(IPV4_ADDRESS_MAX_LENGTH, 0);
+			LPCWSTR terminator = nullptr;
+
+			assert(0 == ::RtlIpv4StringToAddressW(ip.c_str(), TRUE, &terminator, this));
+		}
+
+		explicit operator std::string() const
+		{
+			std::vector<char> ip_vec(ipv4_address_max_length, 0);
 			::RtlIpv4AddressToStringA(this, &ip_vec[0]);
 
 			return std::string(&ip_vec[0]);
 		}
 
-		operator std::wstring() const
+		explicit operator std::wstring() const
 		{
-			std::vector<wchar_t> ip_vec(IPV4_ADDRESS_MAX_LENGTH, 0);
+			std::vector<wchar_t> ip_vec(ipv4_address_max_length, 0);
 			::RtlIpv4AddressToStringW(this, &ip_vec[0]);
 
 			return std::wstring(&ip_vec[0]);
@@ -61,41 +59,62 @@ namespace net
 		bool operator ==(const ip_address_v4& rhs) const { return (S_un.S_addr == rhs.S_un.S_addr); }
 
 		bool operator <(const ip_address_v4& rhs) const { return (S_un.S_addr < rhs.S_un.S_addr); }
+
+		friend std::ostream& operator<<(std::ostream& os, const ip_address_v4& dt);
+		friend std::wostream& operator<<(std::wostream& os, const ip_address_v4& dt);
 	};
 
-	//
-	// Wrapper for in_addr6. Represents IP version 6 address.
-	//
+	inline std::ostream& operator<<(std::ostream& os, const ip_address_v4& dt)
+	{
+		os << std::string(dt);
+		return os;
+	}
+
+	inline std::wostream& operator<<(std::wostream& os, const ip_address_v4& dt)
+	{
+		os << std::wstring(dt);
+		return os;
+	}
+
+	// --------------------------------------------------------------------------------
+	/// <summary>
+	/// Wrapper for in_addr6. Represents IP version 6 address.
+	/// </summary>
+	// --------------------------------------------------------------------------------
 	struct ip_address_v6 : in_addr6
 	{
-		static constexpr size_t IPV6_ADDRESS_MAX_LENGTH = 48;
+		static constexpr size_t ipv6_address_max_string_length = 48;
+		static constexpr size_t ipv6_address_max_length = 16;
 
-		ip_address_v6() noexcept { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
-		ip_address_v6(const in_addr6& ip) { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
-		ip_address_v6(const std::string& ip)
+		ip_address_v6() { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
+		explicit ip_address_v6(const uint8_t addr[ipv6_address_max_length]) { memmove(reinterpret_cast<void*>(this), addr, sizeof(in_addr6)); }
+		explicit ip_address_v6(const in_addr6& ip) { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
+
+		explicit ip_address_v6(const std::string& ip)
 		{
-			PCSTR Terminator = NULL;
+			PCSTR terminator = nullptr;
 
-			::RtlIpv6StringToAddressA(ip.c_str(), &Terminator, this);
-		}
-		ip_address_v6(const std::wstring& ip)
-		{
-			LPCWSTR Terminator = NULL;
-
-			::RtlIpv6StringToAddressW(ip.c_str(), &Terminator, this);
+			assert(0 == ::RtlIpv6StringToAddressA(ip.c_str(), &terminator, this));
 		}
 
-		operator std::string() const
+		explicit ip_address_v6(const std::wstring& ip)
 		{
-			std::vector<char> ip_vec(IPV6_ADDRESS_MAX_LENGTH, 0);
+			LPCWSTR terminator = nullptr;
+
+			assert(0 == ::RtlIpv6StringToAddressW(ip.c_str(), &terminator, this));
+		}
+
+		explicit operator std::string() const
+		{
+			std::vector<char> ip_vec(ipv6_address_max_string_length, 0);
 			::RtlIpv6AddressToStringA(this, &ip_vec[0]);
 
 			return std::string(&ip_vec[0]);
 		}
 
-		operator std::wstring() const
+		explicit operator std::wstring() const
 		{
-			std::vector<wchar_t> ip_vec(IPV6_ADDRESS_MAX_LENGTH, 0);
+			std::vector<wchar_t> ip_vec(ipv6_address_max_string_length, 0);
 			::RtlIpv6AddressToStringW(this, &ip_vec[0]);
 
 			return std::wstring(&ip_vec[0]);
@@ -108,14 +127,27 @@ namespace net
 
 		bool operator <(const ip_address_v6& rhs) const { return (memcmp(this, &rhs, sizeof(in_addr6)) < 0); }
 
-		operator uint32_t() const
+		explicit operator uint32_t() const
 		{
-			auto _dwords = reinterpret_cast<const uint32_t*>(this);
-			return _dwords[0] ^ _dwords[1] ^ _dwords[2] ^ _dwords[3];
+			const auto dword = reinterpret_cast<const uint32_t*>(this);
+			return dword[0] ^ dword[1] ^ dword[2] ^ dword[3];
 		}
+
+		friend std::ostream& operator<<(std::ostream& os, const ip_address_v6& dt);
+		friend std::wostream& operator<<(std::wostream& os, const ip_address_v6& dt);
 	};
 
-	
+	inline std::ostream& operator<<(std::ostream& os, const ip_address_v6& dt)
+	{
+		os << std::string(dt);
+		return os;
+	}
+
+	inline std::wostream& operator<<(std::wostream& os, const ip_address_v6& dt)
+	{
+		os << std::wstring(dt);
+		return os;
+	}
 }
 
 namespace std
@@ -124,9 +156,9 @@ namespace std
 	{
 		using argument_type = net::ip_address_v6;
 		using result_type = size_t;
-		result_type operator()(argument_type const& ip) const
+		result_type operator()(argument_type const& ip) const noexcept
 		{
-			result_type const h1(std::hash<uint32_t>{}(ip));
+			auto const h1(std::hash<uint32_t>{}(static_cast<uint32_t>(ip)));
 
 			return h1;
 		}
@@ -136,13 +168,12 @@ namespace std
 	{
 		using argument_type = net::ip_address_v4;
 		using result_type = size_t;
-		result_type operator()(argument_type const& ip) const
+		result_type operator()(argument_type const& ip) const noexcept
 		{
-			result_type const h1(std::hash<uint32_t>{}(ip.S_un.S_addr));
+			auto const h1(std::hash<uint32_t>{}(ip.S_un.S_addr));
 
 			return h1;
 		}
 	};
 }
-#endif //_NET_IP_ADDRESS_H
 
