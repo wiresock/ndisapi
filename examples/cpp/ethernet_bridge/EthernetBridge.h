@@ -1,17 +1,10 @@
-/*************************************************************************/
-/*              Copyright (c) 2000-2018 NT Kernel Resources.             */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  EthernetBridge.h                                        */
-/*                                                                       */
-/* Abstract: EthernetBridge class interface                              */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode                                                           */
-/*                                                                       */
-/*************************************************************************/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Module Name:  EthernetBridge.h 
+/// Abstract: EthernetBridge class interface
+/// </summary>
+// --------------------------------------------------------------------------------
+
 #pragma once
 
 //
@@ -71,27 +64,88 @@ enum class NdisPhysicalMedium
 };
 
 
-class EthernetBridge : public CNdisApi
+class ethernet_bridge final : public CNdisApi
 {
 public:
-	EthernetBridge() noexcept : CNdisApi() { InitializeNetworkInterfaces(); }
-	virtual ~EthernetBridge() { StopBridge(); }
+	ethernet_bridge() noexcept : CNdisApi() { initialize_network_interfaces(); }
+	virtual ~ethernet_bridge() { stop_bridge(); }
 
-	bool									StartBridge(std::vector<size_t> const& interfaces);
-	void									StopBridge();
-	std::vector<std::pair<string, string>>	GetInterfaceList();
+	// ********************************************************************************
+	/// <summary>
+	/// Starts bridging for the selected interfaces
+	/// </summary>
+	/// <param name="interfaces">indexes of network interfaces to bridge</param>
+	/// <returns>boolean status of the operation</returns>
+	// ********************************************************************************
+	bool start_bridge(std::vector<size_t> const& interfaces);
+
+	// ********************************************************************************
+	/// <summary>
+	/// Stops bridging
+	/// </summary>
+	// ********************************************************************************
+	void stop_bridge();
+
+	// ********************************************************************************
+	/// <summary>
+	/// Queries list of available network interfaces
+	/// </summary>
+	/// <returns>vector of pairs of strings representing internal and friendly network 
+	/// interface names</returns>
+	// ********************************************************************************
+	std::vector<std::pair<string, string>> get_interface_list();
 
 private:
-	std::optional<std::size_t>				FindTargetAdapterByMac(mac_address const& address);
-	bool									UpdateTargetAdapterByMac(std::size_t index, mac_address const& address);
-	void									BridgeWorkingThread(size_t);
-	void									InitializeNetworkInterfaces();
+	// ********************************************************************************
+	/// <summary>
+	/// Queries the index of the network interface to forward packet with the supplied 
+	/// destination MAC address
+	/// </summary>
+	/// <param name="address">MAC address reference</param>
+	/// <returns></returns>
+	// ********************************************************************************
+	std::optional<std::size_t> find_target_adapter_by_mac(mac_address const& address);
 
-	std::atomic_flag								m_bIsRunning = ATOMIC_FLAG_INIT;
-	std::vector<unique_ptr<CNetworkAdapter>>		m_NetworkInterfaces; // List of network interfaces available for bridging
-	std::vector<std::thread>						m_WorkingThreads;
-	std::vector<std::size_t>						m_BridgedInterfaces;
+	// ********************************************************************************
+	/// <summary>
+	/// Stores network interface index for the supplied MAC address
+	/// </summary>
+	/// <param name="index">index of the network interface</param>
+	/// <param name="address">MAC address to store behind the interface index</param>
+	/// <returns></returns>
+	// ********************************************************************************
+	bool update_target_adapter_by_mac(std::size_t index, mac_address const& address);
 
-	std::unordered_map<mac_address, std::size_t>	m_MacTable;
-	std::shared_mutex								m_MacTableLock;
+	// ********************************************************************************
+	/// <summary>
+	/// Packet reading and forwarding thread
+	/// </summary>
+	/// <param name="index">network interface index to read packets from</param>
+	// ********************************************************************************
+	void bridge_working_thread(size_t index);
+
+	// ********************************************************************************
+	/// <summary>
+	/// Initializes available network interfaces
+	/// </summary>
+	// ********************************************************************************
+	void initialize_network_interfaces();
+
+	/// <summary>Bridge running flag</summary>
+	std::atomic_flag is_running_ = ATOMIC_FLAG_INIT;
+
+	/// <summary>List of network interfaces available for bridging</summary>
+	std::vector<unique_ptr<network_adapter>> network_interfaces_;
+	
+	/// <summary>vector of working threads</summary>
+	std::vector<std::thread> working_threads_;
+
+	/// <summary>vector of bridged network interfaces</summary>
+	std::vector<std::size_t> bridged_interfaces_;
+	
+	/// <summary>has table to store MAC address -> adapter index association</summary>
+	std::unordered_map<mac_address, std::size_t> mac_table_;
+
+	/// <summary>synchronization lock for the hash table above</summary>
+	std::shared_mutex mac_table_lock_;
 };

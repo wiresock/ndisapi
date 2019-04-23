@@ -1,47 +1,40 @@
-/*************************************************************************/
-/*              Copyright (c) 2000-2018 NT Kernel Resources.             */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  EthernetBridge.cpp                                      */
-/*                                                                       */
-/* Abstract: EthernetBridge class implementation                         */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode                                                           */
-/*                                                                       */
-/*************************************************************************/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Module Name:  EthernetBridge.cpp
+/// Abstract: EthernetBridge class implementation
+/// </summary>
+// --------------------------------------------------------------------------------
+
 #include "stdafx.h"
 
-const size_t	maximum_packet_block = 512;
+const size_t maximum_packet_block = 512;
 
-bool EthernetBridge::StartBridge(std::vector<size_t> const& interfaces)
+bool ethernet_bridge::start_bridge(std::vector<size_t> const& interfaces)
 {
-	m_BridgedInterfaces = interfaces;
+	bridged_interfaces_ = interfaces;
 
 	// Check for the duplicates and remove if any
-	std::sort(m_BridgedInterfaces.begin(), m_BridgedInterfaces.end());
-	auto last = std::unique(m_BridgedInterfaces.begin(), m_BridgedInterfaces.end());
-	m_BridgedInterfaces.erase(last, m_BridgedInterfaces.end());
+	std::sort(bridged_interfaces_.begin(), bridged_interfaces_.end());
+	const auto last = std::unique(bridged_interfaces_.begin(), bridged_interfaces_.end());
+	bridged_interfaces_.erase(last, bridged_interfaces_.end());
 
 	// We should have at least two network interfaces and network interfaces indexes must be in range
-	if ((m_BridgedInterfaces.size() < 2) ||
-		(*std::max_element(m_BridgedInterfaces.begin(), m_BridgedInterfaces.end()) >= m_NetworkInterfaces.size())
+	if ((bridged_interfaces_.size() < 2) ||
+		(*std::max_element(bridged_interfaces_.begin(), bridged_interfaces_.end()) >= network_interfaces_.size())
 		)
 		return false;
 
 	// Sort network interfaces so that Wi-Fi interface is at the end of the list
-	std::sort(m_BridgedInterfaces.begin(), m_BridgedInterfaces.end(), [this](auto, auto b)
+	std::sort(bridged_interfaces_.begin(), bridged_interfaces_.end(), [this](auto, auto b)
 	{
-		if (m_NetworkInterfaces[b]->IsWLAN())
+		if (network_interfaces_[b]->is_wlan())
 			return true;
 		else
 			return false;
 	});
 
 	// Start Ethernet Bridge working threads
-	if (m_bIsRunning.test_and_set())
+	if (is_running_.test_and_set())
 	{
 		// already running
 		return false;
@@ -49,9 +42,9 @@ bool EthernetBridge::StartBridge(std::vector<size_t> const& interfaces)
 
 	for (auto&& adapter : interfaces)
 	{
-		m_WorkingThreads.push_back(
+		working_threads_.push_back(
 			std::thread(
-				&EthernetBridge::BridgeWorkingThread,
+				&ethernet_bridge::bridge_working_thread,
 				this,
 				adapter
 			)
@@ -62,53 +55,53 @@ bool EthernetBridge::StartBridge(std::vector<size_t> const& interfaces)
 	return true;
 }
 
-void EthernetBridge::StopBridge()
+void ethernet_bridge::stop_bridge()
 {
-	m_bIsRunning.clear();
+	is_running_.clear();
 
-	for (auto&& adapter : m_BridgedInterfaces)
-		m_NetworkInterfaces[adapter]->Release();
+	for (auto&& adapter : bridged_interfaces_)
+		network_interfaces_[adapter]->release();
 
 	// Wait for working threads to exit
-	for (auto&& t : m_WorkingThreads)
+	for (auto&& t : working_threads_)
 	{
 		if (t.joinable())
 			t.join();
 	}
 
 	// Release working threads objects
-	m_WorkingThreads.clear();
+	working_threads_.clear();
 }
 
-std::vector<std::pair<string, string>> EthernetBridge::GetInterfaceList()
+std::vector<std::pair<string, string>> ethernet_bridge::get_interface_list()
 {
 	std::vector<std::pair<string, string>> result;
-	result.reserve(m_NetworkInterfaces.size());
+	result.reserve(network_interfaces_.size());
 
-	for (auto& e : m_NetworkInterfaces)
+	for (auto& e : network_interfaces_)
 	{
-		result.push_back(std::make_pair(e->GetFriendlyName(), e->GetInternalName()));
+		result.push_back(std::make_pair(e->get_friendly_name(), e->get_internal_name()));
 	}
 
 	return result;
 }
 
-std::optional<std::size_t> EthernetBridge::FindTargetAdapterByMac(mac_address const & address)
+std::optional<std::size_t> ethernet_bridge::find_target_adapter_by_mac(mac_address const & address)
 {
-	std::shared_lock<std::shared_mutex> lock(m_MacTableLock);
-	if (m_MacTable.count(address))
-		return m_MacTable[address];
+	std::shared_lock<std::shared_mutex> lock(mac_table_lock_);
+	if (mac_table_.count(address))
+		return mac_table_[address];
 	else
 		return {};
 }
 
-bool EthernetBridge::UpdateTargetAdapterByMac(std::size_t index, mac_address const & address)
+bool ethernet_bridge::update_target_adapter_by_mac(std::size_t index, mac_address const & address)
 {
 	bool result = false;
 	{
-		std::shared_lock<std::shared_mutex> lock(m_MacTableLock);
+		std::shared_lock<std::shared_mutex> lock(mac_table_lock_);
 
-		if (m_MacTable.count(address) && m_MacTable[address] == index)
+		if (mac_table_.count(address) && mac_table_[address] == index)
 		{
 			return result;
 		}
@@ -119,52 +112,50 @@ bool EthernetBridge::UpdateTargetAdapterByMac(std::size_t index, mac_address con
 	}
 
 	{
-		std::unique_lock<std::shared_mutex> lock(m_MacTableLock);
-		m_MacTable[address] = index;
+		std::unique_lock<std::shared_mutex> lock(mac_table_lock_);
+		mac_table_[address] = index;
 	}
 
 	return result;
 }
 
-void EthernetBridge::InitializeNetworkInterfaces()
+void ethernet_bridge::initialize_network_interfaces()
 {
-	TCP_AdapterList			AdList;
-	std::vector<char>		szFriendlyName(MAX_PATH * 4);
+	TCP_AdapterList			ad_list;
+	std::vector<char>		friendly_name(MAX_PATH * 4);
 
-	GetTcpipBoundAdaptersInfo(&AdList);
+	GetTcpipBoundAdaptersInfo(&ad_list);
 
-	for (size_t i = 0; i < AdList.m_nAdapterCount; ++i)
+	for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
 	{
-		if ((static_cast<NdisMedium>(AdList.m_nAdapterMediumList[i]) == NdisMedium::NdisMedium802_3) ||
-			(static_cast<NdisMedium>(AdList.m_nAdapterMediumList[i]) == NdisMedium::NdisMediumNative802_11)
+		if ((static_cast<NdisMedium>(ad_list.m_nAdapterMediumList[i]) == NdisMedium::NdisMedium802_3) ||
+			(static_cast<NdisMedium>(ad_list.m_nAdapterMediumList[i]) == NdisMedium::NdisMediumNative802_11)
 			)
 		{
-			CNdisApi::ConvertWindows2000AdapterName((const char*)AdList.m_szAdapterNameList[i], szFriendlyName.data(), static_cast<DWORD>(szFriendlyName.size()));
+			CNdisApi::ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]),
+			                                        friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
 
-			auto pAdapter = std::make_unique<CNetworkAdapter>(
+			auto adapter = std::make_unique<network_adapter>(
 				*this,
-				AdList.m_nAdapterHandle[i],
-				AdList.m_czCurrentAddress[i],
-				std::string((const char*)AdList.m_szAdapterNameList[i]),
-				std::string(szFriendlyName.data()));
+				ad_list.m_nAdapterHandle[i],
+				ad_list.m_czCurrentAddress[i],
+				std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
+				std::string(friendly_name.data()));
 
-			m_NetworkInterfaces.push_back(std::move(pAdapter));
+			network_interfaces_.push_back(std::move(adapter));
 		}
 	}
 }
 
-void EthernetBridge::BridgeWorkingThread(size_t index)
+void ethernet_bridge::bridge_working_thread(const size_t index)
 {
-	PETH_M_REQUEST							ReadRequest, BridgeRequest, MstcpBridgeRequest;
-	std::unique_ptr<INTERMEDIATE_BUFFER[]>	PacketBuffer = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+	const auto packet_buffer = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
 	//
-	// Thread reads packets from the network interface and duplicates non local packets to the second
+	// Thread reads packets from the network interface and duplicates non-local packets to the second
 	//
 
-	auto& Adapters = m_NetworkInterfaces;
-
-	ULONG_PTR dwThreadIndex = reinterpret_cast<ULONG_PTR>(Adapters[index]->GetAdapter());
+	auto& adapters = network_interfaces_;
 
 	//
 	// Initialize Requests
@@ -174,51 +165,50 @@ void EthernetBridge::BridgeWorkingThread(size_t index)
 		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1)>;
 
 	// 1. Allocate memory using unique_ptr for auto-delete on thread exit
-	auto ReadRequestPtr = std::make_unique<request_storage_type_t>();
-	auto BridgeRequestPtr = std::make_unique<request_storage_type_t>();
-	auto MstcpBridgeRequestPtr = std::make_unique<request_storage_type_t>();
+	auto read_request_ptr = std::make_unique<request_storage_type_t>();
+	auto bridge_request_ptr = std::make_unique<request_storage_type_t>();
+	auto mstcp_bridge_request_ptr = std::make_unique<request_storage_type_t>();
 
-	// 2. Get raw pointers for convinience
-	ReadRequest = reinterpret_cast<PETH_M_REQUEST>(ReadRequestPtr.get());
-	BridgeRequest = reinterpret_cast<PETH_M_REQUEST>(BridgeRequestPtr.get());
-	MstcpBridgeRequest = reinterpret_cast<PETH_M_REQUEST>(MstcpBridgeRequestPtr.get());
+	// 2. Get raw pointers for convenience
+	auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr.get());
+	auto bridge_request = reinterpret_cast<PETH_M_REQUEST>(bridge_request_ptr.get());
+	auto mstcp_bridge_request = reinterpret_cast<PETH_M_REQUEST>(mstcp_bridge_request_ptr.get());
 
-	ReadRequest->hAdapterHandle = Adapters[index]->GetAdapter();
+	read_request->hAdapterHandle = adapters[index]->get_adapter();
 
-	ReadRequest->dwPacketsNumber = maximum_packet_block;
+	read_request->dwPacketsNumber = maximum_packet_block;
 
 	//
 	// Initialize packet buffers
 	//
-	ZeroMemory(PacketBuffer.get(), sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
 
 	for (unsigned i = 0; i < maximum_packet_block; ++i)
 	{
-		ReadRequest->EthPacket[i].Buffer = &PacketBuffer[i];
+		read_request->EthPacket[i].Buffer = &packet_buffer[i];
 	}
 
 	// Set event for helper driver
-	if (!Adapters[index]->SetPacketEvent())
+	if (!adapters[index]->set_packet_event())
 	{
 		return;
 	}
 
-	if (!Adapters[index]->IsWLAN())
+	if (!adapters[index]->is_wlan())
 	{
-		if (!Adapters[index]->SetHwFilter(NDIS_PACKET_TYPE_PROMISCUOUS))
+		if (!adapters[index]->set_hw_filter(NDIS_PACKET_TYPE_PROMISCUOUS))
 			return;
 	}
 
-	Adapters[index]->SetMode(MSTCP_FLAG_SENT_LISTEN | MSTCP_FLAG_RECV_LISTEN | MSTCP_FLAG_FILTER_DIRECT | MSTCP_FLAG_LOOPBACK_BLOCK);
+	adapters[index]->set_mode(MSTCP_FLAG_SENT_LISTEN | MSTCP_FLAG_RECV_LISTEN | MSTCP_FLAG_FILTER_DIRECT | MSTCP_FLAG_LOOPBACK_BLOCK);
 
-	while (m_bIsRunning.test_and_set())
+	while (is_running_.test_and_set())
 	{
-		Adapters[index]->WaitEvent(INFINITE);
+		[[maybe_unused]]auto wait_status = adapters[index]->wait_event(INFINITE);
 
 		// Reset event, as we don't need to wake up all working threads at once
 
-		if (m_bIsRunning.test_and_set())
-			Adapters[index]->ResetEvent();
+		if (is_running_.test_and_set())
+			[[maybe_unused]]auto reset_status = adapters[index]->reset_event();
 		else
 		{
 			break;
@@ -226,132 +216,132 @@ void EthernetBridge::BridgeWorkingThread(size_t index)
 
 		// Start reading packet from the driver
 
-		while (ReadPackets(ReadRequest))
+		while (ReadPackets(read_request))
 		{
-			for (size_t i = 0; i < ReadRequest->dwPacketsSuccess; ++i)
+			for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 			{
-				if (PacketBuffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
+				if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 				{
-					ether_header_ptr pEtherHdr = reinterpret_cast<ether_header_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer);
-					UpdateTargetAdapterByMac(index, mac_address(pEtherHdr->h_source));
+					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
+					update_target_adapter_by_mac(index, mac_address(ether_header->h_source));
 				}
 			}
 
 			//
 			// WLAN requires MAC NAT
 			//
-			if (Adapters[index]->IsWLAN())
+			if (adapters[index]->is_wlan())
 			{
 				// Process packets from WLAN:
 				// Need to lookup correct MAC address for each packet by its IP address
 				// and replace destination MAC address
-				for (size_t i = 0; i < ReadRequest->dwPacketsSuccess; ++i)
+				for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 				{
-					ether_header_ptr pEtherHdr = reinterpret_cast<ether_header_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer);
-					if (ntohs(pEtherHdr->h_proto) == ETH_P_IP)
+					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
+					if (ntohs(ether_header->h_proto) == ETH_P_IP)
 					{
-						iphdr_ptr pIpHdr = (iphdr*)(ReadRequest->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
+						auto ip_hdr = reinterpret_cast<iphdr*>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
 
-						auto dest_mac = Adapters[index]->GetMacByIp(pIpHdr->ip_dst);
+						auto dest_mac = adapters[index]->get_mac_by_ip(ip_hdr->ip_dst);
 						if (dest_mac)
 						{
-							memcpy(pEtherHdr->h_dest, &dest_mac[0], ETH_ALEN);
+							memcpy(ether_header->h_dest, &dest_mac[0], ETH_ALEN);
 						}
 					}
 
-					if (ntohs(pEtherHdr->h_proto) == ETH_P_ARP)
+					if (ntohs(ether_header->h_proto) == ETH_P_ARP)
 					{
-						ether_arp_ptr pArpHdr = reinterpret_cast<ether_arp_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
+						auto arp_hdr = reinterpret_cast<ether_arp_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
 
-						if (ntohs(pArpHdr->ea_hdr.ar_op) == ARPOP_REQUEST)
+						if (ntohs(arp_hdr->ea_hdr.ar_op) == ARPOP_REQUEST)
 						{
 
 						}
 						else
 						{
-							auto dest_mac = Adapters[index]->GetMacByIp(*reinterpret_cast<in_addr*>(pArpHdr->arp_tpa));
+							auto dest_mac = adapters[index]->get_mac_by_ip(*reinterpret_cast<in_addr*>(arp_hdr->arp_tpa));
 							if (dest_mac)
 							{
-								memcpy(pEtherHdr->h_dest, &dest_mac[0], ETH_ALEN);
-								memcpy(pArpHdr->arp_tha, &dest_mac[0], ETH_ALEN);
+								memcpy(ether_header->h_dest, &dest_mac[0], ETH_ALEN);
+								memcpy(arp_hdr->arp_tha, &dest_mac[0], ETH_ALEN);
 							}
 						}
 					}
 				}
 			}
 
-			for (auto&& a : m_BridgedInterfaces)
+			for (auto&& a : bridged_interfaces_)
 			{
 				if (a == index)
 					continue;
 
-				if (Adapters[a]->IsWLAN())
+				if (adapters[a]->is_wlan())
 				{
 					// Process packets to WLAN:
 					// Need to change source MAC to WLAN adapter MAC 
 					// and save pair IP->MAC for the future
-					for (size_t i = 0; i < ReadRequest->dwPacketsSuccess; ++i)
+					for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 					{
-						ether_header_ptr pEtherHdr = reinterpret_cast<ether_header_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer);
+						auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
 
 						//
 						// ARP processing. Here we save pairs of IP and MAC addresses for future use
 						//
-						if (ntohs(pEtherHdr->h_proto) == ETH_P_ARP)
+						if (ntohs(ether_header->h_proto) == ETH_P_ARP)
 						{
-							ether_arp_ptr pArpHdr = reinterpret_cast<ether_arp_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
+							auto arp_hdr = reinterpret_cast<ether_arp_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
 
-							if (ntohs(pArpHdr->ea_hdr.ar_op) == ARPOP_REQUEST)
+							if (ntohs(arp_hdr->ea_hdr.ar_op) == ARPOP_REQUEST)
 							{
 								// ARP request
 
 								// Save pair of IP and MAC
-								Adapters[a]->SetMacForIp(
-									*reinterpret_cast<in_addr*>(pArpHdr->arp_spa),
-									&pArpHdr->arp_sha[0]
+								adapters[a]->set_mac_for_ip(
+									*reinterpret_cast<in_addr*>(arp_hdr->arp_spa),
+									&arp_hdr->arp_sha[0]
 								);
 
 								// Replace source MAC in ARP request to WLAN adapter one
-								memmove(&pArpHdr->arp_sha[0], &Adapters[a]->GetHwAddress()[0], ETH_ALEN);
+								memmove(&arp_hdr->arp_sha[0], &adapters[a]->get_hw_address()[0], ETH_ALEN);
 							}
 							else
 							{
 								// ARP reply
 
 								// Save pair of IP and MAC
-								Adapters[a]->SetMacForIp(
-									*reinterpret_cast<in_addr*>(pArpHdr->arp_spa),
-									&pArpHdr->arp_sha[0]
+								adapters[a]->set_mac_for_ip(
+									*reinterpret_cast<in_addr*>(arp_hdr->arp_spa),
+									&arp_hdr->arp_sha[0]
 								);
 
 								// Replace source MAC in ARP reply to WLAN adapter one
-								memmove(&pArpHdr->arp_sha[0], &Adapters[a]->GetHwAddress()[0], ETH_ALEN);
+								memmove(&arp_hdr->arp_sha[0], &adapters[a]->get_hw_address()[0], ETH_ALEN);
 							}
 
 						}
 
 						//
-						// DHCP requests preprocessing (there is no sense to send UNICAST DHCP requests if we use MAC NAT)
+						// DHCP requests preprocessing (there is no sense to send UNI-CAST DHCP requests if we use MAC NAT)
 						//
-						if (ntohs(pEtherHdr->h_proto) == ETH_P_IP)
+						if (ntohs(ether_header->h_proto) == ETH_P_IP)
 						{
-							iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
+							const auto ip_header = reinterpret_cast<iphdr_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
 
-							if (pIpHeader->ip_p == IPPROTO_UDP)
+							if (ip_header->ip_p == IPPROTO_UDP)
 							{
-								udphdr_ptr pUdpHeader = reinterpret_cast<udphdr_ptr>(((PUCHAR)pIpHeader) + sizeof(DWORD)*pIpHeader->ip_hl);
-								if (ntohs(pUdpHeader->th_dport) == IPPORT_DHCPS)
+								const auto udp_header = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
+								if (ntohs(udp_header->th_dport) == IPPORT_DHCPS)
 								{
-									dhcp_packet* pDhcp = reinterpret_cast<dhcp_packet*>(pUdpHeader + 1);
+									const auto dhcp = reinterpret_cast<dhcp_packet*>(udp_header + 1);
 
-									if ((pDhcp->op == BOOTREQUEST) &&
-										(pDhcp->flags == 0)
+									if ((dhcp->op == BOOTREQUEST) &&
+										(dhcp->flags == 0)
 										)
 									{
 										// Change DHCP flags to broadcast 
-										pDhcp->flags = htons(0x8000);
-										RecalculateUDPChecksum(ReadRequest->EthPacket[i].Buffer);
-										RecalculateIPChecksum(ReadRequest->EthPacket[i].Buffer);
+										dhcp->flags = htons(0x8000);
+										RecalculateUDPChecksum(read_request->EthPacket[i].Buffer);
+										RecalculateIPChecksum(read_request->EthPacket[i].Buffer);
 									}
 
 								}
@@ -359,72 +349,72 @@ void EthernetBridge::BridgeWorkingThread(size_t index)
 						}
 
 						// Replace source MAC in Ethernet header
-						memmove(&pEtherHdr->h_source, &Adapters[a]->GetHwAddress()[0], ETH_ALEN);
+						memmove(&ether_header->h_source, &adapters[a]->get_hw_address()[0], ETH_ALEN);
 					}
 				}
 
-				for (size_t i = 0; i < ReadRequest->dwPacketsSuccess; ++i)
+				for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 				{
-					ether_header_ptr pEtherHdr = reinterpret_cast<ether_header_ptr>(ReadRequest->EthPacket[i].Buffer->m_IBuffer);
+					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
 
-					if (PacketBuffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+					if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 					{
-						// For outgoing packets add to list only orginated from the current interface (to skip possible loopback indications)
-						if (Adapters[index]->IsLocal(PacketBuffer[i].m_IBuffer + ETH_ALEN) ||
-							(Adapters[a]->IsLocal(PacketBuffer[i].m_IBuffer + ETH_ALEN)))
+						// For outgoing packets add to list only originated from the current interface (to skip possible loopback indications)
+						if (adapters[index]->is_local(packet_buffer[i].m_IBuffer + ETH_ALEN) ||
+							(adapters[a]->is_local(packet_buffer[i].m_IBuffer + ETH_ALEN)))
 						{
-							auto destination = FindTargetAdapterByMac(pEtherHdr->h_dest);
+							auto destination = find_target_adapter_by_mac(static_cast<mac_address>(ether_header->h_dest));
 							if (destination && (destination.value() != a))
 								continue;
 
-							BridgeRequest->EthPacket[BridgeRequest->dwPacketsNumber].Buffer = &PacketBuffer[i];
-							++BridgeRequest->dwPacketsNumber;
+							bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							++bridge_request->dwPacketsNumber;
 						}
 					}
 					else
 					{
 						// For incoming packets don't add to list packets destined to local interface (they are not supposed to be bridged anythere else)
-						if (!Adapters[index]->IsLocal(PacketBuffer[i].m_IBuffer))
+						if (!adapters[index]->is_local(packet_buffer[i].m_IBuffer))
 						{
-							auto destination = FindTargetAdapterByMac(pEtherHdr->h_dest);
+							auto destination = find_target_adapter_by_mac(static_cast<mac_address>(ether_header->h_dest));
 							if (destination && (destination.value() != a))
 								continue;
 
-							BridgeRequest->EthPacket[BridgeRequest->dwPacketsNumber].Buffer = &PacketBuffer[i];
-							++BridgeRequest->dwPacketsNumber;
+							bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							++bridge_request->dwPacketsNumber;
 						}
 					}
 
-					// For local indications add only directed or broadcast/multicast
-					if ((PacketBuffer[i].m_IBuffer[0] & 0x01)
-						|| Adapters[a]->IsLocal(PacketBuffer[i].m_IBuffer)
+					// For local indications add only directed or broadcast/multi-cast
+					if ((packet_buffer[i].m_IBuffer[0] & 0x01)
+						|| adapters[a]->is_local(packet_buffer[i].m_IBuffer)
 						)
 					{
-						MstcpBridgeRequest->EthPacket[MstcpBridgeRequest->dwPacketsNumber].Buffer = &PacketBuffer[i];
-						++MstcpBridgeRequest->dwPacketsNumber;
+						mstcp_bridge_request->EthPacket[mstcp_bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+						++mstcp_bridge_request->dwPacketsNumber;
 					}
 				}
 
-				BridgeRequest->hAdapterHandle = Adapters[a]->GetAdapter();
-				MstcpBridgeRequest->hAdapterHandle = Adapters[a]->GetAdapter();
+				bridge_request->hAdapterHandle = adapters[a]->get_adapter();
+				mstcp_bridge_request->hAdapterHandle = adapters[a]->get_adapter();
 
-				if (BridgeRequest->dwPacketsNumber)
+				if (bridge_request->dwPacketsNumber)
 				{
-					SendPacketsToAdapter(BridgeRequest);
-					BridgeRequest->dwPacketsNumber = 0;
+					SendPacketsToAdapter(bridge_request);
+					bridge_request->dwPacketsNumber = 0;
 				}
 
-				if (MstcpBridgeRequest->dwPacketsNumber)
+				if (mstcp_bridge_request->dwPacketsNumber)
 				{
-					SendPacketsToMstcp(MstcpBridgeRequest);
-					MstcpBridgeRequest->dwPacketsNumber = 0;
+					SendPacketsToMstcp(mstcp_bridge_request);
+					mstcp_bridge_request->dwPacketsNumber = 0;
 				}
 
 			}
 
-			ReadRequest->dwPacketsSuccess = 0;
+			read_request->dwPacketsSuccess = 0;
 		}
 	}
 
-	m_bIsRunning.clear();
+	is_running_.clear();
 }

@@ -1,26 +1,16 @@
-/*************************************************************************/
-/*              Copyright (c) 2000-2018 NT Kernel Resources.             */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  iphlp.h                                                 */
-/*                                                                       */
-/* Abstract: IP helper definitions                                       */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode, Kernel mode                                              */
-/*                                                                       */
-/*************************************************************************/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Module Name:  iphlp.h
+/// Abstract: TCP/IP definitions
+/// </summary>
+// --------------------------------------------------------------------------------
 
-#ifndef __IPHLP_H__
-#define __IPHLP_H__
+#pragma once
 
 #pragma pack(1) 
 
-///////////////////////////////////////////////////////////////////////////
-// packet structures
-///////////////////////////////////////////////////////////////////////////
+/// <summary>packet structures</summary>
+
 typedef long n_long;
 typedef short n_short;
 typedef long n_time;
@@ -45,9 +35,8 @@ typedef struct in_addr IN_ADDR, *PIN_ADDR;
 #define ETH_P_IPV6		0x86dd 			/* Internet Protocol V6 packet	*/
 #define ETH_P_IPV6_NET	0xdd86 			/* Internet Protocol V6 packet network order*/
 
-/*
- * Protocols
- */
+/// <summary>Protocols</summary>
+
 #define IPPROTO_IP              0               /* dummy for IP */
 #define IPPROTO_ICMP            1               /* control message protocol */
 #define IPPROTO_IGMP            2               /* group management protocol */
@@ -61,13 +50,24 @@ typedef struct in_addr IN_ADDR, *PIN_ADDR;
 #define IPPROTO_RAW             255             /* raw IP packet */
 #define IPPROTO_MAX             256
 
-// Ethernet Header
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Ethernet Header
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct ether_header 
 {
 	unsigned char	h_dest[ETH_ALEN];	/* destination eth addr	*/
 	unsigned char	h_source[ETH_ALEN];	/* source ether addr	*/
 	unsigned short	h_proto;		/* packet type ID field	*/
 } ether_header, *ether_header_ptr;
+
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Address Resolution Protocol (ARP)
+/// </summary>
+// --------------------------------------------------------------------------------
 
 typedef struct arphdr
 {
@@ -93,7 +93,12 @@ typedef struct	ether_arp
 #define	arp_pln	ea_hdr.ar_pln
 #define	arp_op	ea_hdr.ar_op
 
-/* IP Header in Little Endian */
+// --------------------------------------------------------------------------------
+/// <summary>
+/// IP Header in Little Endian
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct iphdr 
 {
 	u_char	ip_hl:4,		/* header length */
@@ -109,8 +114,13 @@ typedef struct iphdr
 	u_short	ip_sum;			/* checksum */
 	struct	in_addr ip_src,ip_dst;	/* source and dest address */
 } iphdr, *iphdr_ptr;
-/////////////////////////////////////////////////////////////////////////
-/* UDP header  */
+
+// --------------------------------------------------------------------------------
+/// <summary>
+/// UDP header
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct	udphdr
 {
 	u_short	th_sport;		/* source port */
@@ -118,10 +128,15 @@ typedef struct	udphdr
 	u_short	length;			/* data length */
 	u_short	th_sum;			/* checksum */
 } udphdr, *udphdr_ptr;
-/////////////////////////////////////////////////////////////////////////
+
 typedef	u_long	tcp_seq;
 
-// TCP header. Per RFC 793, September, 1981. In Little Endian
+// --------------------------------------------------------------------------------
+/// <summary>
+/// TCP header. Per RFC 793, September, 1981. In Little Endian
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct tcphdr {
 	u_short	th_sport;		/* source port */
 	u_short	th_dport;		/* destination port */
@@ -152,11 +167,8 @@ typedef struct pseudo_header
 
 }pseudo_header, *pseudo_header_ptr;
 
-/////////////////////////////////////////////////////////////////////////
+/// <summary>Protocols for IPv6</summary>
 
-//
-// Protocols for IPv6
-//
 #define IPPROTO_HOPOPTS		0             // Hop by hop header for v6
 #define IPPROTO_IPV6		41            // IPv6 encapsulated in IP
 #define IPPROTO_ROUTING		43            // Routing header for IPv6
@@ -165,9 +177,12 @@ typedef struct pseudo_header
 #define IPPROTO_NONE		59            // No next header for IPv6
 #define IPPROTO_DSTOPTS		60            // Destinations options
 
-//
-// IPv6 header format
-//
+// --------------------------------------------------------------------------------
+/// <summary>
+/// IPv6 header format
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct ipv6hdr 
 {
 	unsigned int	ip6_flow;	// 4  bits = version #, 
@@ -180,9 +195,12 @@ typedef struct ipv6hdr
 	IN6_ADDR		ip6_dst;	// Destination Address
 } ipv6hdr, *ipv6hdr_ptr;
 
-//
-// IPv6 extension header format
-//
+// --------------------------------------------------------------------------------
+/// <summary>
+/// IPv6 extension header format
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct ipv6ext {
 	unsigned char    ip6_next;		// Next Header
 	unsigned char    ip6_len;		// number of bytes in this header 
@@ -205,9 +223,12 @@ typedef struct mss_tcp_options {
 	u_short mss_value;
 }mss_tcp_options, *mss_tcp_options_ptr;
 
-//
-// ICMP header
-//
+// --------------------------------------------------------------------------------
+/// <summary>
+/// ICMP header
+/// </summary>
+// --------------------------------------------------------------------------------
+
 typedef struct icmphdr {
 	unsigned char type;          // ICMP packet type
 	unsigned char code;          // Type sub code
@@ -216,14 +237,16 @@ typedef struct icmphdr {
 	unsigned short seq;
 }icmphdr, *icmphdr_ptr;
 
-/*
-http://www.nersc.gov/~scottc/software/snort/dns_head.html
-Header
-Question
-Answer
-Authority
-Additional
-*/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// http://www.nersc.gov/~scottc/software/snort/dns_head.html
+/// Header
+/// Question
+/// Answer
+/// Authority
+/// Additional
+/// </summary>
+// --------------------------------------------------------------------------------
 
 typedef struct dns_header {
 	unsigned short id;
@@ -234,15 +257,17 @@ typedef struct dns_header {
 	unsigned short arcount;
 }dns_header, *dns_header_ptr;
 
-/*
-Resourse record
-NAME		Name of the node to which this record pertains.	(variable)
-TYPE		Type of RR. For example, MX is type 15.	2
-CLASS		Class code.	2
-TTL			Unsigned time in seconds that RR stays valid, maximum is 2147483647.	4
-RDLENGTH	Length of RDATA field.	2
-RDATA		Additional RR-specific data.	(variable)
-*/
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Resource record
+/// NAME		Name of the node to which this record pertains.	(variable)
+/// TYPE		Type of RR. For example, MX is type 15.	(2 bytes)
+/// CLASS		Class code.	2 bytes
+/// TTL			Unsigned time in seconds that RR stays valid, maximum is 2147483647. (4 bytes)
+/// RDLENGTH	Length of RDATA field. (2 bytes)
+/// RDATA		Additional RR-specific data. (variable)
+/// </summary>
+// --------------------------------------------------------------------------------
 
 typedef struct qr_record {
 	uint16_t type;
@@ -257,5 +282,3 @@ typedef struct res_record {
 } res_record, *res_record_ptr;
 
 #pragma pack()
-
-#endif // __IPHLP_H__

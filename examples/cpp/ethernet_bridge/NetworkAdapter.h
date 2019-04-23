@@ -1,33 +1,31 @@
-/*************************************************************************/
-/*              Copyright (c) 2000-2018 NT Kernel Resources.             */
-/*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
-/*                           ndisrd@ntkernel.com                         */
-/*                                                                       */
-/* Module Name:  NetworkAdapter.h                                        */
-/*                                                                       */
-/* Abstract: Network interface wrapper class declaration                 */
-/*                                                                       */
-/* Environment:                                                          */
-/*   User mode                                                           */
-/*                                                                       */
-/*************************************************************************/
-#pragma once
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Module Name:  NetworkAdapter.h
+/// Network interface wrapper class declaration
+/// </summary>
+// --------------------------------------------------------------------------------
 
-//
-// Simple wrapper class for Windows handle
-//
-class SafeObjectHandle : public std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>
+#pragma once
+#include <iomanip>
+
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Simple wrapper class for Windows handle
+/// </summary>
+// --------------------------------------------------------------------------------
+class safe_object_handle : public std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>
 {
 public:
-	SafeObjectHandle(HANDLE handle) : unique_ptr(handle, &SafeObjectHandle::close)
+	explicit safe_object_handle(HANDLE handle) : unique_ptr(handle, &safe_object_handle::close)
 	{
 	}
-	operator HANDLE() const
+
+	explicit operator HANDLE() const
 	{
 		return get();
 	}
-	const bool valid() const
+
+	bool valid() const
 	{
 		return (get() != INVALID_HANDLE_VALUE);
 	}
@@ -40,19 +38,21 @@ private:
 	}
 };
 
-//
-// Simple Wrapper for Windows event object
-//
-class SafeEvent : public SafeObjectHandle
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Simple Wrapper for Windows event object
+/// </summary>
+// --------------------------------------------------------------------------------
+class safe_event : public safe_object_handle
 {
 public:
-	SafeEvent(HANDLE handle) : SafeObjectHandle(handle)
+	explicit safe_event(HANDLE handle) : safe_object_handle(handle)
 	{
 	}
 	
-	unsigned wait(unsigned dwMilliseconds) const
+	unsigned wait(unsigned milliseconds) const
 	{
-		return WaitForSingleObject(get(), dwMilliseconds);
+		return WaitForSingleObject(get(), milliseconds);
 	}
 
 	bool signal() const
@@ -67,9 +67,7 @@ public:
 
 };
 
-//
-// Required to use IPv4 in_addr as a key in unordered map
-//
+/// <summary>Required to use IPv4 in_addr as a key in unordered map</summary>
 inline bool operator <(const in_addr& lh, const in_addr& rh) { return lh.S_un.S_addr < rh.S_un.S_addr; }
 inline bool operator ==(const in_addr& lh, const in_addr& rh) { return lh.S_un.S_addr == rh.S_un.S_addr; }
 
@@ -79,21 +77,23 @@ namespace std
 	{
 		typedef in_addr argument_type;
 		typedef std::size_t result_type;
-		result_type operator()(argument_type const& ip) const
+		result_type operator()(argument_type const& ip) const noexcept
 		{
-			result_type const h1(std::hash<unsigned long>{}(ip.S_un.S_addr));
+			auto const h1(std::hash<unsigned long>{}(ip.S_un.S_addr));
 			
 			return h1; 
 		}
 	};
 }
 
-//
-// Simple wrapper for MAC address
-//
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Simple wrapper for MAC address
+/// </summary>
+// --------------------------------------------------------------------------------
 struct mac_address {
 	mac_address() { memset(&data[0], 0, ETH_ALEN); }
-	mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, ETH_ALEN); }
+	explicit mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, ETH_ALEN); }
 
 	unsigned char& operator[](size_t index) { return data[index]; }
 	const unsigned char& operator[](size_t index)const { return data[index]; }
@@ -110,14 +110,14 @@ struct mac_address {
 		return (memcmp(&data[0], &rhs.data[0], ETH_ALEN) < 0);
 	}
 
-	operator bool () const{
+	explicit operator bool () const{
 		return (*this != mac_address());
 	}
 
-	operator std::array<unsigned char, ETH_ALEN>() const { return data; }
+	explicit operator std::array<unsigned char, ETH_ALEN>() const { return data; }
 
 	template<typename T>
-	operator std::basic_string<T>() const {
+	explicit operator std::basic_string<T>() const {
 		std::basic_ostringstream<T> oss;
 		oss << std::hex
 			<< std::uppercase
@@ -146,16 +146,16 @@ namespace std
 	{
 		typedef mac_address argument_type;
 		typedef std::size_t result_type;
-		result_type operator()(argument_type const& mac) const
+		result_type operator()(argument_type const& mac) const noexcept
 		{
-			uint64_t arg = (static_cast<uint64_t>(mac[0]) << 40) +
+			const auto arg = (static_cast<uint64_t>(mac[0]) << 40) +
 				(static_cast<uint64_t>(mac[1]) << 32) +
 				(static_cast<uint64_t>(mac[2]) << 24) +
 				(static_cast<uint64_t>(mac[3]) << 16) +
 				(static_cast<uint64_t>(mac[4]) << 8) +
 				mac[5];
 
-			result_type const h1(
+			auto const h1(
 				std::hash<uint64_t>{}(arg)
 			);
 
@@ -164,60 +164,183 @@ namespace std
 	};
 }
 
-//
-// Class representing network interface
-//
-class CNetworkAdapter {
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Class representing network interface
+/// </summary>
+// --------------------------------------------------------------------------------
+class network_adapter {
 public:
-	CNetworkAdapter(
+	network_adapter(
 		CNdisApi& api,
-		HANDLE hAdapter,
+		HANDLE adapter,
 		unsigned char* mac_addr,
-		std::string const& InternalName,
-		std::string const& FriendlyName,
-		unsigned dwFilter = 0
-	) :	m_api(api),
-		m_hAdapter(hAdapter),
-		m_HwAddress(mac_addr),
-		m_dwNetworkFilter(dwFilter),
-		m_Event(CreateEvent(NULL, TRUE, FALSE, NULL)),
-		m_InternalName(InternalName),
-		m_FriendlyName(FriendlyName),
-		m_CurrentMode({ 0 })
+		std::string const& internal_name,
+		std::string const& friendly_name,
+		const unsigned filter = 0
+	) :	api_(api),
+		hardware_address_(mac_addr),
+		network_filter_(filter),
+		event_(::CreateEvent(nullptr, TRUE, FALSE, nullptr)),
+		internal_name_(internal_name),
+		friendly_name_(friendly_name),
+		current_mode_({ adapter, 0})
 	{
-		InitializeInterface();
+		initialize_interface();
 	}
 
-	~CNetworkAdapter() {}
+	~network_adapter() {}
+	// ********************************************************************************
+	/// <summary>
+	/// Initialize additional network interface parameters
+	/// </summary>
+	// ********************************************************************************
+	void initialize_interface() noexcept;
 
-	void						InitializeInterface() noexcept; // Initialize additional network interface parameters 
-	HANDLE						GetAdapter() const { return m_hAdapter; } // Returnes network interface handle value
-	bool						SetHwFilter(unsigned dwFilter) { return m_api.SetHwPacketFilter(m_hAdapter, dwFilter)?true:false; } // Set network filter for the interface
-	unsigned long				GetHwFilter(); // Get current network filter
-	void						Release(); // Stops filtering the network interface and tries tor restore its original state
-	void						SetMode(unsigned dwFlags); // Set filtering mode for the network interface
-	bool						IsLocal(unsigned char* ptr) const { return (mac_address(ptr) == m_HwAddress); } // Check is provided MAC address belongs to this adapter
-	unsigned					WaitEvent(unsigned dwMilliseconds) const {return m_Event.wait(dwMilliseconds);} // Waits for network interface event to be signalled
-	bool						ResetEvent() const { return m_Event.reset_event(); }
-	bool						SetPacketEvent() const { return m_api.SetPacketEvent(m_hAdapter, m_Event)?true:false; }
-	const std::string&			GetInternalName() const { return m_InternalName; }
-	const std::string&			GetFriendlyName() const { return m_FriendlyName; }
-	bool						IsWLAN() const { return m_bIsWLAN; }
-	mac_address					GetHwAddress() const { return m_HwAddress; }
-	mac_address					GetMacByIp (in_addr& ip);
-	void						SetMacForIp(in_addr& ip, unsigned char* mac);
+	// ********************************************************************************
+	/// <summary>
+	/// Returns network interface handle value
+	/// </summary>
+	/// <returns>network interface driver handle</returns>
+	// ********************************************************************************
+	HANDLE get_adapter() const { return current_mode_.hAdapterHandle; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Set network filter for the interface
+	/// </summary>
+	/// <param name="filter">hardware filter to set</param>
+	/// <returns>boolean status of the operation</returns>
+	// ********************************************************************************
+	bool set_hw_filter(const unsigned filter) const { return api_.SetHwPacketFilter(current_mode_.hAdapterHandle, filter)?true:false; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Get current network filter
+	/// </summary>
+	/// <returns>current hardware filter value</returns>
+	// ********************************************************************************
+	unsigned long get_hw_filter() const;
+
+	// ********************************************************************************
+	/// <summary>
+	/// Stops filtering the network interface and tries tor restore its original state
+	/// </summary>
+	// ********************************************************************************
+	void release();
+
+	// ********************************************************************************
+	/// <summary>
+	/// Set filtering mode for the network interface
+	/// </summary>
+	/// <param name="flags">filter mode to set</param>
+	// ********************************************************************************
+	void set_mode(unsigned flags);
+
+	// ********************************************************************************
+	/// <summary>
+	/// Check is provided MAC address belongs to this adapter
+	/// </summary>
+	/// <param name="ptr">pointer to 6 bytes of MAC address</param>
+	/// <returns>true if MAC address belongs to this network adapter</returns>
+	// ********************************************************************************
+	bool is_local(unsigned char* ptr) const { return (mac_address(ptr) == hardware_address_); }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Waits for network interface event to be signaled
+	/// </summary>
+	/// <param name="milliseconds">timeout value in milliseconds</param>
+	/// <returns>wait status</returns>
+	// ********************************************************************************
+	unsigned wait_event(const unsigned milliseconds) const {return event_.wait(milliseconds);}
+
+	// ********************************************************************************
+	/// <summary>
+	/// Resets packet event to non-signaled state
+	/// </summary>
+	/// <returns>boolean status of the operation</returns>
+	// ********************************************************************************
+	bool reset_event() const { return event_.reset_event(); }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Loads packet event into the driver
+	/// </summary>
+	/// <returns>boolean status of the operation</returns>
+	// ********************************************************************************
+	bool set_packet_event() const { return api_.SetPacketEvent(current_mode_.hAdapterHandle, static_cast<HANDLE>(event_))?true:false; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Network interface internal name getter
+	/// </summary>
+	/// <returns>string reference to the internal name</returns>
+	// ********************************************************************************
+	const std::string& get_internal_name() const { return internal_name_; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Network interface friendly name getter
+	/// </summary>
+	/// <returns>string reference to the user friendly name</returns>
+	// ********************************************************************************
+	const std::string& get_friendly_name() const { return friendly_name_; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Checks if this network adapter is Wi-Fi
+	/// </summary>
+	/// <returns>true for Wi-Fi adapter, false otherwise</returns>
+	// ********************************************************************************
+	bool is_wlan() const { return is_wlan_; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Network adapter hardware address getter
+	/// </summary>
+	/// <returns>network interface hardware address</returns>
+	// ********************************************************************************
+	const mac_address& get_hw_address() const { return hardware_address_; }
+
+	// ********************************************************************************
+	/// <summary>
+	/// Returns MAC address by the supplied IP address
+	/// </summary>
+	/// <param name="ip">IP address</param>
+	/// <returns>MAC address associated with IP above if available, zero initialized
+	/// otherwise</returns>
+	// ********************************************************************************
+	mac_address get_mac_by_ip (in_addr& ip);
+
+	// ********************************************************************************
+	/// <summary>
+	/// Stores IP to MAC address association
+	/// </summary>
+	/// <param name="ip">IP address</param>
+	/// <param name="mac">pointer to 6 bytes of MAC address</param>
+	// ********************************************************************************
+	void set_mac_for_ip(in_addr& ip, unsigned char* mac);
+
 private:
-
-	CNdisApi&											m_api;				// Driver interface reference
-	HANDLE												m_hAdapter;			// Network interface handle value
-	mac_address											m_HwAddress;		// Network interface current MAC address
-	unsigned long										m_dwNetworkFilter;	// Network interface original filter value
-	SafeEvent											m_Event;			// Packet in the adapter queue event
-	std::string											m_InternalName;		// Internal network interface name
-	std::string											m_FriendlyName;		// User-friendly name
-
-	ADAPTER_MODE										m_CurrentMode;		// Used to manipulate network interface mode
-	bool												m_bIsWLAN = false;	// True for WLAN media type
-	std::unordered_map<in_addr, mac_address>			m_Ip2Mac;			// ARP table
-	std::mutex											m_Ip2MacMutex;		// Synchronization object to control access to ARP table
+	/// <summary>Driver interface reference</summary>
+	CNdisApi& api_;
+	/// <summary>Network interface current MAC address</summary>
+	mac_address hardware_address_;	
+	/// <summary>Network interface original filter value</summary>
+	unsigned long network_filter_;	
+	/// <summary>Packet in the adapter queue event</summary>
+	safe_event event_;			
+	/// <summary>Internal network interface name</summary>
+	std::string internal_name_;		
+	/// <summary>User-friendly name</summary>
+	std::string friendly_name_;		
+	/// <summary>Used to manipulate network interface mode</summary>
+	ADAPTER_MODE current_mode_;		
+	/// <summary>True for WLAN media type</summary>
+	bool is_wlan_ = false;	
+	/// <summary>ARP table</summary>
+	std::unordered_map<in_addr, mac_address> ip_to_mac_;			
+	/// <summary>Synchronization object to control access to ARP table</summary>
+	std::mutex ip_to_mac_mutex_;		
 };
