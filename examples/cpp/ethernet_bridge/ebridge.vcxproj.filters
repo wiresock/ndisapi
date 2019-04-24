@@ -16,6 +16,12 @@
     <Filter Include="Header Files\common">
       <UniqueIdentifier>{bafe7c7f-32c1-4b01-8ccb-9c4958c37018}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\common\net">
+      <UniqueIdentifier>{9a3fba64-caf7-4829-b676-ec7a78959f72}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\winsys">
+      <UniqueIdentifier>{5c8484d0-7242-4fa9-a116-0e3796fad6ed}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -35,6 +41,18 @@
     </ClInclude>
     <ClInclude Include="..\common\iphlp.h">
       <Filter>Header Files\common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\net\ip_address.h">
+      <Filter>Header Files\common\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\net\mac_address.h">
+      <Filter>Header Files\common\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\winsys\event.h">
+      <Filter>Header Files\common\winsys</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\winsys\object.h">
+      <Filter>Header Files\common\winsys</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

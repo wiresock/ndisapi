@@ -7,7 +7,7 @@
 
 #include "stdafx.h"
 
-const size_t maximum_packet_block = 512;
+const size_t maximum_packet_block = 510;
 
 bool ethernet_bridge::start_bridge(std::vector<size_t> const& interfaces)
 {
@@ -86,7 +86,7 @@ std::vector<std::pair<string, string>> ethernet_bridge::get_interface_list()
 	return result;
 }
 
-std::optional<std::size_t> ethernet_bridge::find_target_adapter_by_mac(mac_address const & address)
+std::optional<std::size_t> ethernet_bridge::find_target_adapter_by_mac(net::mac_address const & address)
 {
 	std::shared_lock<std::shared_mutex> lock(mac_table_lock_);
 	if (mac_table_.count(address))
@@ -95,7 +95,7 @@ std::optional<std::size_t> ethernet_bridge::find_target_adapter_by_mac(mac_addre
 		return {};
 }
 
-bool ethernet_bridge::update_target_adapter_by_mac(std::size_t index, mac_address const & address)
+bool ethernet_bridge::update_target_adapter_by_mac(const std::size_t index, net::mac_address const & address)
 {
 	bool result = false;
 	{
@@ -162,7 +162,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 	//
 
 	using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1)>;
+		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1), 0x1000>;
 
 	// 1. Allocate memory using unique_ptr for auto-delete on thread exit
 	auto read_request_ptr = std::make_unique<request_storage_type_t>();
@@ -223,7 +223,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 				if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 				{
 					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
-					update_target_adapter_by_mac(index, mac_address(ether_header->h_source));
+					update_target_adapter_by_mac(index, net::mac_address(ether_header->h_source));
 				}
 			}
 
@@ -240,10 +240,10 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
 					if (ntohs(ether_header->h_proto) == ETH_P_IP)
 					{
-						auto ip_hdr = reinterpret_cast<iphdr*>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
+						const auto ip_hdr = reinterpret_cast<iphdr*>(read_request->EthPacket[i].Buffer->m_IBuffer + ETHER_HEADER_LENGTH);
 
-						auto dest_mac = adapters[index]->get_mac_by_ip(ip_hdr->ip_dst);
-						if (dest_mac)
+						auto dest_mac = adapters[index]->get_mac_by_ip(static_cast<net::ip_address_v4>(ip_hdr->ip_dst));
+						if (static_cast<bool>(dest_mac))
 						{
 							memcpy(ether_header->h_dest, &dest_mac[0], ETH_ALEN);
 						}
@@ -259,7 +259,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 						}
 						else
 						{
-							auto dest_mac = adapters[index]->get_mac_by_ip(*reinterpret_cast<in_addr*>(arp_hdr->arp_tpa));
+							auto dest_mac = adapters[index]->get_mac_by_ip(*reinterpret_cast<net::ip_address_v4*>(arp_hdr->arp_tpa));
 							if (dest_mac)
 							{
 								memcpy(ether_header->h_dest, &dest_mac[0], ETH_ALEN);
@@ -297,7 +297,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 
 								// Save pair of IP and MAC
 								adapters[a]->set_mac_for_ip(
-									*reinterpret_cast<in_addr*>(arp_hdr->arp_spa),
+									*reinterpret_cast<net::ip_address_v4*>(arp_hdr->arp_spa),
 									&arp_hdr->arp_sha[0]
 								);
 
@@ -310,7 +310,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 
 								// Save pair of IP and MAC
 								adapters[a]->set_mac_for_ip(
-									*reinterpret_cast<in_addr*>(arp_hdr->arp_spa),
+									*reinterpret_cast<net::ip_address_v4*>(arp_hdr->arp_spa),
 									&arp_hdr->arp_sha[0]
 								);
 
@@ -363,7 +363,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 						if (adapters[index]->is_local(packet_buffer[i].m_IBuffer + ETH_ALEN) ||
 							(adapters[a]->is_local(packet_buffer[i].m_IBuffer + ETH_ALEN)))
 						{
-							auto destination = find_target_adapter_by_mac(static_cast<mac_address>(ether_header->h_dest));
+							auto destination = find_target_adapter_by_mac(static_cast<net::mac_address>(ether_header->h_dest));
 							if (destination && (destination.value() != a))
 								continue;
 
@@ -376,7 +376,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 						// For incoming packets don't add to list packets destined to local interface (they are not supposed to be bridged anythere else)
 						if (!adapters[index]->is_local(packet_buffer[i].m_IBuffer))
 						{
-							auto destination = find_target_adapter_by_mac(static_cast<mac_address>(ether_header->h_dest));
+							auto destination = find_target_adapter_by_mac(static_cast<net::mac_address>(ether_header->h_dest));
 							if (destination && (destination.value() != a))
 								continue;
 

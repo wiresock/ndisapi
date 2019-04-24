@@ -42,14 +42,14 @@ void network_adapter::set_mode(const unsigned flags)
 	api_.SetAdapterMode(&current_mode_);
 }
 
-void network_adapter::set_mac_for_ip(in_addr & ip, unsigned char* mac)
+void network_adapter::set_mac_for_ip(net::ip_address_v4 const& ip, unsigned char* mac)
 {
 	std::lock_guard<std::mutex> guard(ip_to_mac_mutex_);
 	
-	ip_to_mac_[ip] = mac_address(mac);
+	ip_to_mac_[ip] = net::mac_address(mac);
 }
 
-mac_address network_adapter::get_mac_by_ip(in_addr & ip)
+net::mac_address network_adapter::get_mac_by_ip(net::ip_address_v4 const & ip)
 {
 	std::lock_guard<std::mutex> guard(ip_to_mac_mutex_);
 
@@ -60,7 +60,7 @@ mac_address network_adapter::get_mac_by_ip(in_addr & ip)
 		return search->second;
 	}
 
-	return mac_address();
+	return net::mac_address();
 }
 
 void network_adapter::initialize_interface() noexcept

@@ -9,6 +9,7 @@
 
 #include <in6addr.h>
 #include <ip2string.h>
+#include <cassert>
 
 #pragma comment(lib, "ntdll.lib")
 

@@ -104,7 +104,7 @@ private:
 	/// <param name="address">MAC address reference</param>
 	/// <returns></returns>
 	// ********************************************************************************
-	std::optional<std::size_t> find_target_adapter_by_mac(mac_address const& address);
+	std::optional<std::size_t> find_target_adapter_by_mac(net::mac_address const& address);
 
 	// ********************************************************************************
 	/// <summary>
@@ -114,7 +114,7 @@ private:
 	/// <param name="address">MAC address to store behind the interface index</param>
 	/// <returns></returns>
 	// ********************************************************************************
-	bool update_target_adapter_by_mac(std::size_t index, mac_address const& address);
+	bool update_target_adapter_by_mac(std::size_t index, net::mac_address const& address);
 
 	// ********************************************************************************
 	/// <summary>
@@ -144,7 +144,7 @@ private:
 	std::vector<std::size_t> bridged_interfaces_;
 	
 	/// <summary>has table to store MAC address -> adapter index association</summary>
-	std::unordered_map<mac_address, std::size_t> mac_table_;
+	std::unordered_map<net::mac_address, std::size_t> mac_table_;
 
 	/// <summary>synchronization lock for the hash table above</summary>
 	std::shared_mutex mac_table_lock_;

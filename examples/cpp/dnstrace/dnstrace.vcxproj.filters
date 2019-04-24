@@ -22,6 +22,9 @@
     <Filter Include="Header Files\common\ndisapi">
       <UniqueIdentifier>{2e08aa19-4065-47eb-b59f-7787cf771c51}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\common\winsys">
+      <UniqueIdentifier>{d6d18142-abe7-4e6d-ab90-14ac2613636a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -36,14 +39,20 @@
     <ClInclude Include="..\common\ndisapi\network_adapter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
-    <ClInclude Include="..\common\ndisapi\network_helpers.h">
-      <Filter>Header Files\common\ndisapi</Filter>
-    </ClInclude>
     <ClInclude Include="..\common\ndisapi\simple_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
     <ClInclude Include="..\common\iphlp.h">
       <Filter>Header Files\common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\net\mac_address.h">
+      <Filter>Header Files\common\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\winsys\event.h">
+      <Filter>Header Files\common\winsys</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\winsys\object.h">
+      <Filter>Header Files\common\winsys</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -36,6 +36,10 @@ using namespace std;
 #include "../../../include/ndisapi.h"
 #include "../common/iphlp.h"
 #include "../common/dhcp_typedefs.h"
+#include "../common/net/ip_address.h"
+#include "../common/net/mac_address.h"
+#include "../common/winsys/object.h"
+#include "../common/winsys/event.h"
 #include "NetworkAdapter.h"
 #include "EthernetBridge.h"
 

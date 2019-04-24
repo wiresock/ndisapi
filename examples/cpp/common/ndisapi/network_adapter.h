@@ -97,22 +97,22 @@ namespace ndisapi
 		/// </summary>
 		/// <returns>network adapter MAC address</returns>
 		// ********************************************************************************
-		mac_address	get_hw_address() const { return hardware_address_; }
+		net::mac_address	get_hw_address() const { return hardware_address_; }
 
 	private:
 
 		/// <summary>Driver interface pointer</summary>
-		CNdisApi*		api_;
+		CNdisApi* 	api_;
 		/// <summary>Network interface current MAC address</summary>
-		mac_address		hardware_address_;
+		net::mac_address hardware_address_;
 		/// <summary>Packet in the adapter queue event</summary>
-		safe_event		packet_event_;
+		winsys::safe_event packet_event_;
 		/// <summary>Internal network interface name</summary>
-		std::string		internal_name_;	
+		std::string internal_name_;	
 		/// <summary>User-friendly name</summary>
-		std::string		friendly_name_;	
+		std::string friendly_name_;	
 		/// <summary>Used to manipulate network interface mode</summary>
-		ADAPTER_MODE	current_mode_;		
+		ADAPTER_MODE current_mode_;		
 	};
 
 	inline void network_adapter::release()

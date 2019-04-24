@@ -7,9 +7,14 @@
 
 #pragma once
 
+//#ifndef  _ENABLE_EXTENDED_ALIGNED_STORAGE
+//// ReSharper disable once CppInconsistentNaming
+//#define  _ENABLE_EXTENDED_ALIGNED_STORAGE
+//#endif //  _ENABLE_EXTENDED_ALIGNED_STORAGE
+
 namespace ndisapi
 {
-	inline const size_t maximum_packet_block = 512;
+	inline const size_t maximum_packet_block = 510;
 
 	enum class packet_action
 	{
@@ -181,7 +186,7 @@ namespace ndisapi
 		//
 
 		using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
-			sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1)>;
+			sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1), 0x1000>;
 
 		// 1. Allocate memory using unique_ptr for auto-delete on thread exit
 		auto read_request_ptr = std::make_unique<request_storage_type_t>();
