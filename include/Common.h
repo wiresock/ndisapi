@@ -20,9 +20,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x02123000
+#define NDISRD_VERSION			0x02143000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x0212
+#define NDISRD_MINOR_VERSION	0x0214
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"
@@ -102,7 +102,10 @@ struct _TCP_AdapterList_WOW64
 typedef 
 struct _INTERMEDIATE_BUFFER
 {
-	LIST_ENTRY		m_qLink;
+	union{
+		HANDLE			m_hAdapter;
+		LIST_ENTRY		m_qLink;
+	};
 	ULONG			m_dwDeviceFlags;
 	ULONG			m_Length;
 	ULONG			m_Flags; // NDIS_PACKET flags
@@ -116,7 +119,10 @@ struct _INTERMEDIATE_BUFFER
 typedef 
 struct _INTERMEDIATE_BUFFER_WOW64
 {
-	LIST_ENTRY		m_qLink[2];
+	union {
+		HANDLE			m_hAdapter[2];
+		LIST_ENTRY		m_qLink[2];
+	};
 	ULONG			m_dwDeviceFlags;
 	ULONG			m_Length;
 	ULONG			m_Flags; // NDIS_PACKET flags
@@ -490,6 +496,48 @@ struct _STATIC_FILTER_TABLE
 	STATIC_FILTER	m_StaticFilters[ANY_SIZE];
 }STATIC_FILTER_TABLE, *PSTATIC_FILTER_TABLE;
 
+// ********************************************************************************
+/// <summary>
+/// WinpkFilter fats I/O definitions
+/// </summary>
+// ********************************************************************************
+
+typedef struct _FAST_IO_WRITE_UNION {
+	union {
+		struct { USHORT number_of_packets, write_in_progress_flag; } split;
+		ULONG join;
+	} union_;
+}FAST_IO_WRITE_UNION, *PFAST_IO_WRITE_UNION;
+
+typedef struct _FAST_IO_SECTION_HEADER{
+	FAST_IO_WRITE_UNION fast_io_write_union;
+	ULONG	read_in_progress_flag;
+} FAST_IO_SECTION_HEADER, *PFAST_IO_SECTION_HEADER;
+
+typedef struct _FAST_IO_SECTION
+{
+	volatile FAST_IO_SECTION_HEADER fast_io_header;
+	INTERMEDIATE_BUFFER fast_io_packets[ANY_SIZE]; 
+} FAST_IO_SECTION, *PFAST_IO_SECTION;
+
+typedef struct _INITIALIZE_FAST_IO_PARAMS
+{
+	PFAST_IO_SECTION header_ptr;
+	DWORD			 data_size;
+}INITIALIZE_FAST_IO_PARAMS, *PINITIALIZE_FAST_IO_PARAMS;
+
+// --------------------------------------------------------------------------------
+/// <summary>
+/// Unsorted Read/Send packets
+/// </summary>
+// --------------------------------------------------------------------------------
+
+typedef struct _UNSORTED_READ_SEND_REQUEST
+{
+	PINTERMEDIATE_BUFFER*	packets;
+	DWORD					packets_num;
+} UNSORTED_READ_SEND_REQUEST, *PUNSORTED_READ_SEND_REQUEST;
+
 // Restore Default Structure Packing
 #pragma pack(pop)                  
 
@@ -571,6 +619,18 @@ struct _STATIC_FILTER_TABLE
 
 #define IOCTL_NDISRD_SET_ADAPTER_HWFILTER_EVENT\
 	CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+23, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_NDISRD_INITIALIZE_FAST_IO\
+	CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+24, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_NDISRD_READ_PACKETS_UNSORTED\
+	CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+25, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER_UNSORTED\
+	CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+26, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_NDISRD_SEND_PACKET_TO_MSTCP_UNSORTED\
+	CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+27, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #endif // __COMMON_H__
 

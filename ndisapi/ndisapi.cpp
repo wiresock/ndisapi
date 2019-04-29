@@ -1533,6 +1533,112 @@ BOOL CNdisApi::IsDriverLoaded() const
 	return m_bIsLoadSuccessfully;
 }
 
+// ********************************************************************************
+/// <summary>
+/// Initializes Fast I/O shared memory section
+/// Supported for Windows Vista and later. WOW64 is not supported.
+/// </summary>
+/// <param name="pFastIo">Pointer to user allocated memory to be used as a shared section</param>
+/// <param name="dwSize">Size in bytes of allocated memory</param>
+/// <returns>Status of the operation</returns>
+// ********************************************************************************
+BOOL CNdisApi::InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
+{
+	// Only supported for Vista and later. Can't be used in WOW64 mode.
+	if (!IsWindowsVistaOrLater() || m_bIsWow64Process || (dwSize < sizeof(FAST_IO_SECTION)))
+		return FALSE;
+
+	INITIALIZE_FAST_IO_PARAMS params = { pFastIo, dwSize };
+
+	BOOL bIOResult = DeviceIoControl(
+		IOCTL_NDISRD_INITIALIZE_FAST_IO,
+		&params,
+		sizeof(INITIALIZE_FAST_IO_PARAMS),
+		NULL,
+		0,
+		NULL,   // Bytes Returned
+		NULL
+	);
+
+	return bIOResult;
+}
+
+// ********************************************************************************
+/// <summary>
+/// Reads a bunch of packets from the driver packet queues
+/// Adapter handle is stored in INTERMEDIATE_BUFFER.m_hAdapter
+/// </summary>
+/// <param name="Packets">Array of INTERMEDIATE_BUFFER pointers</param>
+/// <param name="dwPacketsNum">Number of packets in the array above</param>
+/// <param name="pdwPacketsSuccess">Number of packets successfully read from the driver</param>
+/// <returns>Status of the operation</returns>
+// ********************************************************************************
+BOOL CNdisApi::ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const
+{
+	if (m_bIsWow64Process)
+		return FALSE;
+
+	UNSORTED_READ_SEND_REQUEST request = {Packets, dwPacketsNum};
+
+	BOOL bIOResult = DeviceIoControl(
+			IOCTL_NDISRD_READ_PACKETS_UNSORTED,
+			&request,
+			sizeof(UNSORTED_READ_SEND_REQUEST),
+			&request,
+			sizeof(UNSORTED_READ_SEND_REQUEST),
+			NULL,   // Bytes Returned
+			NULL
+		);
+
+	*pdwPacketsSuccess = request.packets_num;
+
+	return bIOResult;
+}
+
+BOOL CNdisApi::SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const
+{
+	if (m_bIsWow64Process)
+		return FALSE;
+
+	UNSORTED_READ_SEND_REQUEST request = { Packets, dwPacketsNum };
+
+	BOOL bIOResult = DeviceIoControl(
+		IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER_UNSORTED,
+		&request,
+		sizeof(UNSORTED_READ_SEND_REQUEST),
+		&request,
+		sizeof(UNSORTED_READ_SEND_REQUEST),
+		NULL,   // Bytes Returned
+		NULL
+	);
+
+	*pdwPacketSuccess = request.packets_num;
+
+	return bIOResult;
+}
+
+BOOL CNdisApi::SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const
+{
+	if (m_bIsWow64Process)
+		return FALSE;
+
+	UNSORTED_READ_SEND_REQUEST request = { Packets, dwPacketsNum };
+
+	BOOL bIOResult = DeviceIoControl(
+		IOCTL_NDISRD_SEND_PACKET_TO_MSTCP_UNSORTED,
+		&request,
+		sizeof(UNSORTED_READ_SEND_REQUEST),
+		&request,
+		sizeof(UNSORTED_READ_SEND_REQUEST),
+		NULL,   // Bytes Returned
+		NULL
+	);
+
+	*pdwPacketSuccess = request.packets_num;
+
+	return bIOResult;
+}
+
 DWORD CNdisApi::GetBytesReturned() const
 {
 	return m_BytesReturned;
@@ -2552,6 +2658,46 @@ BOOL __stdcall IsDriverLoaded ( HANDLE hOpen )
 	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
 	return pApi->IsDriverLoaded();
+}
+
+BOOL __stdcall InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->InitializeFastIo(pFastIo, dwSize);
+}
+
+BOOL __stdcall ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->ReadPacketsUnsorted(Packets, dwPacketsNum, pdwPacketsSuccess);
+}
+
+BOOL __stdcall SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->SendPacketsToAdaptersUnsorted(Packets, dwPacketsNum, pdwPacketSuccess);
+}
+
+BOOL __stdcall SendPacketsToMstcpUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->SendPacketsToMstcpUnsorted(Packets, dwPacketsNum, pdwPacketSuccess);
 }
 
 DWORD __stdcall GetBytesReturned ( HANDLE hOpen )

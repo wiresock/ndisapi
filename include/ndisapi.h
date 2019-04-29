@@ -59,11 +59,13 @@ struct NDISAPI_API CVersionInfo : private OSVERSIONINFO
 		::GetVersionEx(this);
 	}
 
+	BOOL IsWindowsVistaOrGreater() { return (dwMajorVersion >= 6); }
 	BOOL IsWindows7OrGreater() { return (dwMajorVersion > 6) || ((dwMajorVersion == 6) && (dwMinorVersion > 0)); }
 	BOOL IsWindowsXPOrGreater() { return ((dwMajorVersion == 5) && (dwMinorVersion >= 1))/*Windows XP/2003*/ || (dwMajorVersion > 5)/*Windows Vista or later*/; }
 	BOOL IsWindows10OrGreater() { return (dwMajorVersion >= 10); }
 	BOOL IsWindowsNTPlatform() { return (dwPlatformId == VER_PLATFORM_WIN32_NT); }
 #else
+	BOOL IsWindowsVistaOrGreater() { return ::IsWindowsVistaOrGreater(); }
 	BOOL IsWindowsXPOrGreater() { return ::IsWindowsXPOrGreater(); }
 	BOOL IsWindows7OrGreater() { return ::IsWindows7OrGreater(); }
 	BOOL IsWindows10OrGreater() { return ::IsWindowsVersionOrGreater(10, 0, 0); }
@@ -115,8 +117,12 @@ public:
 	BOOL	GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const;
 	BOOL	GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList ) const;
 	BOOL	IsDriverLoaded () const;
+	BOOL	InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
+	BOOL	ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const;
+	BOOL	SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
+	BOOL	SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
 	DWORD	GetBytesReturned () const;
-
+	
 	// Static helper routines
 
 	static BOOL		SetMTUDecrement ( DWORD dwMTUDecrement );
@@ -169,6 +175,11 @@ public:
 		RecalculateUDPChecksum(
 			PINTERMEDIATE_BUFFER pPacket
 		);
+
+	static BOOL IsWindowsVistaOrLater()
+	{
+		return ms_Version.IsWindowsVistaOrGreater();
+	}
 
 	static BOOL IsWindows7OrLater()
 	{
@@ -224,6 +235,10 @@ extern "C"
 	BOOL	__stdcall		SetAdaptersStartupMode(DWORD dwStartupMode);
 	DWORD	__stdcall		GetAdaptersStartupMode();
 	BOOL	__stdcall		IsDriverLoaded(HANDLE hOpen);
+	BOOL	__stdcall		InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
+	BOOL	__stdcall		ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess);
+	BOOL	__stdcall		SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
+	BOOL	__stdcall		SendPacketsToMstcpUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
 	DWORD	__stdcall		GetBytesReturned(HANDLE hOpen);
 
 	BOOL __stdcall			IsNdiswanIp ( LPCSTR adapterName );
