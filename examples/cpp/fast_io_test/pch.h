@@ -42,5 +42,6 @@
 #include "../common/net/ip_address.h"
 #include "../common/ndisapi/network_adapter.h"
 #include "../common/ndisapi/fastio_packet_filter.h"
+#include "../common/ndisapi/local_redirect.h"
 
 #endif //PCH_H

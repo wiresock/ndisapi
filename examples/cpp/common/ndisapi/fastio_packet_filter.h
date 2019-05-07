@@ -7,11 +7,6 @@
 
 #pragma once
 
-//#ifndef  _ENABLE_EXTENDED_ALIGNED_STORAGE
-//// ReSharper disable once CppInconsistentNaming
-//#define  _ENABLE_EXTENDED_ALIGNED_STORAGE
-//#endif //  _ENABLE_EXTENDED_ALIGNED_STORAGE
-
 namespace ndisapi
 {
 	inline constexpr size_t maximum_packet_block = 512;
@@ -30,8 +25,9 @@ namespace ndisapi
 	/// </summary>
 	// --------------------------------------------------------------------------------
 	class fastio_packet_filter final : public CNdisApi
-	{	
-		fastio_packet_filter() noexcept
+	{
+		explicit fastio_packet_filter(const bool sleep_on_poll = false) noexcept :
+		sleep_on_poll_(sleep_on_poll) 
 		{
 			initialize_network_interfaces();
 		}
@@ -53,7 +49,8 @@ namespace ndisapi
 		/// <returns></returns>
 		// ********************************************************************************
 		template<typename F1, typename F2>
-		fastio_packet_filter(F1 in, F2 out) : fastio_packet_filter()
+		fastio_packet_filter(F1 in, F2 out, const bool sleep_on_poll = false): 
+		fastio_packet_filter(sleep_on_poll)
 		{
 			filter_incoming_packet_ = in;
 			filter_outgoing_packet_ = out;
@@ -109,6 +106,8 @@ namespace ndisapi
 		std::thread working_thread_;
 		/// <summary>filtered adapter index</summary>
 		size_t adapter_{ 0 };
+		/// <summary>specifies if sleep should be used on polling fas I/O</summary>
+		bool sleep_on_poll_{ false };
 	};
 
 	inline bool fastio_packet_filter::start_filter(const size_t adapter)
@@ -179,8 +178,12 @@ namespace ndisapi
 	}
 
 	inline void fastio_packet_filter::filter_working_thread()
-	{
+	{		
+		using namespace std::chrono_literals;
+		
 		DWORD sent_success = 0;
+		DWORD fast_io_packets_success = 0;
+		DWORD queue_io_packets_success = 0;
 
 		const auto packet_buffer =
 			std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
@@ -239,95 +242,49 @@ namespace ndisapi
 			{
 				fast_io_section->fast_io_header.read_in_progress_flag = 1;
 
-				std::cout << "Fast I/O: " << 
-					fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets <<
-					" packet(s)" << std::endl;
+				fast_io_packets_success = fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets;
 
-				/*std::cout << "number_of_packets = " << fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets << std::endl;
-				std::cout << "write_in_progress_flag = " << fast_io_section->fast_io_header.fast_io_write_union.union_.split.write_in_progress_flag << std::endl;
-				std::cout << "read_in_progress_flag = " << fast_io_section->fast_io_header.read_in_progress_flag << std::endl;*/
-				
-				auto send_to_adapter_num = 0;
-				auto send_to_mstcp_num = 0;
+				//
+				// Copy packets and reset section
+				//
 
-				for (size_t i = 0; i < fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets; ++i)
+				memmove(&packet_buffer[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER)*(fast_io_packets_success - 1));
+
+				// For the last packet wait the write completion
+				while (fast_io_section->fast_io_header.fast_io_write_union.union_.split.write_in_progress_flag)
 				{
-					// For the last packet wait the write completion
-					while ((i == (fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets - 1)) &&
-						(fast_io_section->fast_io_header.fast_io_write_union.union_.split.write_in_progress_flag))
-					{
-						std::this_thread::yield();
-					}
-
-					auto packet_action = packet_action::pass;
-
-					if ((filter_outgoing_packet_ != nullptr) && (fast_io_section->fast_io_packets[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND))
-						packet_action = filter_outgoing_packet_(fast_io_section->fast_io_packets[i].m_qLink.Flink, fast_io_section->fast_io_packets[i]);
-
-					if ((filter_incoming_packet_ != nullptr) && (fast_io_section->fast_io_packets[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE))
-						packet_action = filter_incoming_packet_(fast_io_section->fast_io_packets[i].m_qLink.Flink, fast_io_section->fast_io_packets[i]);
-
-					// Place packet back into the flow if was allowed to
-					if (packet_action == packet_action::pass)
-					{
-						if (fast_io_section->fast_io_packets[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
-						{
-							write_adapter_request[send_to_adapter_num] = &fast_io_section->fast_io_packets[i];
-							++send_to_adapter_num;
-						}
-						else
-						{
-							write_mstcp_request[send_to_mstcp_num] = &fast_io_section->fast_io_packets[i];
-							++send_to_mstcp_num;
-						}
-					}
+					std::this_thread::yield();
 				}
 
-				if (send_to_adapter_num > 0)
-				{
-					/*std::cout << "Fast I/O " << send_to_adapter_num << " -> adapter" << std::endl;*/
-					SendPacketsToAdaptersUnsorted(write_adapter_request, send_to_adapter_num, &sent_success);
-					send_to_adapter_num = 0;
-				}
-
-				if (send_to_mstcp_num > 0)
-				{
-					/*std::cout << "Fast I/O " << send_to_mstcp_num << " -> MSTCP" << std::endl;*/
-					SendPacketsToMstcpUnsorted(write_mstcp_request, send_to_mstcp_num, &sent_success);
-					send_to_mstcp_num = 0;
-				}
+				// Copy the last packet
+				memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
 
 				fast_io_section->fast_io_header.fast_io_write_union.union_.join = 0;
 				fast_io_section->fast_io_header.read_in_progress_flag = 0;
-			}
-
-			//
-			// Retrieve packets from the queue if have any
-			//
-			[[maybe_unused]] auto wait_result = network_interfaces_[adapter_]->wait_event(INFINITE);
-
-			[[maybe_unused]] auto reset_result = network_interfaces_[adapter_]->reset_event();
-
-			DWORD packets_success = 0;
-
-			if (is_running_ && ReadPacketsUnsorted(read_request, maximum_packet_block, &packets_success))
-			{
+	
 				auto send_to_adapter_num = 0;
 				auto send_to_mstcp_num = 0;
 
-				std::cout << "Queue I/O " <<
-					packets_success <<
-					" packet(s)" << std::endl;
+				// Read the remaining packets from the queue
+				if (!ReadPacketsUnsorted(&read_request[fast_io_packets_success], maximum_packet_block - fast_io_packets_success, &queue_io_packets_success))
+				{
+					queue_io_packets_success = 0;
+				}
 
-				for (size_t i = 0; i < packets_success; ++i)
+				for (size_t i = 0; i < (queue_io_packets_success + fast_io_packets_success); ++i)
 				{
 					auto packet_action = packet_action::pass;
 
-					if ((filter_outgoing_packet_ != nullptr) && (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND))
-						packet_action = filter_outgoing_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
-
-					if ((filter_incoming_packet_ != nullptr) && (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE))
-						packet_action = filter_incoming_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
+					if(packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+					{
+						if (filter_outgoing_packet_ != nullptr)
+							packet_action = filter_outgoing_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
+					}
+					else
+					{
+						if (filter_incoming_packet_ != nullptr)
+							packet_action = filter_incoming_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
+					}
 
 					// Place packet back into the flow if was allowed to
 					if (packet_action == packet_action::pass)
@@ -347,17 +304,20 @@ namespace ndisapi
 
 				if (send_to_adapter_num > 0)
 				{
-					/*std::cout << "Queue I/O " << send_to_adapter_num << " -> adapter" << std::endl;*/
 					SendPacketsToAdaptersUnsorted(write_adapter_request, send_to_adapter_num, &sent_success);
 					send_to_adapter_num = 0;
 				}
 
 				if (send_to_mstcp_num > 0)
 				{
-					/*std::cout << "Queue I/O " << send_to_mstcp_num << " -> MSTCP" << std::endl;*/
 					SendPacketsToMstcpUnsorted(write_mstcp_request, send_to_mstcp_num, &sent_success);
 					send_to_mstcp_num = 0;
 				}
+			}
+			else
+			{
+				if(sleep_on_poll_)
+					std::this_thread::sleep_for(1us);
 			}
 		}
 	}

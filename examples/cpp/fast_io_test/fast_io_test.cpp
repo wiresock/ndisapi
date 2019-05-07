@@ -7,51 +7,44 @@
 int main()
 {
 	auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
+		nullptr,
 		[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
 		{
-			/*const auto ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
+			thread_local ndisapi::local_redirector redirect{ 666 };
+
+			const auto ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
 
 			if (ntohs(ether_header->h_proto) == ETH_P_IP)
 			{
 				const auto ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1);
 
-				if (ip_header->ip_p == IPPROTO_UDP)
-				{
-					const auto udp_header = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
-					std::cout << "IP HEADER" << std::endl;
-					std::cout << std::setfill(' ') << std::setw(16) << "source : " << static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b1) << "."
-							<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b2) << "."
-							<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b3) << "."
-							<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b4) << std::endl;
-					std::cout << std::setw(16) << "dest : " << static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b1) << "."
-							<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b2) << "."
-							<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b3) << "."
-							<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b4) << std::endl;
-					std::cout << "UDP HEADER" << std::endl;
-					std::cout << std::setw(16) << "source port : " << static_cast<unsigned>(ntohs(udp_header->th_sport)) << std::endl;
-					std::cout << std::setw(16) << "dest port : " << static_cast<unsigned>(ntohs(udp_header->th_dport)) << std::endl;
-				}
-				else if (ip_header->ip_p == IPPROTO_TCP)
+				if (ip_header->ip_p == IPPROTO_TCP)
 				{
 					const auto tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
-					std::cout << "IP HEADER" << std::endl;
-					std::cout << std::setfill(' ') << std::setw(16) << "source : " << static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b1) << "."
-						<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b2) << "."
-						<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b3) << "."
-						<< static_cast<unsigned>(ip_header->ip_src.S_un.S_un_b.s_b4) << std::endl;
-					std::cout << std::setw(16) << "dest : " << static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b1) << "."
-						<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b2) << "."
-						<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b3) << "."
-						<< static_cast<unsigned>(ip_header->ip_dst.S_un.S_un_b.s_b4) << std::endl;
-					std::cout << "TCP HEADER" << std::endl;
-					std::cout << std::setw(16) << "source port : " << static_cast<unsigned>(ntohs(tcp_header->th_sport)) << std::endl;
-					std::cout << std::setw(16) << "dest port : " << static_cast<unsigned>(ntohs(tcp_header->th_dport)) << std::endl;
+
+					if(ntohs(tcp_header->th_dport) == 4455)
+					{
+						if(redirect.process_client_to_server_packet(buffer))
+						{
+							CNdisApi::RecalculateTCPChecksum(&buffer);
+							CNdisApi::RecalculateIPChecksum(&buffer);
+							buffer.m_dwDeviceFlags = PACKET_FLAG_ON_RECEIVE;
+						}
+					}
+					else if(ntohs(tcp_header->th_sport) == redirect.get_proxy_port())
+					{
+						if (redirect.process_server_to_client_packet(buffer))
+						{
+							CNdisApi::RecalculateTCPChecksum(&buffer);
+							CNdisApi::RecalculateIPChecksum(&buffer);
+							buffer.m_dwDeviceFlags = PACKET_FLAG_ON_RECEIVE;
+						}
+					}
 				}
-			}*/
+			}
+
 			return ndisapi::packet_action::pass;
-		},
-		nullptr
-			);
+		}, true);
 
 	if (ndis_api->IsDriverLoaded())
 	{

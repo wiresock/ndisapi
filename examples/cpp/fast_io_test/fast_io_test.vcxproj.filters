@@ -27,6 +27,9 @@
     <ClInclude Include="..\common\ndisapi\fastio_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\ndisapi\local_redirect.h">
+      <Filter>Header Files\common\ndisapi</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">

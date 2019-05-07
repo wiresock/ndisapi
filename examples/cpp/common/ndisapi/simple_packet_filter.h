@@ -236,11 +236,16 @@ namespace ndisapi
 				{
 					auto packet_action = packet_action::pass;
 
-					if ((filter_outgoing_packet_ != nullptr) && (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND))
-						packet_action = filter_outgoing_packet_(read_request->hAdapterHandle, packet_buffer[i]);
-
-					if ((filter_incoming_packet_ != nullptr) && (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE))
-						packet_action = filter_incoming_packet_(read_request->hAdapterHandle, packet_buffer[i]);
+					if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+					{
+						if (filter_outgoing_packet_ != nullptr)
+							packet_action = filter_outgoing_packet_(read_request->hAdapterHandle, packet_buffer[i]);
+					}
+					else
+					{
+						if (filter_incoming_packet_ != nullptr)
+							packet_action = filter_incoming_packet_(read_request->hAdapterHandle, packet_buffer[i]);
+					}
 
 					// Place packet back into the flow if was allowed to
 					if (packet_action == packet_action::pass)
