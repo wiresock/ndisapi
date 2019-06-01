@@ -26,7 +26,7 @@
 #include <limits>
 #include <atomic>
 #include <string>
-
+#include <functional>
 #include <vector>
 #include <cassert>
 #include <array>
