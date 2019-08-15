@@ -35,7 +35,7 @@
     <ClCompile Include="pch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="fast_io_test.cpp">
+    <ClCompile Include="local_redirect.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

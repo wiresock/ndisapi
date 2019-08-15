@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27130.2027
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29025.244
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ndisapi.dll", "ndisapi.dll\ndisapidll.vcxproj", "{B6004DA5-A081-4FF8-9D3C-7438530B8CF6}"
 EndProject
@@ -19,10 +19,9 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ebridge", "examples\cpp\eth
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestDotNet", "examples\dotNet\TestDotNet\TestDotNet.csproj", "{C5AD5596-0073-4453-B8DE-63659B9F0004}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "fast_io_test", "examples\cpp\fast_io_test\fast_io_test.vcxproj", "{E20B38ED-BA56-4ED0-A06D-76396F2857D1}"
-	ProjectSection(ProjectDependencies) = postProject
-		{7833A548-6556-4728-A28B-4F59C12CD8E7} = {7833A548-6556-4728-A28B-4F59C12CD8E7}
-	EndProjectSection
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "local_redirect", "examples\cpp\local_redirect\local_redirect.vcxproj", "{E20B38ED-BA56-4ED0-A06D-76396F2857D1}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sni_inspector", "examples\cpp\sni_inspector\sni_inspector.vcxproj", "{74C8277F-1507-45D7-B95A-1DC9E04C932A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -148,6 +147,22 @@ Global
 		{E20B38ED-BA56-4ED0-A06D-76396F2857D1}.Release|x64.Build.0 = Release|x64
 		{E20B38ED-BA56-4ED0-A06D-76396F2857D1}.Release|x86.ActiveCfg = Release|Win32
 		{E20B38ED-BA56-4ED0-A06D-76396F2857D1}.Release|x86.Build.0 = Release|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug DLL|x64.ActiveCfg = Debug|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug DLL|x64.Build.0 = Debug|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug DLL|x86.ActiveCfg = Debug|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug DLL|x86.Build.0 = Debug|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug|x64.ActiveCfg = Debug|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug|x64.Build.0 = Debug|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug|x86.ActiveCfg = Debug|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Debug|x86.Build.0 = Debug|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release DLL|x64.ActiveCfg = Release|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release DLL|x64.Build.0 = Release|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release DLL|x86.ActiveCfg = Release|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release DLL|x86.Build.0 = Release|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release|x64.ActiveCfg = Release|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release|x64.Build.0 = Release|x64
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release|x86.ActiveCfg = Release|Win32
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -160,6 +175,7 @@ Global
 		{39D26CA7-DCD7-4BE0-A97A-18940BAF0AD8} = {BACE34D5-298C-42E3-84F6-28C689E469E1}
 		{C5AD5596-0073-4453-B8DE-63659B9F0004} = {BACE34D5-298C-42E3-84F6-28C689E469E1}
 		{E20B38ED-BA56-4ED0-A06D-76396F2857D1} = {BACE34D5-298C-42E3-84F6-28C689E469E1}
+		{74C8277F-1507-45D7-B95A-1DC9E04C932A} = {BACE34D5-298C-42E3-84F6-28C689E469E1}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {F27A9BD3-2781-4A72-AB94-EC892968DD7C}
