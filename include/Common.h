@@ -40,7 +40,11 @@
 #define ADAPTER_NAME_SIZE	256
 #define ADAPTER_LIST_SIZE	32
 #define ETHER_ADDR_LENGTH	6
+#ifdef JUMBO_FRAME_SUPPORTED
+#define	MAX_ETHER_FRAME		9014 
+#else
 #define	MAX_ETHER_FRAME		1514 
+#endif 
 
 // Adapter flags
 #define MSTCP_FLAG_SENT_TUNNEL		0x00000001	// Receive packets sent by MSTCP
@@ -498,7 +502,7 @@ struct _STATIC_FILTER_TABLE
 
 // ********************************************************************************
 /// <summary>
-/// WinpkFilter fats I/O definitions
+/// WinpkFilter fast I/O definitions
 /// </summary>
 // ********************************************************************************
 
@@ -523,7 +527,7 @@ typedef struct _FAST_IO_SECTION
 typedef struct _INITIALIZE_FAST_IO_PARAMS
 {
 	PFAST_IO_SECTION header_ptr;
-	DWORD			 data_size;
+	ULONG			 data_size;
 }INITIALIZE_FAST_IO_PARAMS, *PINITIALIZE_FAST_IO_PARAMS;
 
 // --------------------------------------------------------------------------------
@@ -535,7 +539,7 @@ typedef struct _INITIALIZE_FAST_IO_PARAMS
 typedef struct _UNSORTED_READ_SEND_REQUEST
 {
 	PINTERMEDIATE_BUFFER*	packets;
-	DWORD					packets_num;
+	ULONG					packets_num;
 } UNSORTED_READ_SEND_REQUEST, *PUNSORTED_READ_SEND_REQUEST;
 
 // Restore Default Structure Packing

@@ -19,6 +19,12 @@
     <Filter Include="Header Files\common\ndisapi">
       <UniqueIdentifier>{b7bffef8-2d56-4887-94c9-a3a5c019c40c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\common\proxy">
+      <UniqueIdentifier>{d2c8bd97-dd78-4184-a752-bea62281490c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\iphelper">
+      <UniqueIdentifier>{1c70c634-1a25-4ca7-8a49-fd48b2225e0e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
@@ -27,12 +33,30 @@
     <ClInclude Include="..\common\ndisapi\fastio_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\proxy\proxy_common.h">
+      <Filter>Header Files\common\proxy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\proxy\socks5_tcp_proxy_socket.h">
+      <Filter>Header Files\common\proxy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\proxy\tcp_proxy_server.h">
+      <Filter>Header Files\common\proxy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\proxy\tcp_proxy_socket.h">
+      <Filter>Header Files\common\proxy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\iphelper\process_lookup.h">
+      <Filter>Header Files\common\iphelper</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\ndisapi\local_redirect.h">
+      <Filter>Header Files\common\ndisapi</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="sni_inspector.cpp">
+    <ClCompile Include="socksify.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

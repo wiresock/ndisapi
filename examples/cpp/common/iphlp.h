@@ -184,15 +184,17 @@ typedef struct pseudo_header
 // --------------------------------------------------------------------------------
 
 typedef struct ipv6hdr 
-{
-	unsigned int	ip6_flow;	// 4  bits = version #, 
-								// 8  bits = Trafic class,
-								// 20 bits = flow label
-	unsigned short	ip6_len;    // Payload length
-	unsigned char	ip6_next;	// Next Header
-	unsigned char	ip6_hops;	// Hop Limit
-	IN6_ADDR		ip6_src;	// Source Address
-	IN6_ADDR		ip6_dst;	// Destination Address
+{	
+	unsigned char	ip6_class_hi : 4,
+					ip6_v : 4;			// 4  bits = version #
+	unsigned char	ip6_flow_hi : 4, 
+					ip6_class_lo : 4;	// 8  bits = Traffic class,
+	unsigned short	ip6_flow_lo;		// 20 bits = flow label
+	unsigned short	ip6_len;			// Payload length
+	unsigned char	ip6_next;			// Next Header
+	unsigned char	ip6_hops;			// Hop Limit
+	IN6_ADDR		ip6_src;			// Source Address
+	IN6_ADDR		ip6_dst;			// Destination Address
 } ipv6hdr, *ipv6hdr_ptr;
 
 // --------------------------------------------------------------------------------

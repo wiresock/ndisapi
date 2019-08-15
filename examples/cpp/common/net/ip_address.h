@@ -23,22 +23,27 @@ namespace net
 	struct ip_address_v4 : in_addr
 	{
 		static constexpr size_t ipv4_address_max_length = 16;
+		static constexpr ADDRESS_FAMILY af_type = AF_INET;
 
-		explicit ip_address_v4(const uint32_t addr = 0) { S_un.S_addr = addr; }
-		explicit ip_address_v4(const in_addr& ip) { *static_cast<in_addr*>(this) = ip; }
+		explicit ip_address_v4(const uint32_t addr = 0) : in_addr() { S_un.S_addr = addr; }
+		ip_address_v4(const in_addr& ip) : in_addr() { *static_cast<in_addr*>(this) = ip; }
 
-		explicit ip_address_v4(const std::string& ip)
+		explicit ip_address_v4(const std::string& ip) : in_addr()
 		{
 			PCSTR terminator = nullptr;
 
-			assert(0 == ::RtlIpv4StringToAddressA(ip.c_str(), TRUE, &terminator, this));
+			[[maybe_unused]] const auto result = ::RtlIpv4StringToAddressA(ip.c_str(), TRUE, &terminator, this);
+
+			assert(0 == result);
 		}
 
-		explicit ip_address_v4(const std::wstring& ip)
+		explicit ip_address_v4(const std::wstring& ip) : in_addr()
 		{
 			LPCWSTR terminator = nullptr;
 
-			assert(0 == ::RtlIpv4StringToAddressW(ip.c_str(), TRUE, &terminator, this));
+			[[maybe_unused]] const auto result = ::RtlIpv4StringToAddressW(ip.c_str(), TRUE, &terminator, this);
+
+			assert(0 == result);
 		}
 
 		explicit operator std::string() const
@@ -58,7 +63,7 @@ namespace net
 		}
 
 		bool operator ==(const ip_address_v4& rhs) const { return (S_un.S_addr == rhs.S_un.S_addr); }
-
+		bool operator !=(const ip_address_v4& rhs) const { return (S_un.S_addr != rhs.S_un.S_addr); }
 		bool operator <(const ip_address_v4& rhs) const { return (S_un.S_addr < rhs.S_un.S_addr); }
 
 		friend std::ostream& operator<<(std::ostream& os, const ip_address_v4& dt);
@@ -86,23 +91,28 @@ namespace net
 	{
 		static constexpr size_t ipv6_address_max_string_length = 48;
 		static constexpr size_t ipv6_address_max_length = 16;
+		static constexpr ADDRESS_FAMILY af_type = AF_INET6;
 
-		ip_address_v6() { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
-		explicit ip_address_v6(const uint8_t addr[ipv6_address_max_length]) { memmove(reinterpret_cast<void*>(this), addr, sizeof(in_addr6)); }
-		explicit ip_address_v6(const in_addr6& ip) { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
+		ip_address_v6() : in6_addr() { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
+		explicit ip_address_v6(const uint8_t addr[ipv6_address_max_length]) : in6_addr() { memmove(reinterpret_cast<void*>(this), addr, sizeof(in_addr6)); }
+		ip_address_v6(const in_addr6& ip) : in6_addr() { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
 
-		explicit ip_address_v6(const std::string& ip)
+		explicit ip_address_v6(const std::string& ip) : in6_addr()
 		{
 			PCSTR terminator = nullptr;
 
-			assert(0 == ::RtlIpv6StringToAddressA(ip.c_str(), &terminator, this));
+			[[maybe_unused]] const auto result = ::RtlIpv6StringToAddressA(ip.c_str(), &terminator, this);
+
+			assert(0 == result);
 		}
 
-		explicit ip_address_v6(const std::wstring& ip)
+		explicit ip_address_v6(const std::wstring& ip) : in6_addr()
 		{
 			LPCWSTR terminator = nullptr;
 
-			assert(0 == ::RtlIpv6StringToAddressW(ip.c_str(), &terminator, this));
+			[[maybe_unused]] const auto result = ::RtlIpv6StringToAddressW(ip.c_str(), &terminator, this);
+
+			assert(0 == result);
 		}
 
 		explicit operator std::string() const
@@ -124,6 +134,11 @@ namespace net
 		bool operator ==(const ip_address_v6& rhs) const
 		{
 			return !memcmp(reinterpret_cast<const void*>(this), reinterpret_cast<const void*>(&rhs), sizeof(ip_address_v6));
+		}
+
+		bool operator !=(const ip_address_v6& rhs) const
+		{
+			return memcmp(reinterpret_cast<const void*>(this), reinterpret_cast<const void*>(&rhs), sizeof(ip_address_v6));
 		}
 
 		bool operator <(const ip_address_v6& rhs) const { return (memcmp(this, &rhs, sizeof(in_addr6)) < 0); }
@@ -177,4 +192,3 @@ namespace std
 		}
 	};
 }
-

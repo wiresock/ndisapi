@@ -62,7 +62,14 @@ namespace ndisapi
 		/// <param name="milliseconds"></param>
 		/// <returns>wait status</returns>
 		// ********************************************************************************
-		unsigned wait_event(const unsigned milliseconds) const { return packet_event_.wait(milliseconds); } 
+		unsigned wait_event(const unsigned milliseconds) const { return packet_event_.wait(milliseconds); }
+		// ********************************************************************************
+		/// <summary>
+		/// Signals packet event
+		/// </summary>
+		/// <returns>status of the operation</returns>
+		// ********************************************************************************
+		bool signal_event() const { return packet_event_.signal(); }
 		// ********************************************************************************
 		/// <summary>
 		/// resets packet event

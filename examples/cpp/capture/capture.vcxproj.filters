@@ -19,6 +19,9 @@
     <Filter Include="Header Files\common\ndisapi">
       <UniqueIdentifier>{b7bffef8-2d56-4887-94c9-a3a5c019c40c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\common\pcap">
+      <UniqueIdentifier>{f8f844ac-af18-47de-9cc8-a3859a76d08b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
@@ -27,12 +30,15 @@
     <ClInclude Include="..\common\ndisapi\fastio_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\pcap\pcap.h">
+      <Filter>Header Files\common\pcap</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="sni_inspector.cpp">
+    <ClCompile Include="capture.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

@@ -161,11 +161,12 @@ namespace ndisapi
 		TCP_AdapterList			ad_list;
 		std::vector<char>		friendly_name(MAX_PATH * 4);
 
-		GetTcpipBoundAdaptersInfo(&ad_list);
+		if (!GetTcpipBoundAdaptersInfo(&ad_list))
+			return;
 
 		for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
 		{
-			CNdisApi::ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
+			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
 
 			network_interfaces_.push_back(
 				std::make_unique<network_adapter>(

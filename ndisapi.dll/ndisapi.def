@@ -31,6 +31,10 @@ GetMTUDecrement
 SetAdaptersStartupMode
 GetAdaptersStartupMode
 IsDriverLoaded
+InitializeFastIo
+ReadPacketsUnsorted
+SendPacketsToAdaptersUnsorted
+SendPacketsToMstcpUnsorted
 GetBytesReturned
 IsNdiswanIp
 IsNdiswanIpv6
