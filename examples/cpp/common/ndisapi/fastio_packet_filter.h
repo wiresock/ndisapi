@@ -16,7 +16,8 @@ namespace ndisapi
 	enum class packet_action
 	{
 		pass,
-		drop
+		drop,
+		revert
 	};
 
 	// --------------------------------------------------------------------------------
@@ -291,6 +292,19 @@ namespace ndisapi
 					if (packet_action == packet_action::pass)
 					{
 						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+						{
+							write_adapter_request[send_to_adapter_num] = &packet_buffer[i];
+							++send_to_adapter_num;
+						}
+						else
+						{
+							write_mstcp_request[send_to_mstcp_num] = &packet_buffer[i];
+							++send_to_mstcp_num;
+						}
+					}
+					else if (packet_action == packet_action::revert)
+					{
+						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 						{
 							write_adapter_request[send_to_adapter_num] = &packet_buffer[i];
 							++send_to_adapter_num;

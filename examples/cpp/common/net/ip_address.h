@@ -62,6 +62,26 @@ namespace net
 			return std::wstring(&ip_vec[0]);
 		}
 
+		static std::pair<bool, ip_address_v4> from_string(const std::string& ip)
+		{
+			PCSTR terminator = nullptr;
+			ip_address_v4 address{};
+
+			[[maybe_unused]] const auto result = ::RtlIpv4StringToAddressA(ip.c_str(), TRUE, &terminator, &address);
+
+			return { 0 == result, address };
+		}
+
+		static std::pair<bool, ip_address_v4> from_wstring(const std::wstring& ip)
+		{
+			LPCWSTR terminator = nullptr;
+			ip_address_v4 address{};
+
+			[[maybe_unused]] const auto result = ::RtlIpv4StringToAddressW(ip.c_str(), TRUE, &terminator, &address);
+
+			return { 0 == result, address };
+		}
+
 		bool operator ==(const ip_address_v4& rhs) const { return (S_un.S_addr == rhs.S_un.S_addr); }
 		bool operator !=(const ip_address_v4& rhs) const { return (S_un.S_addr != rhs.S_un.S_addr); }
 		bool operator <(const ip_address_v4& rhs) const { return (S_un.S_addr < rhs.S_un.S_addr); }
@@ -87,7 +107,7 @@ namespace net
 	/// Wrapper for in_addr6. Represents IP version 6 address.
 	/// </summary>
 	// --------------------------------------------------------------------------------
-	struct ip_address_v6 : in_addr6
+	struct ip_address_v6 : in6_addr
 	{
 		static constexpr size_t ipv6_address_max_string_length = 48;
 		static constexpr size_t ipv6_address_max_length = 16;
@@ -129,6 +149,26 @@ namespace net
 			::RtlIpv6AddressToStringW(this, &ip_vec[0]);
 
 			return std::wstring(&ip_vec[0]);
+		}
+
+		static std::pair<bool, ip_address_v6> from_string(const std::string& ip)
+		{
+			PCSTR terminator = nullptr;
+			ip_address_v6 address{};
+
+			[[maybe_unused]] const auto result = ::RtlIpv6StringToAddressA(ip.c_str(), &terminator, &address);
+
+			return { 0 == result, address };
+		}
+
+		static std::pair<bool, ip_address_v6> from_wstring(const std::wstring& ip)
+		{
+			LPCWSTR terminator = nullptr;
+			ip_address_v6 address{};
+
+			[[maybe_unused]] const auto result = ::RtlIpv6StringToAddressW(ip.c_str(), &terminator, &address);
+
+			return { 0 == result, address };
 		}
 
 		bool operator ==(const ip_address_v6& rhs) const
