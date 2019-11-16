@@ -31,7 +31,12 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "C++", "C++", "{0239936A-C2D
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotNet", "dotNet", "{A402BC8B-B32C-4851-B4A2-B8B84C0721E9}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "socks5_proxifier", "examples\cpp\socksify\socksify.vcxproj", "{E20B38ED-BA56-4ED0-A06D-76396F2857D1}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "socksify", "examples\cpp\socksify\socksify.vcxproj", "{E20B38ED-BA56-4ED0-A06D-76396F2857D1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{ECFD3EDE-84DB-454B-A294-9177AACF94A3}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
