@@ -31,9 +31,31 @@ namespace ndisapi
 		~network_adapter() = default;
 
 		network_adapter(const network_adapter& other) = delete;
-		network_adapter(network_adapter&& other) noexcept = default;
+
+		network_adapter(network_adapter&& other) noexcept
+			: api_{other.api_},
+			  hardware_address_{other.hardware_address_},
+			  packet_event_{std::move(other.packet_event_)},
+			  internal_name_{std::move(other.internal_name_)},
+			  friendly_name_{std::move(other.friendly_name_)},
+			  current_mode_{other.current_mode_}
+		{
+		}
+
 		network_adapter& operator=(const network_adapter& other) = delete;
-		network_adapter& operator=(network_adapter&& other) noexcept = default;
+
+		network_adapter& operator=(network_adapter&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			api_ = other.api_;
+			hardware_address_ = other.hardware_address_;
+			packet_event_ = std::move(other.packet_event_);
+			internal_name_ = std::move(other.internal_name_);
+			friendly_name_ = std::move(other.friendly_name_);
+			current_mode_ = other.current_mode_;
+			return *this;
+		}
 
 		// ********************************************************************************
 		/// <summary>

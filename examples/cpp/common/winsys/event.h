@@ -14,6 +14,23 @@ namespace winsys {
 		{
 		}
 
+		safe_event(const safe_event& other) = delete;
+
+		safe_event(safe_event&& other) noexcept
+			: safe_object_handle{std::move(other)}
+		{
+		}
+
+		safe_event& operator=(const safe_event& other) = delete;
+
+		safe_event& operator=(safe_event&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			safe_object_handle::operator =(std::move(other));
+			return *this;
+		}
+
 		unsigned wait(const unsigned dw_milliseconds) const
 		{
 			return ::WaitForSingleObject(get(), dw_milliseconds);

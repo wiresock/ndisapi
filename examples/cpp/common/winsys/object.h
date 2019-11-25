@@ -20,12 +20,22 @@ namespace winsys {
 		{
 		}
 
-		// ********************************************************************************
-		/// <summary>
-		/// destructor declared virtual for the convenience
-		/// </summary>
-		// ********************************************************************************
-		virtual ~safe_object_handle() {}
+		safe_object_handle(const safe_object_handle& other) = delete;
+
+		safe_object_handle(safe_object_handle&& other) noexcept
+			: std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>{std::move(other)}
+		{
+		}
+
+		safe_object_handle& operator=(const safe_object_handle& other) = delete;
+
+		safe_object_handle& operator=(safe_object_handle&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>::operator =(std::move(other));
+			return *this;
+		}
 
 		// ********************************************************************************
 		/// <summary>
