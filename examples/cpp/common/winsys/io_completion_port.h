@@ -21,6 +21,28 @@ namespace winsys {
 		uint32_t concurrent_threads_;
 
 	public:
+
+		thread_pool(const thread_pool& other) = delete;
+
+		thread_pool(thread_pool&& other) noexcept
+			: threads_(std::move(other.threads_)),
+			  active_(other.active_.load()),
+			  concurrent_threads_(other.concurrent_threads_)
+		{
+		}
+
+		thread_pool& operator=(const thread_pool& other) = delete;
+
+		thread_pool& operator=(thread_pool&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			threads_ = std::move(other.threads_);
+			active_ = other.active_.load();
+			concurrent_threads_ = other.concurrent_threads_;
+			return *this;
+		}
+
 		// ********************************************************************************
 		/// <summary>
 		/// initializes thread_pool with specified number of concurrent threads
@@ -95,9 +117,34 @@ namespace winsys {
 		// ********************************************************************************
 		using callback_t = bool(DWORD, OVERLAPPED*, BOOL);
 
+		io_completion_port(const io_completion_port& other) = delete;
+
+		io_completion_port(io_completion_port&& other) noexcept
+			: safe_object_handle(std::move(static_cast<safe_object_handle&>(other))),
+			  thread_pool<io_completion_port>(std::move(static_cast<thread_pool<io_completion_port>&>(other))),
+			  handlers_lock_(std::move(other.handlers_lock_)),
+			  handlers_(std::move(other.handlers_)),
+			  handlers_keys_(std::move(other.handlers_keys_))
+		{
+		}
+
+		io_completion_port& operator=(const io_completion_port& other) = delete;
+
+		io_completion_port& operator=(io_completion_port&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			safe_object_handle::operator =(std::move(static_cast<safe_object_handle&>(other)));
+			thread_pool<io_completion_port>::operator =(std::move(static_cast<thread_pool<io_completion_port>&>(other)));
+			handlers_lock_ = std::move(other.handlers_lock_);
+			handlers_ = std::move(other.handlers_);
+			handlers_keys_ = std::move(other.handlers_keys_);
+			return *this;
+		}
+
 	private:
 		/// <summary>synchronization lock for handlers below (accessed concurrently)</summary>
-		std::shared_mutex handlers_lock_;
+		std::unique_ptr<std::shared_mutex> handlers_lock_;
 		/// <summary>callback handlers storage</summary>
 		std::vector<std::unique_ptr<std::function<callback_t>>>	handlers_;
 		/// <summary>callback keys (convertible to pointers in the storage above)</summary>
@@ -121,11 +168,14 @@ namespace winsys {
 				if (!active_)
 					return;
 
-				const auto handler = reinterpret_cast<std::function<callback_t>*>(completion_key);
-
-				if (*handler)
+				if (completion_key)
 				{
-					(*handler)(num_bytes, overlapped_ptr, ok);
+					const auto handler = reinterpret_cast<std::function<callback_t>*>(completion_key);
+
+					if (*handler)
+					{
+						(*handler)(num_bytes, overlapped_ptr, ok);
+					}
 				}
 
 #ifdef _DEBUG
@@ -163,8 +213,8 @@ namespace winsys {
 		// ********************************************************************************
 		void stop_thread() const
 		{
-			OVERLAPPED ovlp = { 0 };
-			::PostQueuedCompletionStatus(get(), 0, 0, &ovlp);
+			OVERLAPPED overlapped{0, 0, 0, 0,nullptr };
+			::PostQueuedCompletionStatus(get(), 0, 0, &overlapped);
 		}
 
 	public:
@@ -177,9 +227,10 @@ namespace winsys {
 		/// <param name="concurrent_threads">number of concurrent threads for I/O completion port (zero means as many threads as cores)</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		explicit io_completion_port(const HANDLE handle, const uint32_t concurrent_threads = 0) : 
+		explicit io_completion_port(HANDLE handle, const uint32_t concurrent_threads = 0) : 
 			safe_object_handle(handle),
-			thread_pool<io_completion_port>(concurrent_threads)
+			thread_pool<io_completion_port>(concurrent_threads),
+			handlers_lock_{ std::make_unique<std::shared_mutex>() }
 		{
 		}
 
@@ -208,7 +259,7 @@ namespace winsys {
 		/// </summary>
 		/// <returns></returns>
 		// ********************************************************************************
-		virtual ~io_completion_port()
+		~io_completion_port()
 		{
 			if (active_ == false)
 				return;
@@ -240,7 +291,7 @@ namespace winsys {
 		/// <param name="io_handler">callback handler for the device associated I/O</param>
 		/// <returns>pair of status of the operation and associated I/O completion port key value</returns>
 		// ********************************************************************************
-		std::pair<bool, ULONG_PTR> associate_device(const HANDLE file_object, const std::function<callback_t>& io_handler)
+		std::pair<bool, ULONG_PTR> associate_device(HANDLE file_object, const std::function<callback_t>& io_handler)
 		{
 			// handler can't be null
 			if(!io_handler)
@@ -256,7 +307,7 @@ namespace winsys {
 			{
 				{
 					// Store the key and pointer for the handler
-					std::lock_guard<std::shared_mutex> lock(handlers_lock_);
+					std::lock_guard<std::shared_mutex> lock(*handlers_lock_);
 					handlers_keys_.insert(handler_key);
 					handlers_.push_back(std::move(handler_ptr));
 				}
@@ -277,9 +328,9 @@ namespace winsys {
 		/// <param name="key">I/O completion port key value</param>
 		/// <returns>boolean status of the operation</returns>
 		// ********************************************************************************
-		bool associate_device(const HANDLE file_object, const ULONG_PTR key)
+		bool associate_device(HANDLE file_object, const ULONG_PTR key)
 		{
-			std::shared_lock<std::shared_mutex> lock(handlers_lock_);
+			std::shared_lock<std::shared_mutex> lock(*handlers_lock_);
 
 			// Check if key already exists and thus we already have a stored callable object
 			const auto it = handlers_keys_.find(key);

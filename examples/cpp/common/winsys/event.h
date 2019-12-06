@@ -10,9 +10,7 @@ namespace winsys {
 	class safe_event final : public safe_object_handle
 	{
 	public:
-		explicit safe_event(HANDLE handle) : safe_object_handle(handle)  // NOLINT(misc-misplaced-const)
-		{
-		}
+		explicit safe_event(HANDLE handle = NULL) : safe_object_handle(handle){}
 
 		safe_event(const safe_event& other) = delete;
 
@@ -45,6 +43,5 @@ namespace winsys {
 		{
 			return ::ResetEvent(get()) ? true : false;
 		}
-
 	};
 }
