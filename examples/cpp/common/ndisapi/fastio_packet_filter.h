@@ -254,20 +254,22 @@ namespace ndisapi
 
 				memmove(&packet_buffer[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER)*(fast_io_packets_success - 1));
 
-				// For the last packet wait the write completion
-				if(reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
-				{
-					write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+				// For the last packet(s) wait the write completion if in progress
+				write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 
-					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
-					{
-						std::this_thread::yield();
-						write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-					}
+				while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
+				{
+					std::this_thread::yield();
+					write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 				}
 
-				// Copy the last packet
+				// Copy the last packet(s)
 				memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+				if(fast_io_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+				{
+					fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+					memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+				}
 
 				InterlockedExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0);
 
