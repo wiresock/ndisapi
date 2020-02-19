@@ -240,11 +240,13 @@ namespace ndisapi
 			//
 			// Fast I/O processing section
 			//
-			if(fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets)
+			if (InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0))
 			{
-				fast_io_section->fast_io_header.read_in_progress_flag = 1;
+				InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 1);
 
-				fast_io_packets_success = fast_io_section->fast_io_header.fast_io_write_union.union_.split.number_of_packets;
+				auto write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+				
+				fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
 
 				//
 				// Copy packets and reset section
@@ -253,16 +255,23 @@ namespace ndisapi
 				memmove(&packet_buffer[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER)*(fast_io_packets_success - 1));
 
 				// For the last packet wait the write completion
-				while (fast_io_section->fast_io_header.fast_io_write_union.union_.split.write_in_progress_flag)
+				if(reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
 				{
-					std::this_thread::yield();
+					write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+
+					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
+					{
+						std::this_thread::yield();
+						write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					}
 				}
 
 				// Copy the last packet
 				memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
 
-				fast_io_section->fast_io_header.fast_io_write_union.union_.join = 0;
-				fast_io_section->fast_io_header.read_in_progress_flag = 0;
+				InterlockedExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0);
+
+				InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 0);
 	
 				auto send_to_adapter_num = 0;
 				auto send_to_mstcp_num = 0;
