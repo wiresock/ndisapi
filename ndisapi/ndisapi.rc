@@ -61,8 +61,8 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 3,2,20,3
- PRODUCTVERSION 3,2,20,3
+ FILEVERSION 3,2,21,1
+ PRODUCTVERSION 3,2,21,1
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -80,13 +80,13 @@ BEGIN
             VALUE "Comments", "Windows Packet Filter interface library"
             VALUE "CompanyName", "NT Kernel Resources"
             VALUE "FileDescription", "ndisapi"
-            VALUE "FileVersion", "3.2.20.3"
+            VALUE "FileVersion", "3.2.21.1"
             VALUE "InternalName", "ndisapi"
-            VALUE "LegalCopyright", "Copyright © NT Kernel Resources 2000-2019"
+            VALUE "LegalCopyright", "Copyright © NT Kernel Resources 2000-2020"
             VALUE "LegalTrademarks", "WinpkFilter"
             VALUE "OriginalFilename", "ndisapi.dll"
             VALUE "ProductName", "Windows Packet Filter Kit"
-            VALUE "ProductVersion", "3.2.20.3"
+            VALUE "ProductVersion", "3.2.21.1"
         END
     END
     BLOCK "VarFileInfo"
