@@ -9,9 +9,9 @@
 
 namespace ndisapi
 {
-	inline constexpr size_t maximum_packet_block = 512;
-	inline constexpr size_t fast_io_size = 0x20000;
+	inline constexpr size_t fast_io_size = 0x300000;
 	inline constexpr uint32_t fast_io_packets_num = (fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(INTERMEDIATE_BUFFER);
+	inline constexpr size_t maximum_packet_block = 2048;
 
 	enum class packet_action
 	{
@@ -27,6 +27,17 @@ namespace ndisapi
 	// --------------------------------------------------------------------------------
 	class fastio_packet_filter final : public CNdisApi
 	{
+		using request_storage_type_t = std::aligned_storage_t<sizeof(PINTERMEDIATE_BUFFER)* maximum_packet_block, 0x1000>;
+		using fast_io_storage_type_t = std::aligned_storage_t<fast_io_size, 0x1000>;
+
+		enum class filter_state
+		{
+			stopped,
+			starting,
+			running,
+			stopping
+		};
+		
 		explicit fastio_packet_filter(const bool sleep_on_poll = false) noexcept :
 		sleep_on_poll_(sleep_on_poll) 
 		{
@@ -56,7 +67,13 @@ namespace ndisapi
 			filter_incoming_packet_ = in;
 			filter_outgoing_packet_ = out;
 		}
-
+		// ********************************************************************************
+		/// <summary>
+		/// Updates available network interfaces. Should be called when the filter is inactive. 
+		/// </summary>
+		/// <returns>status of the operation</returns>
+		// ********************************************************************************
+		bool reconfigure();
 		// ********************************************************************************
 		/// <summary>
 		/// Starts packet filtering
@@ -93,6 +110,19 @@ namespace ndisapi
 		/// </summary>
 		// ********************************************************************************
 		void initialize_network_interfaces();
+		// ********************************************************************************
+		/// <summary>
+		/// Initialize interface and associated data structures required for packet filtering
+		/// </summary>
+		/// <returns>true is success, false otherwise</returns>
+		// ********************************************************************************
+		bool init_filter();
+		// ********************************************************************************
+		/// <summary>
+		/// Release interface and associated data structures required for packet filtering
+		/// </summary>
+		// ********************************************************************************
+		void release_filter();
 
 		/// <summary>outgoing packet processing functor</summary>
 		std::function<packet_action(HANDLE, INTERMEDIATE_BUFFER&)> filter_outgoing_packet_ = nullptr;
@@ -100,7 +130,7 @@ namespace ndisapi
 		std::function<packet_action(HANDLE, INTERMEDIATE_BUFFER&)> filter_incoming_packet_ = nullptr;
 
 		/// <summary>working thread running status</summary>
-		std::atomic_bool is_running_ = false;
+		std::atomic<filter_state> filter_state_ = filter_state::stopped;
 		/// <summary>list of available network interfaces</summary>
 		std::vector<std::unique_ptr<network_adapter>> network_interfaces_;
 		/// <summary>working thread object</summary>
@@ -109,37 +139,130 @@ namespace ndisapi
 		size_t adapter_{ 0 };
 		/// <summary>specifies if sleep should be used on polling fas I/O</summary>
 		bool sleep_on_poll_{ false };
+		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
+		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
+		/// <summary>driver request for reading packets</summary>
+		std::unique_ptr<request_storage_type_t> read_request_ptr_;
+		/// <summary>driver request for writing packets to adapter</summary>
+		std::unique_ptr<request_storage_type_t> write_adapter_request_ptr_;
+		/// <summary>driver request for writing packets up to protocol stack</summary>
+		std::unique_ptr<request_storage_type_t> write_mstcp_request_ptr_;
+		/// <summary>shared fast i/o memory</summary>
+		std::unique_ptr<fast_io_storage_type_t> fast_io_ptr_;
 	};
+
+	inline bool fastio_packet_filter::init_filter()
+	{
+		try
+		{
+			packet_buffer_ = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+
+			read_request_ptr_ = std::make_unique<request_storage_type_t>();
+			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
+			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
+			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t>();
+		}
+		catch (const std::bad_alloc&)
+		{
+			return false;
+		}
+
+		const auto read_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(read_request_ptr_.get());
+		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
+		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
+
+		// Initialize read request
+		for (size_t i = 0; i < maximum_packet_block; ++i)
+		{
+			read_request[i] = &packet_buffer_[i];
+		}
+
+		//
+		// Set events for helper driver
+		//
+		if (!network_interfaces_[adapter_]->set_packet_event())
+		{
+			packet_buffer_.reset();
+			read_request_ptr_.reset();
+			write_adapter_request_ptr_.reset();
+			write_mstcp_request_ptr_.reset();
+			fast_io_ptr_.reset();
+			
+			return false;
+		}
+		
+		const auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
+
+		if (!InitializeFastIo(fast_io_section, fast_io_size))
+		{
+			packet_buffer_.reset();
+			read_request_ptr_.reset();
+			write_adapter_request_ptr_.reset();
+			write_mstcp_request_ptr_.reset();
+			fast_io_ptr_.reset();
+
+			return false;
+		}
+
+		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
+
+		return true;
+	}
+
+	inline void fastio_packet_filter::release_filter()
+	{
+		network_interfaces_[adapter_]->release();
+
+		// Wait for working thread to exit
+		if (working_thread_.joinable())
+			working_thread_.join();
+
+		packet_buffer_.reset();
+		read_request_ptr_.reset();
+		write_adapter_request_ptr_.reset();
+		write_mstcp_request_ptr_.reset();
+		fast_io_ptr_.reset();
+	}
+
+	inline bool fastio_packet_filter::reconfigure()
+	{
+		if (filter_state_ != filter_state::stopped)
+			return false;
+
+		network_interfaces_.clear();
+
+		initialize_network_interfaces();
+
+		return true;
+	}
 
 	inline bool fastio_packet_filter::start_filter(const size_t adapter)
 	{
-		if (is_running_)
+		if (filter_state_ != filter_state::stopped)
 			return false;
-		else
-			is_running_ = true;
+
+		filter_state_ = filter_state::starting;
 
 		adapter_ = adapter;
-		working_thread_ = std::thread(&fastio_packet_filter::filter_working_thread, this);
+
+		if (init_filter())
+			working_thread_ = std::thread(&fastio_packet_filter::filter_working_thread, this);
+		else
+			return false;
 
 		return true;
 	}
 
 	inline bool fastio_packet_filter::stop_filter()
 	{
-		if (!is_running_)
-		{
+		if (filter_state_ != filter_state::running)
 			return false;
-		}
-		else
-		{
-			is_running_ = false;
-		}
 
-		network_interfaces_[adapter_]->release();
+		filter_state_ = filter_state::stopping;
 
-		// Wait for working thread to exit
-		if (working_thread_.joinable())
-			working_thread_.join();
+		release_filter();
+
+		filter_state_ = filter_state::stopped;
 
 		return true;
 	}
@@ -182,61 +305,28 @@ namespace ndisapi
 	inline void fastio_packet_filter::filter_working_thread()
 	{		
 		using namespace std::chrono_literals;
+
+		filter_state_ = filter_state::running;
 		
 		DWORD sent_success = 0;
 		DWORD fast_io_packets_success = 0;
 		DWORD queue_io_packets_success = 0;
 
-		const auto packet_buffer =
-			std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+		const auto read_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(read_request_ptr_.get());
+		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
+		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
 
-		//
-		// Initialize Requests
-		//
+		const auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
 
-		using request_storage_type_t = std::aligned_storage_t<sizeof(PINTERMEDIATE_BUFFER)*maximum_packet_block, 0x1000>;
-
-		// 1. Allocate memory using unique_ptr for auto-delete on thread exit
-		const auto read_request_ptr = std::make_unique<request_storage_type_t>();
-		const auto write_adapter_request_ptr = std::make_unique<request_storage_type_t>();
-		const auto write_mstcp_request_ptr = std::make_unique<request_storage_type_t>();
-
-		// 2. Get raw pointers for convenience
-		const auto read_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(read_request_ptr.get());
-		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr.get());
-		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr.get());
-
-		// Initialize read request
-		for (size_t i = 0; i < maximum_packet_block; ++i)
-		{
-			read_request[i] = &packet_buffer[i];
-		}
-
-		//
-		// Set events for helper driver
-		//
-		if (!network_interfaces_[adapter_]->set_packet_event())
-		{
-			return;
-		}
-
-		using fast_io_storage_type_t = std::aligned_storage_t<fast_io_size, 0x1000>;
-		const auto fast_io_ptr = std::make_unique<fast_io_storage_type_t>();
-		const auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr.get());
+#ifdef FAST_IO_MEASURE_STATS
+		uint64_t fast_io_packets_total = 0;
+		uint64_t queued_io_packets_total = 0;
+		uint64_t fast_io_reads_total = 0;
+		uint64_t queued_io_reads_total = 0;
+#endif //FAST_IO_MEASURE_STATS
 		
-		if (InitializeFastIo(fast_io_section, fast_io_size))
+		while (filter_state_ == filter_state::running)
 		{
-			std::cout << std::endl << "Successfully initialized fast I/O functionality" << std::endl;
-		}
-		else
-		{
-			std::cout << std::endl << "Failed tp initialize fast I/O functionality" << std::endl;
-		}
-
-		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
-
-		while (is_running_)
-		{	
 			//
 			// Fast I/O processing section
 			//
@@ -245,84 +335,103 @@ namespace ndisapi
 				InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 1);
 
 				auto write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-				
+
 				fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
 
 				//
 				// Copy packets and reset section
 				//
 
-				memmove(&packet_buffer[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER)*(fast_io_packets_success - 1));
+				memmove(&packet_buffer_[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success - 1));
 
 				// For the last packet(s) wait the write completion if in progress
 				write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 
 				while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
 				{
-					std::this_thread::yield();
+					//std::this_thread::yield();
 					write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 				}
 
 				// Copy the last packet(s)
-				memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
-				if(fast_io_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+				memmove(&packet_buffer_[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+				if (fast_io_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
 				{
 					fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-					memmove(&packet_buffer[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+					memmove(&packet_buffer_[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
 				}
 
 				InterlockedExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0);
 
-				InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 0);
-	
+				const auto original_read_in_progress_flag = InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 0);
+
 				auto send_to_adapter_num = 0;
 				auto send_to_mstcp_num = 0;
 
+#ifdef FAST_IO_MEASURE_STATS
+				fast_io_packets_total += fast_io_packets_success;
+				++fast_io_reads_total;
+#endif //FAST_IO_MEASURE_STATS
+
 				// Read the remaining packets from the queue
-				if (!ReadPacketsUnsorted(&read_request[fast_io_packets_success], maximum_packet_block - fast_io_packets_success, &queue_io_packets_success))
+				if (original_read_in_progress_flag == 2 || fast_io_packets_success == fast_io_packets_num)
+				{
+					if (!ReadPacketsUnsorted(&read_request[fast_io_packets_success], maximum_packet_block - fast_io_packets_success, &queue_io_packets_success))
+					{
+						queue_io_packets_success = 0;
+					}
+					else
+					{
+#ifdef FAST_IO_MEASURE_STATS
+						queued_io_packets_total += queue_io_packets_success;
+						++queued_io_reads_total;
+#endif //FAST_IO_MEASURE_STATS
+					}
+				}
+				else
 				{
 					queue_io_packets_success = 0;
 				}
 
-				for (size_t i = 0; i < (queue_io_packets_success + fast_io_packets_success); ++i)
+				for (uint32_t i = 0; i < (queue_io_packets_success + fast_io_packets_success); ++i)
 				{
 					auto packet_action = packet_action::pass;
 
-					if(packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+					if(packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 					{
 						if (filter_outgoing_packet_ != nullptr)
-							packet_action = filter_outgoing_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
+							packet_action = filter_outgoing_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
 					}
 					else
 					{
 						if (filter_incoming_packet_ != nullptr)
-							packet_action = filter_incoming_packet_(packet_buffer[i].m_hAdapter, packet_buffer[i]);
+							packet_action = filter_incoming_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
 					}
 
 					// Place packet back into the flow if was allowed to
 					if (packet_action == packet_action::pass)
 					{
-						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 						{
-							write_adapter_request[send_to_adapter_num] = &packet_buffer[i];
+							write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
 							++send_to_adapter_num;
 						}
 						else
 						{
-							write_mstcp_request[send_to_mstcp_num] = &packet_buffer[i];
+							write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
 							++send_to_mstcp_num;
 						}
 					}
 					else if (packet_action == packet_action::revert)
 					{
-						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
+						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 						{
-							write_adapter_request[send_to_adapter_num] = &packet_buffer[i];
+							write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
 							++send_to_adapter_num;
 						}
 						else
 						{
-							write_mstcp_request[send_to_mstcp_num] = &packet_buffer[i];
+							write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
 							++send_to_mstcp_num;
 						}
 					}
@@ -331,20 +440,30 @@ namespace ndisapi
 				if (send_to_adapter_num > 0)
 				{
 					SendPacketsToAdaptersUnsorted(write_adapter_request, send_to_adapter_num, &sent_success);
-					send_to_adapter_num = 0;
 				}
 
 				if (send_to_mstcp_num > 0)
 				{
 					SendPacketsToMstcpUnsorted(write_mstcp_request, send_to_mstcp_num, &sent_success);
-					send_to_mstcp_num = 0;
 				}
 			}
 			else
 			{
-				if(sleep_on_poll_)
+				if (sleep_on_poll_)
 					std::this_thread::sleep_for(1us);
+				//else
+				//	std::this_thread::yield(); //::SwitchToThread();
+				//	
 			}
 		}
+
+#ifdef FAST_IO_MEASURE_STATS
+		std::cout << "fast_io_packets_total = " << fast_io_packets_total << std::endl;
+		std::cout << "fast_io_reads_total = " << fast_io_reads_total << std::endl;
+		std::cout << "queued_io_packets_total = " << queued_io_packets_total << std::endl;
+		std::cout << "queued_io_reads_total = " << queued_io_reads_total << std::endl;
+		std::cout << "queued_io_reads_total/reads_total = " << static_cast<double>(queued_io_reads_total) / (fast_io_reads_total + queued_io_reads_total) * 100 << "%" << std::endl;
+		std::cout << "queued_io_packets_total/packets_total = " << static_cast<double>(queued_io_packets_total) / (fast_io_packets_total + queued_io_packets_total) * 100 << "%" << std::endl;
+#endif //FAST_IO_MEASURE_STATS
 	}
 }

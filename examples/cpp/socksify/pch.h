@@ -35,6 +35,8 @@
 #include <shared_mutex>
 #include <set>
 
+#define FAST_IO_MEASURE_STATS
+
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"
 #include "../common/iphlp.h"

@@ -29,8 +29,19 @@ namespace ndisapi
 	/// </summary>
 	// --------------------------------------------------------------------------------
 	class simple_packet_filter final : public CNdisApi
-	{	
-		simple_packet_filter() noexcept
+	{
+		using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
+			sizeof(NDISRD_ETH_Packet) * (maximum_packet_block - 1), 0x1000>;
+
+		enum class filter_state
+		{
+			stopped,
+			starting,
+			running,
+			stopping
+		};
+		
+		simple_packet_filter()
 		{
 			initialize_network_interfaces();
 		}
@@ -57,7 +68,13 @@ namespace ndisapi
 			filter_incoming_packet_ = in;
 			filter_outgoing_packet_ = out;
 		}
-
+		// ********************************************************************************
+		/// <summary>
+		/// Updates available network interfaces. Should be called when the filter is inactive. 
+		/// </summary>
+		/// <returns>status of the operation</returns>
+		// ********************************************************************************
+		bool reconfigure();
 		// ********************************************************************************
 		/// <summary>
 		/// Starts packet filtering
@@ -75,11 +92,19 @@ namespace ndisapi
 		bool stop_filter();
 		// ********************************************************************************
 		/// <summary>
-		/// Queries the list of available network interfaces
+		/// Queries the list of the names for the available network interfaces
 		/// </summary>
 		/// <returns>list of network adapters friendly names</returns>
 		// ********************************************************************************
-		std::vector<std::string> get_interface_list();
+		std::vector<std::string> get_interface_names_list() const;
+
+		// ********************************************************************************
+		/// <summary>
+		/// Queries the list of the available network interfaces
+		/// </summary>
+		/// <returns>vector of available network adapters</returns>
+		// ********************************************************************************
+		const std::vector<std::unique_ptr<network_adapter>>& get_interface_list() const;
 
 	private:
 		// ********************************************************************************
@@ -94,56 +119,153 @@ namespace ndisapi
 		/// </summary>
 		// ********************************************************************************
 		void initialize_network_interfaces();
+		// ********************************************************************************
+		/// <summary>
+		/// Initialize interface and associated data structures required for packet filtering
+		/// </summary>
+		/// <returns>true is success, false otherwise</returns>
+		// ********************************************************************************
+		bool init_filter();
+		// ********************************************************************************
+		/// <summary>
+		/// Release interface and associated data structures required for packet filtering
+		/// </summary>
+		// ********************************************************************************
+		void release_filter();
 
 		/// <summary>outgoing packet processing functor</summary>
 		std::function<packet_action(HANDLE, INTERMEDIATE_BUFFER&)> filter_outgoing_packet_ = nullptr;
 		/// <summary>incoming packet processing functor</summary>
 		std::function<packet_action(HANDLE, INTERMEDIATE_BUFFER&)> filter_incoming_packet_ = nullptr;
-
 		/// <summary>working thread running status</summary>
-		std::atomic_bool is_running_ = false;
+		std::atomic<filter_state> filter_state_ = filter_state::stopped;
 		/// <summary>list of available network interfaces</summary>
 		std::vector<std::unique_ptr<network_adapter>> network_interfaces_;
 		/// <summary>working thread object</summary>
 		std::thread working_thread_;
 		/// <summary>filtered adapter index</summary>
 		size_t adapter_{ 0 };
+		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
+		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
+		/// <summary>driver request for reading packets</summary>
+		std::unique_ptr<request_storage_type_t> read_request_ptr_;
+		/// <summary>driver request for writing packets to adapter</summary>
+		std::unique_ptr<request_storage_type_t> write_adapter_request_ptr_;
+		/// <summary>driver request for writing packets up to protocol stack</summary>
+		std::unique_ptr<request_storage_type_t> write_mstcp_request_ptr_;
 	};
 
-	inline bool simple_packet_filter::start_filter(const size_t adapter)
+	inline bool simple_packet_filter::init_filter()
 	{
-		if (is_running_)
-			return false;
-		else
-			is_running_ = true;
+		try
+		{
+			packet_buffer_ = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
-		adapter_ = adapter;
-		working_thread_ = std::thread(&simple_packet_filter::filter_working_thread, this);
+			read_request_ptr_ = std::make_unique<request_storage_type_t>();
+			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
+			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
+		}
+		catch (const std::bad_alloc&)
+		{
+			return false;
+		}
+
+		auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
+		auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
+		auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
+
+		read_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
+		write_adapter_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
+		write_mstcp_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
+
+		read_request->dwPacketsNumber = maximum_packet_block;
+
+		//
+		// Initialize packet buffers
+		//
+		ZeroMemory(packet_buffer_.get(), sizeof(INTERMEDIATE_BUFFER) * maximum_packet_block);
+
+		for (unsigned i = 0; i < maximum_packet_block; ++i)
+		{
+			read_request->EthPacket[i].Buffer = &packet_buffer_[i];
+		}
+
+		//
+		// Set events for helper driver
+		//
+		if (!network_interfaces_[adapter_]->set_packet_event())
+		{
+			packet_buffer_.reset();
+			read_request_ptr_.reset();
+			write_adapter_request_ptr_.reset();
+			write_mstcp_request_ptr_.reset();
+
+			return false;
+		}
+
+		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
 
 		return true;
 	}
 
-	inline bool simple_packet_filter::stop_filter()
+	inline void simple_packet_filter::release_filter()
 	{
-		if (!is_running_)
-		{
-			return false;
-		}
-		else
-		{
-			is_running_ = false;
-		}
-
 		network_interfaces_[adapter_]->release();
 
 		// Wait for working thread to exit
 		if (working_thread_.joinable())
 			working_thread_.join();
 
+		packet_buffer_.reset();
+		read_request_ptr_.reset();
+		write_adapter_request_ptr_.reset();
+		write_mstcp_request_ptr_.reset();
+	}
+
+	inline bool simple_packet_filter::reconfigure()
+	{
+		if (filter_state_ != filter_state::stopped)
+			return false;
+
+		network_interfaces_.clear();
+
+		initialize_network_interfaces();
+
 		return true;
 	}
 
-	inline std::vector<std::string> simple_packet_filter::get_interface_list()
+	inline bool simple_packet_filter::start_filter(const size_t adapter)
+	{
+		if (filter_state_ != filter_state::stopped)
+			return false;
+		
+		filter_state_ = filter_state::starting;
+
+		adapter_ = adapter;
+
+		if (init_filter())
+			working_thread_ = std::thread(&simple_packet_filter::filter_working_thread, this);
+		else
+			return false;
+
+		return true;
+	}
+
+	inline bool simple_packet_filter::stop_filter()
+	{
+		if (filter_state_ != filter_state::running)
+			return false;
+
+		filter_state_ = filter_state::stopping;
+
+		release_filter();
+
+		filter_state_ = filter_state::stopped;
+
+		return true;
+	}
+
+	inline std::vector<std::string> simple_packet_filter::get_interface_names_list() const
 	{
 		std::vector<std::string> result;
 		result.reserve(network_interfaces_.size());
@@ -156,6 +278,11 @@ namespace ndisapi
 		return result;
 	}
 
+	inline const std::vector<std::unique_ptr<network_adapter>>& simple_packet_filter::get_interface_list() const
+	{
+		return network_interfaces_;
+	}
+
 	inline void simple_packet_filter::initialize_network_interfaces()
 	{
 		TCP_AdapterList			ad_list;
@@ -165,7 +292,7 @@ namespace ndisapi
 
 		for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
 		{
-			CNdisApi::ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
+			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
 
 			network_interfaces_.push_back(
 				std::make_unique<network_adapter>(
@@ -173,105 +300,67 @@ namespace ndisapi
 					ad_list.m_nAdapterHandle[i],
 					ad_list.m_czCurrentAddress[i],
 					std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
-					std::string(friendly_name.data())));
+					std::string(friendly_name.data()),
+					ad_list.m_nAdapterMediumList[i],
+					ad_list.m_usMTU[i]));
 		}
 	}
 
 	inline void simple_packet_filter::filter_working_thread()
 	{
-		auto packet_buffer =
-			std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+		filter_state_ = filter_state::running;
+		
+		auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
+		auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
+		auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
 
-		//
-		// Initialize Requests
-		//
-
-		using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
-			sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1), 0x1000>;
-
-		// 1. Allocate memory using unique_ptr for auto-delete on thread exit
-		auto read_request_ptr = std::make_unique<request_storage_type_t>();
-		auto write_adapter_request_ptr = std::make_unique<request_storage_type_t>();
-		auto write_mstcp_request_ptr = std::make_unique<request_storage_type_t>();
-
-		// 2. Get raw pointers for convenience
-		auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr.get());
-		auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr.get());
-		auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr.get());
-
-		read_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
-		write_adapter_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
-		write_mstcp_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
-
-		read_request->dwPacketsNumber = maximum_packet_block;
-
-		//
-		// Initialize packet buffers
-		//
-		ZeroMemory(packet_buffer.get(), sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
-
-		for (unsigned i = 0; i < maximum_packet_block; ++i)
-		{
-			read_request->EthPacket[i].Buffer = &packet_buffer[i];
-		}
-
-		//
-		// Set events for helper driver
-		//
-		if (!network_interfaces_[adapter_]->set_packet_event())
-		{
-			return;
-		}
-
-		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
-
-		while (is_running_)
+		while (filter_state_ == filter_state::running)
 		{
 			[[maybe_unused]] auto wait_result = network_interfaces_[adapter_]->wait_event(INFINITE);
 
 			[[maybe_unused]] auto reset_result = network_interfaces_[adapter_]->reset_event();
 
-			while (is_running_ && ReadPackets(read_request))
+			while (filter_state_ == filter_state::running && ReadPackets(read_request))
 			{
 				for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 				{
 					auto packet_action = packet_action::pass;
 
-					if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+					if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 					{
 						if (filter_outgoing_packet_ != nullptr)
-							packet_action = filter_outgoing_packet_(read_request->hAdapterHandle, packet_buffer[i]);
+							packet_action = filter_outgoing_packet_(read_request->hAdapterHandle, packet_buffer_[i]);
 					}
 					else
 					{
 						if (filter_incoming_packet_ != nullptr)
-							packet_action = filter_incoming_packet_(read_request->hAdapterHandle, packet_buffer[i]);
+							packet_action = filter_incoming_packet_(read_request->hAdapterHandle, packet_buffer_[i]);
 					}
 
 					// Place packet back into the flow if was allowed to
 					if (packet_action == packet_action::pass)
 					{
-						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 						{
-							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
 							++write_adapter_request->dwPacketsNumber;
 						}
 						else
 						{
-							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
 							++write_mstcp_request->dwPacketsNumber;
 						}
 					}
 					else if(packet_action == packet_action::revert)
 					{
-						if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
+						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 						{
-							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
 							++write_adapter_request->dwPacketsNumber;
 						}
 						else
 						{
-							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
 							++write_mstcp_request->dwPacketsNumber;
 						}
 					}

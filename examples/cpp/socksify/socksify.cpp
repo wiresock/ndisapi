@@ -76,7 +76,7 @@ int main()
 			}
 
 			return ndisapi::packet_action::pass;
-		}, true);
+		}, false);
 
 	if (ndis_api->IsDriverLoaded())
 	{
