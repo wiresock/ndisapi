@@ -300,9 +300,7 @@ namespace ndisapi
 					ad_list.m_nAdapterHandle[i],
 					ad_list.m_czCurrentAddress[i],
 					std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
-					std::string(friendly_name.data()),
-					ad_list.m_nAdapterMediumList[i],
-					ad_list.m_usMTU[i]));
+					std::string(friendly_name.data())));
 		}
 	}
 
