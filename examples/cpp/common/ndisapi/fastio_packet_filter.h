@@ -91,11 +91,19 @@ namespace ndisapi
 		bool stop_filter();
 		// ********************************************************************************
 		/// <summary>
-		/// Queries the list of available network interfaces
+		/// Queries the list of the names for the available network interfaces
 		/// </summary>
 		/// <returns>list of network adapters friendly names</returns>
 		// ********************************************************************************
-		std::vector<std::string> get_interface_list();
+		std::vector<std::string> get_interface_names_list() const;
+
+		// ********************************************************************************
+		/// <summary>
+		/// Queries the list of the available network interfaces
+		/// </summary>
+		/// <returns>vector of available network adapters</returns>
+		// ********************************************************************************
+		const std::vector<std::unique_ptr<network_adapter>>& get_interface_list() const;
 
 	private:
 		// ********************************************************************************
@@ -267,7 +275,7 @@ namespace ndisapi
 		return true;
 	}
 
-	inline std::vector<std::string> fastio_packet_filter::get_interface_list()
+	inline std::vector<std::string> fastio_packet_filter::get_interface_names_list() const
 	{
 		std::vector<std::string> result;
 		result.reserve(network_interfaces_.size());
@@ -278,6 +286,11 @@ namespace ndisapi
 		}
 
 		return result;
+	}
+
+	inline const std::vector<std::unique_ptr<network_adapter>>& fastio_packet_filter::get_interface_list() const
+	{
+		return network_interfaces_;
 	}
 
 	inline void fastio_packet_filter::initialize_network_interfaces()

@@ -385,7 +385,7 @@ int main()
 
 	std::cout << "Available network interfaces:" << std::endl << std::endl;
 	size_t index = 0;
-	for (auto& e : ndis_api->get_interface_list())
+	for (auto& e : ndis_api->get_interface_names_list())
 	{
 		std::cout << ++index << ")\t" << e << std::endl;
 	}
@@ -393,7 +393,7 @@ int main()
 	std::cout << std::endl << "Select interface to filter:";
 	std::cin >> index;
 
-	if (index > ndis_api->get_interface_list().size())
+	if (index > ndis_api->get_interface_names_list().size())
 	{
 		std::cout << "Wrong parameter was selected. Out of range." << std::endl;
 		return 0;
