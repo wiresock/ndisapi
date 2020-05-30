@@ -1,0 +1,161 @@
+Microsoft Developer Studio Workspace File, Format Version 6.00
+# WARNING: DO NOT EDIT OR DELETE THIS WORKSPACE FILE!
+
+###############################################################################
+
+Project: "filter"=.\filter\filter.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "filterstats"=.\filterstats\filterstats.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "gretunnel"=.\gretunnel\gretunnel.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "listadapters"=.\listadapters\listadapters.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "ndisapi"=..\..\..\ndisapi.vc6\ndisapi.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+}}}
+
+###############################################################################
+
+Project: "ndisrequest"=.\ndisrequest\ndisrequest.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "packetsniffer"=.\packetsniffer\packetsniffer.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "packthru"=.\packthru\packthru.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+}}}
+
+###############################################################################
+
+Project: "passthru"=.\passthru\passthru.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Project: "wwwcensor"=.\wwwcensor\wwwcensor.dsp - Package Owner=<4>
+
+Package=<5>
+{{{
+}}}
+
+Package=<4>
+{{{
+    Begin Project Dependency
+    Project_Dep_Name ndisapi
+    End Project Dependency
+}}}
+
+###############################################################################
+
+Global:
+
+Package=<5>
+{{{
+}}}
+
+Package=<3>
+{{{
+}}}
+
+###############################################################################
+
