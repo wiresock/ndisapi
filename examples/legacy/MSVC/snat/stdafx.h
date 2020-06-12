@@ -36,14 +36,10 @@
 
 #include <winsock2.h>
 
-#undef NTDDI_VERSION
-#define NTDDI_VERSION NTDDI_WIN2KSP1
 #include <iphlpapi.h>
 
 #include "..\..\..\..\include\common.h"
 #include "..\..\..\..\include\ndisapi.h"
-
-
 
 #ifdef _UNICODE
 #if defined _M_IX86
