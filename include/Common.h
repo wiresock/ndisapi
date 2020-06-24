@@ -20,7 +20,7 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x02143000
+#define NDISRD_VERSION			0x02183000
 #define NDISRD_MAJOR_VERSION	0x0003
 #define NDISRD_MINOR_VERSION	0x0218
 

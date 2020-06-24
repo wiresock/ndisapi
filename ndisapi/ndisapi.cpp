@@ -95,7 +95,8 @@ public:
 		{
 			if (m_Handle32to64[i] == handle)
 			{
-				return i;
+				result = i;
+				break;
 			}
 		}
 
@@ -117,7 +118,7 @@ private:
 		memset((void*)m_Handle32to64, 0, sizeof(m_Handle32to64));
 	}
 
-	// Synchronize an acess to m_Handle32to64 using Win32 mutex
+	// Synchronize an access to m_Handle32to64 using Win32 mutex
 	DWORD InternalLock() { return ::WaitForSingleObject(m_hWin32Mutex, INFINITE); }
 	void InternalUnlock() { ::ReleaseMutex(m_hWin32Mutex); }
 
@@ -203,7 +204,7 @@ void CNdisApi::CWow64Helper::Update(TCP_AdapterList_WOW64 adapterListWow64)
 
 #if _MSC_VER < 1910
 	InternalUnlock();
-#endif _MSC_VER < 1910
+#endif //_MSC_VER < 1910
 }
 
 //
@@ -228,7 +229,7 @@ CNdisApi::CNdisApi(const TCHAR* pszFileName): m_Wow64Helper(CWow64Helper::getIns
 	// We open driver for overlapped I/O, though none of current driver services are processed asynchronously
 	m_hFileHandle = ::CreateFile(pszFullName, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
 
-	// If driver is opened succesfully we initialize our OVERLAPPED structure
+	// If driver is opened successfully we initialize our OVERLAPPED structure
 	if (m_hFileHandle == INVALID_HANDLE_VALUE)
 	{
 		m_ovlp.hEvent = 0;
