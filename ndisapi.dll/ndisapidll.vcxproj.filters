@@ -34,10 +34,10 @@
     <ClInclude Include="..\ndisapi\iphlp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\ndisapi\resource.h">
+    <ClInclude Include="..\ndisapi\precomp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\ndisapi\precomp.h">
+    <ClInclude Include="..\ndisapi\resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

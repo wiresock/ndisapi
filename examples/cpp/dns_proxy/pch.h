@@ -34,6 +34,7 @@
 #include <cctype>
 #include <mutex>
 #include <shared_mutex>
+#include <algorithm>
 
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"

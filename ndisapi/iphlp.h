@@ -98,9 +98,9 @@ typedef struct iphdr
 	u_char	ip_hl:4,		/* header length */
 			ip_v:4;			/* version */
 	u_char	ip_tos;			/* type of service */
-	short	ip_len;			/* total length */
+	u_short	ip_len;			/* total length */
 	u_short	ip_id;			/* identification */
-	short	ip_off;			/* fragment offset field */
+	u_short	ip_off;			/* fragment offset field */
 #define	IP_DF 0x4000		/* dont fragment flag */
 #define	IP_MF 0x2000		/* more fragments flag */
 	u_char	ip_ttl;			/* time to live */

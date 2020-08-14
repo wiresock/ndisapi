@@ -7,17 +7,17 @@
 //
 // Generated from the TEXTINCLUDE 2 resource.
 //
-#include "afxres.h"
+#include "winres.h"
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
 
 /////////////////////////////////////////////////////////////////////////////
-// Russian (Russia) resources
+// English (United States) resources
 
-#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_RUS)
-LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
-#pragma code_page(1251)
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -32,7 +32,7 @@ END
 
 2 TEXTINCLUDE 
 BEGIN
-    "#include ""afxres.h""\r\n"
+    "#include ""winres.h""\r\n"
     "\0"
 END
 
@@ -44,16 +44,6 @@ END
 
 #endif    // APSTUDIO_INVOKED
 
-#endif    // Russian (Russia) resources
-/////////////////////////////////////////////////////////////////////////////
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Neutral (Default) resources
-
-#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEUD)
-LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
-#pragma code_page(1252)
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -75,15 +65,13 @@ VS_VERSION_INFO VERSIONINFO
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "000004b0"
+        BLOCK "040004b0"
         BEGIN
-            VALUE "Comments", "Windows Packet Filter interface library"
             VALUE "CompanyName", "NT Kernel Resources"
-            VALUE "FileDescription", "ndisapi"
+            VALUE "FileDescription", "Windows Packet Filter user interface library"
             VALUE "FileVersion", "3.2.25.1"
-            VALUE "InternalName", "ndisapi"
+            VALUE "InternalName", "ndisapi.dll"
             VALUE "LegalCopyright", "Copyright © NT Kernel Resources 2000-2020"
-            VALUE "LegalTrademarks", "WinpkFilter"
             VALUE "OriginalFilename", "ndisapi.dll"
             VALUE "ProductName", "Windows Packet Filter Kit"
             VALUE "ProductVersion", "3.2.25.1"
@@ -91,11 +79,11 @@ BEGIN
     END
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x0, 1200
+        VALUE "Translation", 0x400, 1200
     END
 END
 
-#endif    // Neutral (Default) resources
+#endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////
 
 

@@ -34,6 +34,7 @@
 #include <cctype>
 #include <shared_mutex>
 #include <set>
+#include <algorithm>
 
 #define FAST_IO_MEASURE_STATS
 
