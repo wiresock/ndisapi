@@ -1,6 +1,7 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by ndisapi.dll.rc
+// Used by ndisapi.rc
+//
 
 // Next default values for new objects
 // 
