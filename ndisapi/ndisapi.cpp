@@ -15,10 +15,10 @@
 
 #include "precomp.h"
 
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 #include <mutex>
 #include <shared_mutex>
-#endif // _MSC_VER >= 1910
+#endif // _MSC_VER >= 1910 && !_USING_V110_SDK71_
 
 #define DEVICE_NDISWANIP "\\DEVICE\\NDISWANIP"
 #define USER_NDISWANIP "WAN Network Interface (IP)"
@@ -48,12 +48,12 @@ CVersionInfo CNdisApi::ms_Version;
 class CNdisApi::CWow64Helper
 {
 public:
-#if _MSC_VER < 1910
+#if _MSC_VER < 1910 || _USING_V110_SDK71_
 	~CWow64Helper()
 	{
 		::CloseHandle(m_hWin32Mutex);
 	}
-#endif //_MSC_VER < 1910
+#endif //_MSC_VER < 1910 || _USING_V110_SDK71_
 
 	static CWow64Helper& getInstance()
 	{
@@ -66,17 +66,17 @@ public:
 
 	ULONGLONG From32to64Handle(unsigned int handle)
 	{
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 		std::shared_lock <std::shared_mutex> _lock(m_SharedLock);
 #else
 		InternalLock();
-#endif // _MSC_VER >= 1910
+#endif // _MSC_VER >= 1910 && !_USING_V110_SDK71_
 
 		ULONGLONG result = m_Handle32to64[handle];
 
-#if _MSC_VER < 1910
+#if _MSC_VER < 1910 || _USING_V110_SDK71_
 		InternalUnlock();
-#endif _MSC_VER < 1910
+#endif _MSC_VER < 1910 || _USING_V110_SDK71_
 
 		return result;
 	}
@@ -85,11 +85,11 @@ public:
 	{
 		unsigned int result = 0;
 
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 		std::shared_lock <std::shared_mutex> _lock(m_SharedLock);
 #else
 		InternalLock();
-#endif // _MSC_VER >= 1910
+#endif // _MSC_VER >= 1910 && !_USING_V110_SDK71_
 
 		for (unsigned int i = 1; i < ADAPTER_LIST_SIZE + 1; ++i)
 		{
@@ -100,14 +100,14 @@ public:
 			}
 		}
 
-#if _MSC_VER < 1910
+#if _MSC_VER < 1910 || _USING_V110_SDK71_
 		InternalUnlock();
-#endif _MSC_VER < 1910
+#endif _MSC_VER < 1910 || _USING_V110_SDK71_
 		return result;
 	}
 
 private:
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 	CWow64Helper() = default;
 
 	CWow64Helper(CWow64Helper const&) = delete;
@@ -126,22 +126,22 @@ private:
 	CWow64Helper& operator=(CWow64Helper const&);	// Don't implement
 #endif // 
 
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 	std::shared_mutex				m_SharedLock;
 #else
 	HANDLE							m_hWin32Mutex;
-#endif //_MSC_VER >= 1910
+#endif //_MSC_VER >= 1910 && !_USING_V110_SDK71_
 
 	ULONGLONG						m_Handle32to64[ADAPTER_LIST_SIZE + 1];
 };
 
 void CNdisApi::CWow64Helper::Update(TCP_AdapterList_WOW64 adapterListWow64)
 {
-#if _MSC_VER >= 1910
+#if _MSC_VER >= 1910 && !_USING_V110_SDK71_
 	std::unique_lock <std::shared_mutex> _lock(m_SharedLock);
 #else
 	InternalLock();
-#endif // _MSC_VER >= 1910
+#endif // _MSC_VER >= 1910 && !_USING_V110_SDK71_
 
 	if (m_Handle32to64[0] == 0)
 	{
@@ -202,9 +202,9 @@ void CNdisApi::CWow64Helper::Update(TCP_AdapterList_WOW64 adapterListWow64)
 		}
 	}
 
-#if _MSC_VER < 1910
+#if _MSC_VER < 1910 || _USING_V110_SDK71_
 	InternalUnlock();
-#endif //_MSC_VER < 1910
+#endif //_MSC_VER < 1910 || _USING_V110_SDK71_
 }
 
 //
