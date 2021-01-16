@@ -33,6 +33,9 @@
     <ClInclude Include="..\common\pcap\pcap.h">
       <Filter>Header Files\common\pcap</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\pcap\pcap_file_storage.h">
+      <Filter>Header Files\common\pcap</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">

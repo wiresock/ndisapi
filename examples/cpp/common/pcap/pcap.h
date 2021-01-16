@@ -226,7 +226,7 @@ namespace pcap
 	class pcap_record_header
 	{
 	public:
-		pcap_record_header(const uint32_t timestamp_sec, const uint32_t timestamp_usec, const uint32_t incl_len, const uint32_t orig_len, char* data)
+		pcap_record_header(const uint32_t timestamp_sec, const uint32_t timestamp_usec, const uint32_t incl_len, const uint32_t orig_len, char const* data)
 			: header_{ timestamp_sec, timestamp_usec, incl_len, orig_len }, data_{ data }
 		{
 		}
@@ -238,6 +238,6 @@ namespace pcap
 
 	private:
 		pcaprec_hdr_t header_;
-		char* data_;
+		char const* data_;
 	};
 }

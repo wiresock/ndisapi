@@ -1,191 +1,80 @@
 #pragma once
 
-// --------------------------------------------------------------------------------
-/// <summary>
-/// Represents IPv4 TCP/UDP endpoint
-/// </summary>
-// --------------------------------------------------------------------------------
-template<typename T> struct ip_endpoint
+namespace iphelper
 {
-	ip_endpoint() = default;
-	ip_endpoint(const T& ip, const unsigned short port) : ip(ip), port(port) {}
-
-	[[nodiscard]] std::string ip_to_string() const noexcept { return std::string(ip); }
-	[[nodiscard]] std::string port_to_string() const noexcept { return std::to_string(port); }
-
-	bool operator ==(const ip_endpoint& rhs) const { return (ip == rhs.ip) && (port == rhs.port); }
-	bool operator !=(const ip_endpoint& rhs) const { return (ip != rhs.ip) || (port != rhs.port); }
-
-	T				ip;
-	unsigned short	port{ 0 };
-};
-
-// --------------------------------------------------------------------------------
-/// <summary>
-/// Represents IPv4 TCP/UDP session
-/// </summary>
-// --------------------------------------------------------------------------------
-template<typename T> struct ip_session
-{
-	ip_session(
-		const T& local_ip,
-		const T& remote_ip,
-		const unsigned short local_port,
-		const unsigned short remote_port) :
-		local(local_ip, local_port),
-		remote(remote_ip, remote_port) {}
-
-	bool operator ==(const ip_session& rhs) const { return (local == rhs.local) && (remote == rhs.remote); }
-	bool operator !=(const ip_session& rhs) const { return (local != rhs.local) || (remote != rhs.remote); }
-
-	ip_endpoint<T> local;
-	ip_endpoint<T> remote;
-};
-
-namespace std
-{
-	template<typename T> struct hash<ip_endpoint<T>>
+	// --------------------------------------------------------------------------------
+	/// <summary>
+	/// Represents a networking application
+	/// </summary>
+	// --------------------------------------------------------------------------------
+	struct network_process
 	{
-		typedef ip_endpoint<T> argument_type;
-		typedef std::size_t result_type;
-		result_type operator()(argument_type const& endpoint) const noexcept
-		{
-			auto const h1(std::hash<std::size_t>{}(
-				std::hash<T>{}(endpoint.ip) ^
-				static_cast<unsigned long>(endpoint.port)
-				));
+		network_process() = default;
 
-			return h1;
-		}
+		network_process(const unsigned long id, std::wstring name, std::wstring path) :
+			id(id), name(std::move(name)), path_name(std::move(path)) {}
+
+		unsigned long id{};
+		std::wstring name;
+		std::wstring path_name;
 	};
 
-	template<typename T> struct hash<ip_session<T>>
+	// --------------------------------------------------------------------------------
+	/// <summary>
+	/// process_lookup class utilizes IP Helper API to match TCP/UDP network packet to local process
+	/// </summary>
+	// --------------------------------------------------------------------------------
+	template <typename T> class process_lookup final
 	{
-		typedef ip_session<T> argument_type;
-		typedef std::size_t result_type;
-		result_type operator()(argument_type const& endpoint) const noexcept
+		using tcp_hashtable_t = std::unordered_map<net::ip_session<T>, std::shared_ptr<network_process>>;
+		using udp_hashtable_t = std::unordered_map<net::ip_endpoint<T>, std::shared_ptr<network_process>>;
+		
+		process_lookup()
 		{
-			auto const h1(std::hash<std::size_t>{}(
-				std::hash<ip_endpoint<T>>{}(endpoint.local) ^
-				static_cast<unsigned long>(endpoint.local.port) ^
-				std::hash<ip_endpoint<T>>{}(endpoint.remote) ^
-				static_cast<unsigned long>(endpoint.remote.port)
-				));
+			default_process_ = std::make_shared<network_process>(0, L"SYSTEM", L"SYSTEM");
 
-			return h1;
+			initialize_tcp_table();
+			initialize_udp_table();
 		}
-	};
-}
 
-// --------------------------------------------------------------------------------
-/// <summary>
-/// Represents a networking application
-/// </summary>
-// --------------------------------------------------------------------------------
-struct network_process
-{
-	network_process() = default;
+	public:
 
-	network_process(const unsigned long id, std::wstring name, std::wstring path) :
-		id(id), name(std::move(name)), path_name(std::move(path)) {}
+		process_lookup(const process_lookup& other) = delete;
+		process_lookup(process_lookup&& other) noexcept = delete;
+		process_lookup& operator=(const process_lookup& other) = delete;
+		process_lookup& operator=(process_lookup&& other) noexcept = delete;
 
-	unsigned long		id{};
-	std::wstring		name;
-	std::wstring		path_name;
-};
+	private:
 
-// --------------------------------------------------------------------------------
-/// <summary>
-/// process_lookup class utilizes IP Helper API to match TCP/UDP network packet to local process
-/// </summary>
-// --------------------------------------------------------------------------------
-template <typename T> class process_lookup final
-{
-	process_lookup()
-	{
-		default_process_ = std::make_shared<network_process>(0, L"SYSTEM", L"SYSTEM");
+		tcp_hashtable_t	tcp_to_app_; // TCP sessions hash
+		udp_hashtable_t	udp_to_app_; // UDP sessions hash
 
-		initialize_tcp_table();
-		initialize_udp_table();
-	}
+		std::shared_mutex tcp_to_app_lock_;
+		std::shared_mutex udp_to_app_lock_;
 
-public:
+		std::shared_ptr<network_process> default_process_;
 
-	process_lookup(const process_lookup& other) = delete;
-	process_lookup(process_lookup&& other) noexcept = delete;
-	process_lookup& operator=(const process_lookup& other) = delete;
-	process_lookup& operator=(process_lookup&& other) noexcept = delete;
+		std::unique_ptr<char[]> table_buffer_{};
+		DWORD table_buffer_size_{ 0 };
 
-private:
-
-	std::unordered_map<ip_session<T>, std::shared_ptr<network_process>>		tcp_to_app_; // TCP sessions hash
-	std::unordered_map<ip_endpoint<T>, std::shared_ptr<network_process>>	udp_to_app_; // UDP sessions hash
-
-	std::shared_mutex														tcp_to_app_lock_;
-	std::shared_mutex														udp_to_app_lock_;
-
-	std::shared_ptr<network_process>										default_process_;
-
-public:
-	static process_lookup& get_process_helper()
-	{
-		static process_lookup instance;
-		return instance;
-	}
-
-	~process_lookup() = default;
-
-	template <bool SetToDefault>
-	std::shared_ptr<network_process> lookup_process_for_tcp(ip_session<T> const& session)
-	{
-		// Try to lookup in the current table
-		std::shared_lock<std::shared_mutex> slock(tcp_to_app_lock_);
-
-		auto it_first = tcp_to_app_.find(session);
-
-		if (it_first != tcp_to_app_.end())
+	public:
+		static process_lookup& get_process_helper()
 		{
-			return it_first->second;
+			static process_lookup instance;
+			return instance;
 		}
-		else
+
+		~process_lookup() = default;
+
+		template <bool SetToDefault>
+		std::shared_ptr<network_process> lookup_process_for_tcp(net::ip_session<T> const& session)
 		{
-			if constexpr (SetToDefault)
-			{
-				slock.unlock();
+			// Try to lookup in the current table
+			std::shared_lock<std::shared_mutex> slock(tcp_to_app_lock_);
 
-				std::unique_lock <std::shared_mutex> ulock(tcp_to_app_lock_);
-				tcp_to_app_[session] = default_process_;
-				return default_process_;
-			}
-			else
-			{
-				return nullptr;
-			}
-		}
-	}
+			auto it_first = tcp_to_app_.find(session);
 
-	template <bool SetToDefault>
-	std::shared_ptr<network_process> lookup_process_for_udp(ip_endpoint<T> const& endpoint)
-	{
-		// UDP endpoints may have 0.0.0.0:137 form
-		auto zero_ip_endpoint = endpoint;
-		zero_ip_endpoint.ip = T{};
-
-		// Try to lookup in the current table
-		std::shared_lock<std::shared_mutex> slock(udp_to_app_lock_);
-
-		auto it_first = udp_to_app_.find(endpoint);
-
-		if (it_first != udp_to_app_.end())
-		{
-			return it_first->second;
-		}
-		else
-		{
-			// Search for 0.0.0.0:port
-			it_first = udp_to_app_.find(zero_ip_endpoint);
-
-			if (it_first != udp_to_app_.end())
+			if (it_first != tcp_to_app_.end())
 			{
 				return it_first->second;
 			}
@@ -195,8 +84,8 @@ public:
 				{
 					slock.unlock();
 
-					std::unique_lock <std::shared_mutex> ulock(udp_to_app_lock_);
-					udp_to_app_[endpoint] = default_process_;
+					std::unique_lock <std::shared_mutex> lock(tcp_to_app_lock_);
+					tcp_to_app_[session] = default_process_;
 					return default_process_;
 				}
 				else
@@ -205,181 +94,300 @@ public:
 				}
 			}
 		}
-	}
 
-	bool actualize(const bool tcp, const bool udp)
-	{
-		auto ret_tcp = true, ret_udp = true;
-
-		if (tcp)
+		template <bool SetToDefault>
+		std::shared_ptr<network_process> lookup_process_for_udp(net::ip_endpoint<T> const& endpoint)
 		{
-			std::lock_guard<std::shared_mutex> lock(tcp_to_app_lock_);
-			ret_tcp = initialize_tcp_table();
-		}
+			// UDP endpoints may have 0.0.0.0:137 form
+			auto zero_ip_endpoint = endpoint;
+			zero_ip_endpoint.ip = T{};
 
-		if (udp)
-		{
-			std::lock_guard<std::shared_mutex> lock(udp_to_app_lock_);
-			ret_udp = initialize_udp_table();
-		}
+			// Try to lookup in the current table
+			std::shared_lock<std::shared_mutex> slock(udp_to_app_lock_);
 
-		return (ret_udp & ret_tcp);
-	}
+			auto it_first = udp_to_app_.find(endpoint);
 
-private:
-
-	bool initialize_tcp_table()
-	{
-		DWORD table_size = 0;
-
-		tcp_to_app_.clear();
-
-		if (ERROR_INSUFFICIENT_BUFFER != GetExtendedTcpTable(nullptr, &table_size, FALSE, T::af_type,
-		                                                     TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0))
-			return false;
-
-		const auto table_ptr = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
-
-		if constexpr (std::is_same<T, net::ip_address_v4>::value)
-		{
-			auto table = reinterpret_cast<PMIB_TCPTABLE_OWNER_MODULE>(table_ptr.get());
-
-			if (GetExtendedTcpTable(table, &table_size, FALSE, T::af_type, TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0) != NO_ERROR)
-				return false;
-
-			for (size_t i = 0; i < table->dwNumEntries; i++)
+			if (it_first != udp_to_app_.end())
 			{
-				DWORD size = 0;
-				std::shared_ptr<network_process> process_ptr(nullptr);
-
-				if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-				{
-					auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-					auto info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-
-					if (GetOwnerModuleFromTcpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
-					{
-						process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
-					}
-				}
-
-				if (process_ptr)
-					tcp_to_app_[ip_session<T>(
-						T{ table->table[i].dwLocalAddr },
-						T{ table->table[i].dwRemoteAddr },
-						ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
-						ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
+				return it_first->second;
 			}
-		}
-		else
-		{
-			auto table = reinterpret_cast<PMIB_TCP6TABLE_OWNER_MODULE>(table_ptr.get());
-
-			if (GetExtendedTcpTable(table, &table_size, FALSE, T::af_type, TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0) != NO_ERROR)
-				return false;
-
-			for (size_t i = 0; i < table->dwNumEntries; i++)
+			else
 			{
-				DWORD size = 0;
-				std::shared_ptr<network_process> process_ptr(nullptr);
+				// Search for 0.0.0.0:port
+				it_first = udp_to_app_.find(zero_ip_endpoint);
 
-				if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
+				if (it_first != udp_to_app_.end())
 				{
-					auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-					auto info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-
-					if (GetOwnerModuleFromTcp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
+					return it_first->second;
+				}
+				else
+				{
+					if constexpr (SetToDefault)
 					{
-						process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
+						slock.unlock();
+
+						std::unique_lock <std::shared_mutex> lock(udp_to_app_lock_);
+						udp_to_app_[endpoint] = default_process_;
+						return default_process_;
+					}
+					else
+					{
+						return nullptr;
 					}
 				}
-
-				if (process_ptr)
-					tcp_to_app_[ip_session<T>(
-						T{ table->table[i].ucLocalAddr },
-						T{ table->table[i].ucRemoteAddr },
-						ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
-						ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
 			}
 		}
 
-		return true;
-	}
-
-	bool initialize_udp_table()
-	{
-		DWORD table_size = 0;
-
-		udp_to_app_.clear();
-
-		if (ERROR_INSUFFICIENT_BUFFER != GetExtendedUdpTable(nullptr, &table_size, FALSE, T::af_type, UDP_TABLE_OWNER_MODULE, 0))
-			return false;
-
-		const auto table_ptr = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
-
-		if constexpr (std::is_same<T, net::ip_address_v4>::value)
+		bool actualize(const bool tcp, const bool udp)
 		{
-			auto table = reinterpret_cast<PMIB_UDPTABLE_OWNER_MODULE>(table_ptr.get());
+			auto ret_tcp = true, ret_udp = true;
 
-			if (GetExtendedUdpTable(table, &table_size, FALSE, T::af_type, UDP_TABLE_OWNER_MODULE, 0) != NO_ERROR)
-				return false;
-
-			for (size_t i = 0; i < table->dwNumEntries; i++)
+			if (tcp)
 			{
-				DWORD size = 0;
-				std::shared_ptr<network_process> process_ptr(nullptr);
-
-				if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-				{
-					auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-					auto info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-
-					if (GetOwnerModuleFromUdpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
-					{
-						process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
-					}
-				}
-
-				if (process_ptr)
-					udp_to_app_[ip_endpoint<T>(
-						T{ table->table[i].dwLocalAddr },
-						ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+				std::lock_guard<std::shared_mutex> lock(tcp_to_app_lock_);
+				ret_tcp = initialize_tcp_table();
 			}
-		}
-		else
-		{
-			auto table = reinterpret_cast<PMIB_UDP6TABLE_OWNER_MODULE>(table_ptr.get());
 
-			if (GetExtendedUdpTable(table, &table_size, FALSE, T::af_type, UDP_TABLE_OWNER_MODULE, 0) != NO_ERROR)
-				return false;
-
-			for (size_t i = 0; i < table->dwNumEntries; i++)
+			if (udp)
 			{
-				DWORD size = 0;
-				std::shared_ptr<network_process> process_ptr(nullptr);
-
-				if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-				{
-					auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-					auto info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-
-					if (GetOwnerModuleFromUdp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
-					{
-						process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
-					}
-				}
-
-				if (process_ptr)
-					udp_to_app_[ip_endpoint<T>(
-						T{ table->table[i].ucLocalAddr },
-						ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+				std::lock_guard<std::shared_mutex> lock(udp_to_app_lock_);
+				ret_udp = initialize_udp_table();
 			}
+
+			return (ret_udp && ret_tcp);
 		}
 
-		return true;
-	}
-};
+		std::string dump_tcp_table()
+		{
+			std::ostringstream oss;
+
+			std::shared_lock<std::shared_mutex> lock(tcp_to_app_lock_);
+			std::for_each(tcp_to_app_.begin(), tcp_to_app_.end(), [&oss](auto&& entry)
+			{
+					oss << std::string(entry.first.local.ip) << " : " << entry.first.local.port <<
+						" <---> " << std::string(entry.first.remote.ip) << " : " << entry.first.remote.port <<
+						" : " << entry.second->id << " : " << wstring_to_string(entry.second->name) << std::endl;
+			});
+
+			return oss.str();
+		}
+
+		std::string dump_udp_table()
+		{
+			std::ostringstream oss;
+
+			std::shared_lock<std::shared_mutex> lock(udp_to_app_lock_);
+			std::for_each(udp_to_app_.begin(), udp_to_app_.end(), [&oss](auto&& entry)
+				{
+					oss << std::string(entry.first.ip) << " : " << entry.first.port <<
+						" : " << entry.second->id << " : " << wstring_to_string(entry.second->name) << std::endl;
+				});
+
+			return oss.str();
+		}
+
+	private:
+
+		static std::string wstring_to_string(const std::wstring& s)
+		{
+			std::string result;
+			std::transform(s.begin(), s.end(), std::back_inserter(result), [](auto&& e) {return static_cast<char>(e); });
+			return result;
+		}
+
+		bool initialize_tcp_table()
+		{
+			try
+			{
+				auto table_size = table_buffer_size_;
+
+				tcp_to_app_.clear();
+
+				do
+				{
+					const uint32_t result = ::GetExtendedTcpTable(table_buffer_.get(), &table_size, FALSE, T::af_type,
+																TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0);
+
+					if (result == ERROR_INSUFFICIENT_BUFFER)
+					{
+						table_size *= 2;
+						table_buffer_ = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
+						table_buffer_size_ = table_size;
+						continue;
+					}
+
+					if (result == NO_ERROR)
+					{
+						break;
+					}
+
+					return false;
+
+				} while (true);
+
+				if constexpr (std::is_same<T, net::ip_address_v4>::value)
+				{
+					auto* table = reinterpret_cast<PMIB_TCPTABLE_OWNER_MODULE>(table_buffer_.get());
+
+					for (size_t i = 0; i < table->dwNumEntries; i++)
+					{
+						DWORD size = 0;
+						std::shared_ptr<network_process> process_ptr(nullptr);
+
+						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
+						{
+							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
+
+							auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+
+							if (GetOwnerModuleFromTcpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
+							{
+								process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
+							}
+						}
+
+						if (process_ptr)
+							tcp_to_app_[net::ip_session<T>(
+								T{ table->table[i].dwLocalAddr },
+								T{ table->table[i].dwRemoteAddr },
+								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
+								ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
+					}
+				}
+				else
+				{
+					auto* table = reinterpret_cast<PMIB_TCP6TABLE_OWNER_MODULE>(table_buffer_.get());
+
+					for (size_t i = 0; i < table->dwNumEntries; i++)
+					{
+						DWORD size = 0;
+						std::shared_ptr<network_process> process_ptr(nullptr);
+
+						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcp6Entry(
+							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
+						{
+							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
+
+							auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+
+							if (GetOwnerModuleFromTcp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
+							{
+								process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
+							}
+						}
+
+						if (process_ptr)
+							tcp_to_app_[net::ip_session<T>(
+								T{ table->table[i].ucLocalAddr },
+								T{ table->table[i].ucRemoteAddr },
+								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
+								ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
+					}
+				}
+			}
+			catch(...)
+			{
+				return false;
+			}
+
+			return true;
+		}
+
+		bool initialize_udp_table()
+		{
+			auto table_size = table_buffer_size_;
+
+			udp_to_app_.clear();
+
+			try {
+				do
+				{
+					const uint32_t result = ::GetExtendedUdpTable(table_buffer_.get(), &table_size, FALSE, T::af_type,
+																UDP_TABLE_OWNER_MODULE, 0);
+
+					if (result == ERROR_INSUFFICIENT_BUFFER)
+					{
+						table_size *= 2;
+						table_buffer_ = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
+						table_buffer_size_ = table_size;
+						continue;
+					}
+
+					if (result == NO_ERROR)
+					{
+						break;
+					}
+
+					return false;
+
+				} while (true);
+
+				if constexpr (std::is_same<T, net::ip_address_v4>::value)
+				{
+					auto* table = reinterpret_cast<PMIB_UDPTABLE_OWNER_MODULE>(table_buffer_.get());
+
+					for (size_t i = 0; i < table->dwNumEntries; i++)
+					{
+						DWORD size = 0;
+						std::shared_ptr<network_process> process_ptr(nullptr);
+
+						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdpEntry(
+							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
+						{
+							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
+
+							auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+
+							if (GetOwnerModuleFromUdpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
+							{
+								process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
+							}
+						}
+
+						if (process_ptr)
+							udp_to_app_[net::ip_endpoint<T>(
+								T{ table->table[i].dwLocalAddr },
+								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+					}
+				}
+				else
+				{
+					auto* table = reinterpret_cast<PMIB_UDP6TABLE_OWNER_MODULE>(table_buffer_.get());
+
+					for (size_t i = 0; i < table->dwNumEntries; i++)
+					{
+						DWORD size = 0;
+						std::shared_ptr<network_process> process_ptr(nullptr);
+
+						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdp6Entry(
+							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
+						{
+							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
+
+							auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+
+							if (GetOwnerModuleFromUdp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR)
+							{
+								process_ptr = std::make_shared<network_process>(table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
+							}
+						}
+
+						if (process_ptr)
+							udp_to_app_[net::ip_endpoint<T>(
+								T{ table->table[i].ucLocalAddr },
+								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+					}
+				}
+			}
+			catch(...)
+			{
+				return false;
+			}
+
+			return true;
+		}
+	};
+}

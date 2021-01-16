@@ -34,6 +34,9 @@
 #include <cctype>
 #include <mutex>
 #include <shared_mutex>
+#include <variant>
+#include <bitset>
+#include <optional>
 #include <algorithm>
 
 #include "../../../include/common.h"
@@ -44,7 +47,11 @@
 #include "../common/net/mac_address.h"
 #include "../common/net/ip_address.h"
 #include "../common/net/ipv6_helper.h"
+#include "../common/net/ip_subnet.h"
+#include "../common/iphelper/network_adapter_info.h"
 #include "../common/ndisapi/network_adapter.h"
+#include "../common/ndisapi/simple_packet_filter.h"
+#include "../common/proxy/proxy_common.h"
 #include "../common/ndisapi/udp_proxy.h"
 
 #endif //PCH_H

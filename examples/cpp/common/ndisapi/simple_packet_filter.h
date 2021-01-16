@@ -7,11 +7,6 @@
 
 #pragma once
 
-//#ifndef  _ENABLE_EXTENDED_ALIGNED_STORAGE
-//// ReSharper disable once CppInconsistentNaming
-//#define  _ENABLE_EXTENDED_ALIGNED_STORAGE
-//#endif //  _ENABLE_EXTENDED_ALIGNED_STORAGE
-
 namespace ndisapi
 {
 	inline const size_t maximum_packet_block = 510;
@@ -300,7 +295,9 @@ namespace ndisapi
 					ad_list.m_nAdapterHandle[i],
 					ad_list.m_czCurrentAddress[i],
 					std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
-					std::string(friendly_name.data())));
+					std::string(friendly_name.data()),
+					ad_list.m_nAdapterMediumList[i],
+					ad_list.m_usMTU[i]));
 		}
 	}
 

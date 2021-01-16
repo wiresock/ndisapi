@@ -30,9 +30,13 @@ namespace proxy
 		bool					is_local;
 	};
 
+	template <typename T> class tcp_proxy_server;
+
 	template<typename T>
 	class tcp_proxy_socket
 	{
+		friend tcp_proxy_server;
+		
 		constexpr static size_t send_receive_buffer_size = 256 * 256;
 
 	public:
@@ -212,7 +216,7 @@ namespace proxy
 
 		virtual void process_send_negotiate_complete(const uint32_t io_size, per_io_context_t* io_context) {}
 
-		void process_receive_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
+		virtual void process_receive_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
 			std::lock_guard<std::mutex> lock(lock_);
 
@@ -381,7 +385,7 @@ namespace proxy
 			}
 		}
 
-		void process_send_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
+		virtual void process_send_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
 			std::lock_guard<std::mutex> lock(lock_);
 
@@ -635,6 +639,18 @@ namespace proxy
 		}
 
 	protected:
+
+		// ********************************************************************************
+		/// <summary>
+		/// Queries a pointer to the negotiate_context
+		/// </summary>
+		/// <returns> raw pointer to the negotiate_context</returns>
+		// ********************************************************************************
+		negotiate_context_t* get_negotiate_ctx() const
+		{
+			return negotiate_ctx_.get();
+		}
+		
 		virtual bool local_negotiate()
 		{
 			return true;

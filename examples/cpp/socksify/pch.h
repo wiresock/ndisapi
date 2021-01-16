@@ -35,6 +35,9 @@
 #include <shared_mutex>
 #include <set>
 #include <algorithm>
+#include <variant>
+#include <bitset>
+#include <optional>
 
 #define FAST_IO_MEASURE_STATS
 
@@ -46,6 +49,9 @@
 #include "../common/winsys/io_completion_port.h"
 #include "../common/net/mac_address.h"
 #include "../common/net/ip_address.h"
+#include "../common/net/ip_subnet.h"
+#include "../common/net/ip_endpoint.h"
+#include "../common/iphelper/network_adapter_info.h"
 #include "../common/ndisapi/network_adapter.h"
 #include "../common/ndisapi/fastio_packet_filter.h"
 #include "../common/ndisapi/local_redirect.h"

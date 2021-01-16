@@ -1566,6 +1566,36 @@ BOOL CNdisApi::InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
 
 // ********************************************************************************
 /// <summary>
+/// Adds Secondary Fast I/O shared memory section
+/// Supported for Windows Vista and later. WOW64 is not supported.
+/// </summary>
+/// <param name="pFastIo">Pointer to user allocated memory to be used as a shared section</param>
+/// <param name="dwSize">Size in bytes of allocated memory</param>
+/// <returns>Status of the operation</returns>
+// ********************************************************************************
+BOOL CNdisApi::AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
+{
+	// Only supported for Vista and later. Can't be used in WOW64 mode.
+	if (!IsWindowsVistaOrLater() || m_bIsWow64Process || (dwSize < sizeof(FAST_IO_SECTION)))
+		return FALSE;
+
+	INITIALIZE_FAST_IO_PARAMS params = { pFastIo, dwSize };
+
+	BOOL bIOResult = DeviceIoControl(
+		IOCTL_NDISRD_ADD_SECOND_FAST_IO_SECTION,
+		&params,
+		sizeof(INITIALIZE_FAST_IO_PARAMS),
+		NULL,
+		0,
+		NULL,   // Bytes Returned
+		NULL
+	);
+
+	return bIOResult;
+}
+
+// ********************************************************************************
+/// <summary>
 /// Reads a bunch of packets from the driver packet queues
 /// Adapter handle is stored in INTERMEDIATE_BUFFER.m_hAdapter
 /// </summary>
@@ -2662,6 +2692,16 @@ BOOL __stdcall IsDriverLoaded ( HANDLE hOpen )
 }
 
 BOOL __stdcall InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->InitializeFastIo(pFastIo, dwSize);
+}
+
+BOOL __stdcall AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize)
 {
 	if (!hOpen)
 		return FALSE;

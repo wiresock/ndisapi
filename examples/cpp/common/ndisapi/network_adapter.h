@@ -8,6 +8,67 @@
 
 namespace ndisapi
 {
+	constexpr unsigned ipv4_address_offset = 584;
+	constexpr unsigned ipv6_address_offset = 588;
+
+	enum class ndis_wan_type {
+		ndis_wan_none,
+		ndis_wan_ip,
+		ndis_wan_ipv6,
+		ndis_wan_bh
+	};
+
+	struct ndis_wan_link_info
+	{
+		ndis_wan_link_info(const ADDRESS_FAMILY family, PRAS_LINK_INFO link_info_ptr) :
+			link_speed(link_info_ptr->LinkSpeed),
+			mtu(static_cast<uint16_t>(link_info_ptr->MaximumTotalSize)),
+			remote_hw_address(link_info_ptr->RemoteAddress),
+			local_hw_address(link_info_ptr->LocalAddress)
+		{
+			sockaddr_in address_v4{};
+			sockaddr_in6 address_v6{};
+
+			address_v4.sin_family = AF_INET;
+			address_v6.sin6_family = AF_INET6;
+
+			switch (family)
+			{
+			case AF_INET:
+				address_v4.sin_addr.S_un.S_un_b.s_b1 = link_info_ptr->ProtocolBuffer[ipv4_address_offset];
+				address_v4.sin_addr.S_un.S_un_b.s_b2 = link_info_ptr->ProtocolBuffer[ipv4_address_offset + 1];
+				address_v4.sin_addr.S_un.S_un_b.s_b3 = link_info_ptr->ProtocolBuffer[ipv4_address_offset + 2];
+				address_v4.sin_addr.S_un.S_un_b.s_b4 = link_info_ptr->ProtocolBuffer[ipv4_address_offset + 3];
+				ip_address = iphelper::ip_address_info(address_v4);
+				break;
+			case AF_INET6:
+				address_v6.sin6_addr.u.Byte[8] = link_info_ptr->ProtocolBuffer[ipv6_address_offset];
+				address_v6.sin6_addr.u.Byte[9] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 1];
+				address_v6.sin6_addr.u.Byte[10] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 2];
+				address_v6.sin6_addr.u.Byte[11] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 3];
+				address_v6.sin6_addr.u.Byte[12] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 4];
+				address_v6.sin6_addr.u.Byte[13] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 5];
+				address_v6.sin6_addr.u.Byte[14] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 6];
+				address_v6.sin6_addr.u.Byte[15] = link_info_ptr->ProtocolBuffer[ipv6_address_offset + 7];
+				ip_address = iphelper::ip_address_info(address_v6);
+				break;
+			default:
+				break;
+			}
+		}
+
+		/// <summary>Specifies the speed of the link, in units of 100 bps.</summary>
+		uint32_t link_speed;
+		/// <summary>Specifies the maximum number of bytes per packet that the protocol can send over the network.</summary>
+		uint16_t mtu;
+		/// <summary>Represents the address of the remote node on the link in Ethernet-style format. NDISWAN supplies this value.</summary>
+		net::mac_address remote_hw_address;
+		/// <summary>Represents the protocol-determined context for indications on this link in Ethernet-style format.</summary>
+		net::mac_address local_hw_address;
+		/// <summary>Assigned IP address</summary>
+		iphelper::ip_address_info ip_address{};
+	};
+	
 	// --------------------------------------------------------------------------------
 	/// <summary>
 	/// Class representing network interface
@@ -15,21 +76,44 @@ namespace ndisapi
 	// --------------------------------------------------------------------------------
 	class network_adapter {
 	public:
+		network_adapter() = default;
+		
 		network_adapter(
 			CNdisApi* api,
 			HANDLE adapter_handle,
 			unsigned char* mac_addr,
 			std::string internal_name,
-			std::string friendly_name
+			std::string friendly_name,
+			const uint32_t medium,
+			const uint16_t mtu
 		) : api_(api),
 			hardware_address_{ mac_addr },
 			packet_event_(CreateEvent(nullptr, TRUE, FALSE, nullptr)),
 			internal_name_(std::move(internal_name)),
 			friendly_name_(std::move(friendly_name)),
-			current_mode_({ adapter_handle, 0}) {}
+			medium_{medium},
+			mtu_{mtu},
+			current_mode_({ adapter_handle, 0})
+		{
+			//
+			// Initialize NDISWAN type
+			//
+			if (CNdisApi::IsNdiswanIp(internal_name_.c_str()))
+			{
+				ndis_wan_type_ = ndis_wan_type::ndis_wan_ip;
+			}
+			else if (CNdisApi::IsNdiswanIpv6(internal_name_.c_str()))
+			{
+				ndis_wan_type_ = ndis_wan_type::ndis_wan_ipv6;
+			}
+			else if (CNdisApi::IsNdiswanBh(internal_name_.c_str()))
+			{
+				ndis_wan_type_ = ndis_wan_type::ndis_wan_bh;
+			}
+		}
 
 		~network_adapter() = default;
-
+		
 		network_adapter(const network_adapter& other) = delete;
 
 		network_adapter(network_adapter&& other) noexcept
@@ -38,6 +122,8 @@ namespace ndisapi
 			  packet_event_{std::move(other.packet_event_)},
 			  internal_name_{std::move(other.internal_name_)},
 			  friendly_name_{std::move(other.friendly_name_)},
+			  medium_{other.medium_},
+			  mtu_{other.mtu_},
 			  current_mode_{other.current_mode_}
 		{
 		}
@@ -53,17 +139,19 @@ namespace ndisapi
 			packet_event_ = std::move(other.packet_event_);
 			internal_name_ = std::move(other.internal_name_);
 			friendly_name_ = std::move(other.friendly_name_);
+			medium_ = other.medium_;
+			mtu_ = other.mtu_;
 			current_mode_ = other.current_mode_;
 			return *this;
 		}
-
+		
 		// ********************************************************************************
 		/// <summary>
 		/// Returns network interface handle value
 		/// </summary>
 		/// <returns>network adapter handle</returns>
 		// ********************************************************************************
-		HANDLE get_adapter() const { return current_mode_.hAdapterHandle; }
+		[[nodiscard]] HANDLE get_adapter() const { return current_mode_.hAdapterHandle; }
 		// ********************************************************************************
 		/// <summary>
 		/// Stops filtering the network interface and tries tor restore its original state
@@ -79,59 +167,85 @@ namespace ndisapi
 		void set_mode(unsigned flags);
 		// ********************************************************************************
 		/// <summary>
+		/// Queries the list of RAS connections for NDISWAN interface
+		/// </summary>
+		/// <returns>list of RAS connections</returns>
+		// ********************************************************************************
+		[[nodiscard]] std::optional<std::vector<ndis_wan_link_info>> get_ras_links() const;
+		// ********************************************************************************
+		/// <summary>
 		/// Waits for network interface event to be signaled
 		/// </summary>
 		/// <param name="milliseconds"></param>
 		/// <returns>wait status</returns>
 		// ********************************************************************************
-		unsigned wait_event(const unsigned milliseconds) const { return packet_event_.wait(milliseconds); }
+		[[maybe_unused]] unsigned wait_event(const unsigned milliseconds) const { return packet_event_.wait(milliseconds); }
 		// ********************************************************************************
 		/// <summary>
 		/// Signals packet event
 		/// </summary>
 		/// <returns>status of the operation</returns>
 		// ********************************************************************************
-		bool signal_event() const { return packet_event_.signal(); }
+		[[maybe_unused]] bool signal_event() const { return packet_event_.signal(); }
 		// ********************************************************************************
 		/// <summary>
 		/// resets packet event
 		/// </summary>
 		/// <returns>status of the operation</returns>
 		// ********************************************************************************
-		bool reset_event() const { return packet_event_.reset_event(); }
+		[[maybe_unused]] bool reset_event() const { return packet_event_.reset_event(); }
 		// ********************************************************************************
 		/// <summary>
 		/// submits packet event into the driver
 		/// </summary>
 		/// <returns>status of the operation</returns>
 		// ********************************************************************************
-		bool set_packet_event() const { return api_->SetPacketEvent(current_mode_.hAdapterHandle, static_cast<HANDLE>(packet_event_)) ? true : false; }
+		[[maybe_unused]] bool set_packet_event() const { return api_->SetPacketEvent(current_mode_.hAdapterHandle, static_cast<HANDLE>(packet_event_)) ? true : false; }
 		// ********************************************************************************
 		/// <summary>
 		/// Network adapter internal name getter
 		/// </summary>
 		/// <returns>internal name string reference</returns>
 		// ********************************************************************************
-		const std::string& get_internal_name() const { return internal_name_; }
+		[[nodiscard]] const std::string& get_internal_name() const { return internal_name_; }
 		// ********************************************************************************
 		/// <summary>
 		/// Network adapter user friendly name getter
 		/// </summary>
 		/// <returns>user friendly name string reference</returns>
 		// ********************************************************************************
-		const std::string& get_friendly_name() const { return friendly_name_; }
+		[[nodiscard]] const std::string& get_friendly_name() const { return friendly_name_; }
 		// ********************************************************************************
 		/// <summary>
 		/// Queries network adapter hardware address
 		/// </summary>
 		/// <returns>network adapter MAC address</returns>
 		// ********************************************************************************
-		net::mac_address	get_hw_address() const { return hardware_address_; }
+		[[nodiscard]] net::mac_address get_hw_address() const { return hardware_address_; }
+		// --------------------------------------------------------------------------------
+		/// <summary>
+		/// Returns network adapter NDIS medium
+		/// </summary>
+		// --------------------------------------------------------------------------------
+		[[nodiscard]] uint32_t get_medium() const	{ return medium_; }
+		// --------------------------------------------------------------------------------
+		/// <summary>
+		/// Returns network adapter maximum transmission unit
+		/// </summary>
+		// --------------------------------------------------------------------------------
+		[[nodiscard]] uint16_t get_mtu() const { return mtu_; }
+		// ********************************************************************************
+		/// <summary>
+		/// Returns network adapter NDISWAN type
+		/// </summary>
+		/// <returns></returns>
+		// ********************************************************************************
+		[[nodiscard]] ndis_wan_type get_ndis_wan_type() const { return ndis_wan_type_; }
 
 	private:
 
 		/// <summary>Driver interface pointer</summary>
-		CNdisApi* 	api_;
+		CNdisApi* 	api_{nullptr};
 		/// <summary>Network interface current MAC address</summary>
 		net::mac_address hardware_address_;
 		/// <summary>Packet in the adapter queue event</summary>
@@ -139,9 +253,15 @@ namespace ndisapi
 		/// <summary>Internal network interface name</summary>
 		std::string internal_name_;	
 		/// <summary>User-friendly name</summary>
-		std::string friendly_name_;	
+		std::string friendly_name_;
+		/// <summary>Network medium</summary>
+		uint32_t medium_{};
+		/// <summary>Maximum Transmission Unit</summary>
+		uint16_t mtu_{};
 		/// <summary>Used to manipulate network interface mode</summary>
-		ADAPTER_MODE current_mode_;		
+		ADAPTER_MODE current_mode_{};
+		/// <summary>NDISWAN adapter type</summary>
+		ndis_wan_type ndis_wan_type_{ ndis_wan_type::ndis_wan_none };
 	};
 
 	inline void network_adapter::release()
@@ -156,11 +276,50 @@ namespace ndisapi
 		api_->FlushAdapterPacketQueue(current_mode_.hAdapterHandle);
 	}
 
-	inline void network_adapter::set_mode(unsigned flags)
+	inline void network_adapter::set_mode(const unsigned flags)
 	{
 		current_mode_.dwFlags = flags;
 
 		api_->SetAdapterMode(&current_mode_);
+	}
+
+	inline std::optional<std::vector<ndis_wan_link_info>> network_adapter::get_ras_links() const
+	{
+		if (get_ndis_wan_type() == ndis_wan_type::ndis_wan_none)
+			return {};
+		
+		const auto ras_links_storage = std::make_unique<std::aligned_storage_t<sizeof(RAS_LINKS)>>();
+		auto ras_links = reinterpret_cast<PRAS_LINKS>(ras_links_storage.get());
+
+		std::vector<ndis_wan_link_info> result;
+
+		if (api_->GetRasLinks(get_adapter(), ras_links))
+		{
+			for (size_t i = 0; i < ras_links->nNumberOfLinks; ++i)
+			{
+				switch (get_ndis_wan_type())
+				{
+				case ndis_wan_type::ndis_wan_ip:
+				{
+					result.emplace_back(ndis_wan_link_info(AF_INET, &ras_links->RasLinks[i]));
+					break;
+				}
+				case ndis_wan_type::ndis_wan_ipv6:
+				{
+					result.emplace_back(ndis_wan_link_info(AF_INET6, &ras_links->RasLinks[i]));
+					break;
+				}
+				case ndis_wan_type::ndis_wan_none: break;
+				case ndis_wan_type::ndis_wan_bh: break;
+				default: break;;
+				}
+			}
+		}
+
+		if(!result.empty())
+			return result;
+
+		return{};
 	}
 }
 

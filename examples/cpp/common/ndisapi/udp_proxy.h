@@ -16,33 +16,33 @@ namespace ndisapi
 			else ++it;
 		}
 	}
-	
-	// --------------------------------------------------------------------------------
-	/// <summary>
-	/// Used to pass data required to negotiate connection to the remote proxy
-	/// </summary>
-	// --------------------------------------------------------------------------------
-	template<typename T>
-	struct negotiate_context
+
+	enum class log_level
 	{
-		negotiate_context(const T& remote_address, const uint16_t remote_port)
-			: remote_address(remote_address),
-			remote_port(remote_port)
-		{
-		}
-
-		virtual ~negotiate_context() = default;
-
-		T remote_address;
-		uint16_t remote_port;
+		none = 0,
+		info = 1,
+		debug = 2,
+		all = 3,
 	};
+
+	enum class proxy_status
+	{
+		starting,
+		started,
+		stopping,
+		stopped
+	};
+	
+	template <typename T> class udp_proxy_server;
 
 	template<typename T>
 	class udp_proxy_socket
 	{
+		friend udp_proxy_server;
+		
 	public:
 		using address_type_t = T;
-		using negotiate_context_t = negotiate_context<T>;
+		using negotiate_context_t = proxy::negotiate_context<T>;
 
 		udp_proxy_socket(
 			CNdisApi* ndis_api,
@@ -60,6 +60,8 @@ namespace ndisapi
 			original_peer_port_(original_peer_port),
 			negotiate_ctx_(std::move(negotiate_ctx))
 		{
+			lock_ = std::make_unique<std::mutex>();
+			
 			using namespace std::chrono_literals;
 			timeout_ = 300s;
 		}
@@ -197,9 +199,9 @@ namespace ndisapi
 		/// Called for incoming packets
 		/// </summary>
 		/// <param name="packet">network packet to process</param>
-		/// <returns>true is packet was queued, false if packet was processed in place</returns>
+		/// <returns>action to be taken for the packet</returns>
 		// ********************************************************************************
-		bool process_in_packet(INTERMEDIATE_BUFFER& packet)
+		packet_action process_in_packet(INTERMEDIATE_BUFFER& packet)
 		{
 			if (!relay_started_.load(std::memory_order_acquire))
 			{
@@ -207,7 +209,7 @@ namespace ndisapi
 			}
 			
 			const auto ether_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
-			auto result = false;
+			auto result = packet_action::pass;
 
 			if constexpr (std::is_same_v<address_type_t, net::ip_address_v4>)
 			{
@@ -260,24 +262,24 @@ namespace ndisapi
 		/// Called for outgoing packets
 		/// </summary>
 		/// <param name="packet">network packet to process</param>
-		/// <returns>true is packet was queued, false if packet was processed in place</returns>
+		/// <returns>action to be taken for the packet</returns>
 		// ********************************************************************************
-		bool process_out_packet(INTERMEDIATE_BUFFER& packet)
+		packet_action process_out_packet(INTERMEDIATE_BUFFER& packet)
 		{
 			if(!relay_started_.load(std::memory_order_acquire))
 			{
-				std::lock_guard<std::mutex> lock(lock_);
+				std::lock_guard<std::mutex> lock(*lock_);
 				if (maximum_queue_size_ > to_remote_queue_.size())
 					to_remote_queue_.emplace_back(std::make_unique<INTERMEDIATE_BUFFER>(packet));
 
 				// call packet processing but don't re-inject because packet is already queued
 				process_out_packet_internal(packet);
 				
-				return true;
+				return packet_action::drop;
 			}
 			
 			const auto ether_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
-			auto result = false;
+			auto result = packet_action::pass;
 
 			if constexpr (std::is_same_v<address_type_t, net::ip_address_v4>)
 			{
@@ -347,12 +349,12 @@ namespace ndisapi
 			
 			if(relay_started_.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
 			{
-				std::lock_guard<std::mutex> lock(lock_);
+				std::lock_guard<std::mutex> lock(*lock_);
 				
 				std::for_each(to_remote_queue_.begin(), to_remote_queue_.end(), [this](auto&& packet)
 				{
 					ETH_REQUEST request = { adapter_handle_, packet.get() };
-					if(!process_out_packet(*packet.get()))
+					if(packet_action::pass == process_out_packet(*packet.get()))
 						ndis_api_->SendPacketToAdapter(&request);
 				});
 
@@ -485,11 +487,11 @@ namespace ndisapi
 		/// Called for proxy specific incoming packet processing
 		/// </summary>
 		/// <param name="packet">packet to process</param>
-		/// <returns>true if packet is pending, false if it was processed in place</returns>
+		/// <returns>action to be taken for the packet</returns>
 		// ********************************************************************************
-		virtual bool process_in_packet_internal(INTERMEDIATE_BUFFER& packet)
+		virtual packet_action process_in_packet_internal(INTERMEDIATE_BUFFER& packet)
 		{
-			return false;
+			return packet_action::pass;
 		}
 
 		// ********************************************************************************
@@ -497,13 +499,24 @@ namespace ndisapi
 		/// Called for proxy specific outgoing packets processing
 		/// </summary>
 		/// <param name="packet">packet to process</param>
-		/// <returns>true if packet is pending, false if it was processed in place</returns>
+		/// <returns>action to be taken for the packet</returns>
 		// ********************************************************************************
-		virtual bool process_out_packet_internal(INTERMEDIATE_BUFFER& packet)
+		virtual packet_action process_out_packet_internal(INTERMEDIATE_BUFFER& packet)
 		{
-			return false;
+			return packet_action::pass;
 		}
-	
+
+		// ********************************************************************************
+		/// <summary>
+		/// Queries a pointer to the negotiate_context
+		/// </summary>
+		/// <returns> raw pointer to the negotiate_context</returns>
+		// ********************************************************************************
+		negotiate_context_t* get_negotiate_ctx() const
+		{
+			return negotiate_ctx_.get();
+		}
+
 		CNdisApi* ndis_api_;
 		uint16_t local_port_;
 		address_type_t remote_peer_address_;
@@ -524,116 +537,180 @@ namespace ndisapi
 		std::chrono::steady_clock::duration timeout_;
 
 		/// <summary>provides synchronization for the I/O operations</summary>
-		std::mutex lock_;
+		std::unique_ptr<std::mutex> lock_;
 
 		std::vector<std::unique_ptr<INTERMEDIATE_BUFFER>> to_remote_queue_;
 	};
 
 	template <typename T>
-	class udp_proxy_server: public CNdisApi
+	class udp_proxy_server: public iphelper::network_config_info<udp_proxy_server<T>>
 	{
-		static constexpr size_t maximum_packet_block = 510;
-
+		friend iphelper::network_config_info<udp_proxy_server<T>>;
+		
 	public:
 		using negotiate_context_t = typename T::negotiate_context_t;
 		using address_type_t = typename T::address_type_t;
 
 		using query_remote_peer_t = std::tuple <address_type_t, uint16_t, std::unique_ptr<negotiate_context_t>>(address_type_t, uint16_t, address_type_t, uint16_t);
 
-		udp_proxy_server(const std::function<query_remote_peer_t> query_remote_peer_fn)
-			: query_remote_peer_(query_remote_peer_fn)
+		udp_proxy_server(const std::function<query_remote_peer_t> query_remote_peer_fn, address_type_t const& server_address,  void (*log_printer)(const char*), const log_level level)
+			: query_remote_peer_{ query_remote_peer_fn }, command_server_address_{server_address}, log_printer_{ log_printer }, log_level_{ level }
+			
 		{
-			initialize_network_interfaces();
+			lock_ = std::make_unique<std::shared_mutex>();
+			set_packet_filter();
 		}
 
 		~udp_proxy_server()
 		{
-			if (server_stopped_ == false)
-				stop();
+			stop();
 		}
 
-		bool start(const size_t adapter)
+
+		udp_proxy_server(const udp_proxy_server& other) = delete;
+
+		udp_proxy_server(udp_proxy_server&& other) noexcept
+			: iphelper::network_config_info<udp_proxy_server<T>>(std::move(other)),
+			  lock_(std::move(other.lock_)),
+			  keep_alive_thread_(std::move(other.keep_alive_thread_)),
+			  proxy_sockets_(std::move(other.proxy_sockets_)),
+			  query_remote_peer_(std::move(other.query_remote_peer_)),
+			  packet_filter_(std::move(other.packet_filter_)),
+			  network_interfaces_(std::move(other.network_interfaces_)),
+			  default_adapter_(std::move(other.default_adapter_)),
+			  mtu_(other.mtu_),
+			  if_index_(other.if_index_),
+			  if_handle_(other.if_handle_),
+			  command_server_address_(std::move(other.command_server_address_)),
+			  log_printer_(std::move(other.log_printer_)),
+			  log_level_(other.log_level_),
+			  status_(other.status_.load()),
+			  remote_address_(std::move(other.remote_address_))
 		{
-			if (server_stopped_ == false)
+		}
+
+		udp_proxy_server& operator=(const udp_proxy_server& other) = delete;
+
+		udp_proxy_server& operator=(udp_proxy_server&& other) noexcept
+		{
+			if (this == &other)
+				return *this;
+			iphelper::network_config_info<udp_proxy_server<T>>::operator =(std::move(other));
+			lock_ = std::move(other.lock_);
+			keep_alive_thread_ = std::move(other.keep_alive_thread_);
+			proxy_sockets_ = std::move(other.proxy_sockets_);
+			query_remote_peer_ = std::move(other.query_remote_peer_);
+			packet_filter_ = std::move(other.packet_filter_);
+			network_interfaces_ = std::move(other.network_interfaces_);
+			default_adapter_ = std::move(other.default_adapter_);
+			mtu_ = other.mtu_;
+			if_index_ = other.if_index_;
+			if_handle_ = other.if_handle_;
+			command_server_address_ = std::move(other.command_server_address_);
+			log_printer_ = std::move(other.log_printer_);
+			log_level_ = other.log_level_;
+			status_ = other.status_.load();
+			remote_address_ = std::move(other.remote_address_);
+			return *this;
+		}
+
+		std::optional<proxy_status> start()
+		{
+			if (!this->iphelper::network_config_info<udp_proxy_server<T>>::set_notify_ip_interface_change())
 			{
-				// already running
-				return true;
+				print_log(log_level::info, "udp_proxy_server::start: set_notify_ip_interface_change has failed!");
 			}
-
-			server_stopped_ = false;
-
-			adapter_ = adapter;
-
-			keep_alive_thread_ = std::thread(&udp_proxy_server::keep_alive_thread, this);
-			proxy_thread_ = std::thread(&udp_proxy_server::server_thread, this);
-
-			return true;
+			
+			return start_internal();
 		}
 
 		void stop()
 		{
-			if (server_stopped_ == true)
+			if (!this->iphelper::network_config_info<udp_proxy_server<T>>::cancel_notify_ip_interface_change())
 			{
-				// already stopped
-				return;
+				print_log(log_level::info, "udp_proxy_server::start: cancel_notify_ip_interface_change has failed!");
 			}
+			
+			using namespace std::chrono_literals;
 
-			server_stopped_ = true;
-
-			[[maybe_unused]] auto result = network_interfaces_[adapter_]->signal_event();
-
-			if (proxy_thread_.joinable())
-				proxy_thread_.join();
-
-			if (keep_alive_thread_.joinable())
-				keep_alive_thread_.join();
-
-			proxy_sockets_.clear();
+			while (status_ != proxy_status::stopped)
+			{
+				stop_internal();
+				std::this_thread::sleep_for(1ms);
+			}
 		}
 
-		std::vector<std::string> get_interface_list()
+		std::vector<negotiate_context_t> query_current_sessions_ctx()
 		{
-			std::vector<std::string> result;
-			result.reserve(network_interfaces_.size());
+			std::shared_lock<std::shared_mutex> lock(*lock_);
+			std::vector<negotiate_context_t> result;
+			result.reserve(proxy_sockets_.size());
 
-			for (auto&& e : network_interfaces_)
+			std::transform(proxy_sockets_.cbegin(), proxy_sockets_.cend(), std::back_inserter(result), [](auto&& e)
 			{
-				result.push_back(e->get_friendly_name());
-			}
+				return *reinterpret_cast<negotiate_context_t*>(e.second->get_negotiate_ctx());
+			});
 
 			return result;
 		}
 
 	private:
 
-		void initialize_network_interfaces()
+		std::optional<proxy_status> start_internal()
 		{
-			TCP_AdapterList			ad_list;
-			std::vector<char>		friendly_name(MAX_PATH * 4);
+			auto expected = proxy_status::stopped;
+			if (!status_.compare_exchange_strong(expected, proxy_status::starting))
+				return {};
 
-			if (!GetTcpipBoundAdaptersInfo(&ad_list))
-				return;
-
-			for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
+			if (!update_network_configuration())
 			{
-				ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
-
-				network_interfaces_.push_back(
-					std::make_unique<network_adapter>(
-						this,
-						ad_list.m_nAdapterHandle[i],
-						ad_list.m_czCurrentAddress[i],
-						std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
-						std::string(friendly_name.data())));
+				status_ = proxy_status::stopped;
+				return status_;
 			}
+
+			// start_internal keep-alive thread here
+			keep_alive_thread_ = std::thread(&udp_proxy_server::keep_alive_thread, this);
+
+			if (packet_filter_->start_filter(if_index_))
+			{
+				status_ = proxy_status::started;
+			}
+			else
+			{
+				status_ = proxy_status::stopped;
+				
+				if (keep_alive_thread_.joinable())
+					keep_alive_thread_.join();
+			}
+
+			return status_;
+		}
+
+		std::optional<proxy_status> stop_internal()
+		{
+			auto expected = proxy_status::started;
+			if (!status_.compare_exchange_strong(expected, proxy_status::stopping))
+				return {};
+
+			if (packet_filter_)
+				packet_filter_->stop_filter();
+
+			if (keep_alive_thread_.joinable())
+				keep_alive_thread_.join();
+
+			proxy_sockets_.clear();
+
+			status_ = proxy_status::stopped;
+
+			return status_;
 		}
 
 		void keep_alive_thread()
 		{
-			while (server_stopped_ == false)
+			while (status_ == proxy_status::started)
 			{
 				{
-					std::lock_guard<std::shared_mutex> lock(lock_);
+					std::lock_guard<std::shared_mutex> lock(*lock_);
 					erase_if(proxy_sockets_, proxy_sockets_.begin(), proxy_sockets_.end(), [now = std::chrono::steady_clock::now() ](auto&& socket)
 					{
 						return !socket.second->keep_alive(now);
@@ -645,241 +722,326 @@ namespace ndisapi
 			}
 		}
 
-		void server_thread()
+		void set_packet_filter()
 		{
-			const auto packet_buffer =
-				std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+			packet_filter_ = std::make_unique<ndisapi::simple_packet_filter>(
+				[this](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
+				{
+					auto packet_action = packet_action::pass;
 
-			//
-			// Initialize Requests
-			//
+					const auto ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
 
-			using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
-				sizeof(NDISRD_ETH_Packet) * (maximum_packet_block - 1), 0x1000>;
+					if constexpr (std::is_same_v<address_type_t, net::ip_address_v4>)
+					{
+						if (ntohs(ether_header->h_proto) == ETH_P_IP)
+						{
+							const auto ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1);
 
-			// 1. Allocate memory using unique_ptr for auto-delete on thread exit
-			const auto read_request_ptr = std::make_unique<request_storage_type_t>();
-			const auto write_adapter_request_ptr = std::make_unique<request_storage_type_t>();
-			const auto write_mstcp_request_ptr = std::make_unique<request_storage_type_t>();
+							if (ip_header->ip_p == IPPROTO_UDP)
+							{
+								const auto udp_header = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) * ip_header->ip_hl);
 
-			// 2. Get raw pointers for convenience
-			auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr.get());
-			auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr.get());
-			auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr.get());
+								std::shared_lock<std::shared_mutex> lock(*lock_);
+								auto it = proxy_sockets_.find(ntohs(udp_header->th_dport));
 
-			read_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
-			write_adapter_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
-			write_mstcp_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
+								if (it != proxy_sockets_.end())
+								{
+									packet_action = it->second->process_in_packet(buffer);
+								}
+							}
+						}
+					}
+					else if constexpr (std::is_same_v<address_type_t, net::ip_address_v6>)
+					{
+						if (ntohs(ether_header->h_proto) == ETH_P_IPV6)
+						{
+							const auto ip_header = reinterpret_cast<ipv6hdr_ptr>(ether_header + 1);
+							auto [header, protocol] = net::ipv6_helper::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
 
-			read_request->dwPacketsNumber = maximum_packet_block;
+							if (protocol == IPPROTO_UDP)
+							{
+								const auto udp_header = reinterpret_cast<udphdr_ptr>(header);
 
-			//
-			// Initialize packet buffers
-			//
-			ZeroMemory(packet_buffer.get(), sizeof(INTERMEDIATE_BUFFER) * maximum_packet_block);
+								std::shared_lock<std::shared_mutex> lock(*lock_);
+								auto it = proxy_sockets_.find(ntohs(udp_header->th_dport));
 
-			for (unsigned i = 0; i < maximum_packet_block; ++i)
+								if (it != proxy_sockets_.end())
+								{
+									packet_action = it->second->process_in_packet(buffer);
+								}
+							}
+						}
+					}
+					return packet_action;
+				},
+				[this](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
+				{
+					auto packet_action = packet_action::pass;
+
+					const auto ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
+
+					if constexpr (std::is_same_v<address_type_t, net::ip_address_v4>)
+					{
+						if (ntohs(ether_header->h_proto) == ETH_P_IP)
+						{
+							const auto ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1);
+
+							if (ip_header->ip_p == IPPROTO_UDP)
+							{
+								const auto udp_header = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) * ip_header->ip_hl);
+
+								std::shared_lock<std::shared_mutex> lock(*lock_);
+								auto it = proxy_sockets_.find(ntohs(udp_header->th_sport));
+
+								if ((it != proxy_sockets_.end()) &&
+									(it->second->get_original_peer_address() == address_type_t(ip_header->ip_dst)) &&
+									(it->second->get_original_peer_port() == ntohs(udp_header->th_dport)))
+								{
+									packet_action = it->second->process_out_packet(buffer);
+								}
+								else
+								{
+									lock.unlock();
+									if (query_remote_peer_ != nullptr)
+									{
+										auto [address, port, context] = query_remote_peer_(ip_header->ip_src, ntohs(udp_header->th_sport), ip_header->ip_dst, ntohs(udp_header->th_dport));
+
+										if (port != 0)
+										{
+
+											std::lock_guard<std::shared_mutex> guard_lock(*lock_);
+											proxy_sockets_[ntohs(udp_header->th_sport)] =
+												std::make_unique<T>(
+													packet_filter_.get(),
+													ntohs(udp_header->th_sport),
+													address,
+													port,
+													ip_header->ip_dst,
+													ntohs(udp_header->th_dport),
+													std::move(context));
+
+											proxy_sockets_[ntohs(udp_header->th_sport)]->start(if_handle_, buffer);
+											packet_action = proxy_sockets_[ntohs(udp_header->th_sport)]->process_out_packet(buffer);
+										}
+									}
+								}
+							}
+						}
+					}
+					else if constexpr (std::is_same_v<address_type_t, net::ip_address_v6>)
+					{
+						if (ntohs(ether_header->h_proto) == ETH_P_IPV6)
+						{
+							const auto ip_header = reinterpret_cast<ipv6hdr_ptr>(ether_header + 1);
+							auto [header, protocol] = net::ipv6_helper::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
+
+							if (protocol == IPPROTO_UDP)
+							{
+								const auto udp_header = reinterpret_cast<udphdr_ptr>(header);
+
+								std::shared_lock<std::shared_mutex> lock(*lock_);
+								auto it = proxy_sockets_.find(ntohs(udp_header->th_sport));
+
+								if ((it != proxy_sockets_.end()) &&
+									(it->second->get_original_peer_address() == address_type_t(ip_header->ip6_dst)) &&
+									(it->second->get_original_peer_port() == ntohs(udp_header->th_dport)))
+								{
+									packet_action = it->second->process_out_packet(buffer);
+								}
+								else
+								{
+									lock.unlock();
+									if (query_remote_peer_ != nullptr)
+									{
+										auto [address, port, context] = query_remote_peer_(ip_header->ip6_src, ntohs(udp_header->th_sport), ip_header->ip6_dst, ntohs(udp_header->th_dport));
+
+										if (port != 0)
+										{
+											std::lock_guard<std::shared_mutex> guard_lock(*lock_);
+											proxy_sockets_[ntohs(udp_header->th_sport)] =
+												std::make_unique<T>(
+													packet_filter_.get(),
+													ntohs(udp_header->th_sport),
+													address,
+													port,
+													ip_header->ip6_dst,
+													ntohs(udp_header->th_dport),
+													std::move(context));
+
+											proxy_sockets_[ntohs(udp_header->th_sport)]->start(if_handle_, buffer);
+											packet_action = proxy_sockets_[ntohs(udp_header->th_sport)]->process_out_packet(buffer);
+										}
+									}
+								}
+							}
+						}
+					}
+					return packet_action;
+				});
+		}
+
+		bool update_network_configuration()
+		{
+			if (!packet_filter_->reconfigure())
 			{
-				read_request->EthPacket[i].Buffer = &packet_buffer[i];
+				print_log(log_level::info, "udp_proxy_server::update_network_configuration: Failed to update WinpkFilter network interfaces");
 			}
 
-			//
-			// Set events for helper driver
-			//
-			if (!network_interfaces_[adapter_]->set_packet_event())
+			auto& ndis_adapters = packet_filter_->get_interface_list();
+			default_adapter_ = iphelper::network_config_info<udp_proxy_server>::get_best_interface(command_server_address_);
+
+			if (!default_adapter_)
 			{
+				//log_printer_("wg_tunnel: Failed to figure out the route to the server \n");
+				return false;
+			}
+
+			{
+				std::ostringstream oss;
+				oss << "udp_proxy_server::update_network_configuration: detected default interface " << default_adapter_->get_adapter_name() << std::endl;
+				print_log(log_level::info, oss.str());
+			}
+
+			if (default_adapter_->get_if_type() != IF_TYPE_PPP)
+			{
+				// For non NDISWAN adapters we simply match the name
+				auto it = std::find_if(ndis_adapters.cbegin(), ndis_adapters.cend(), [this](auto& ndis_adapter)
+					{
+						return (std::string::npos != ndis_adapter->get_internal_name().find(default_adapter_->get_adapter_name()));
+					});
+
+				if (it != ndis_adapters.cend())
+				{
+					if_index_ = it - ndis_adapters.begin();
+					if_handle_ = (*it)->get_adapter();
+					mtu_ = default_adapter_->get_mtu();
+					return true;
+				}
+			}
+			else
+			{
+				// For NDISWAN adapters we have to match by IP address information
+				auto it = std::find_if(ndis_adapters.cbegin(), ndis_adapters.cend(), [this](auto& ndis_adapter)
+					{
+						if (auto wan_info = ndis_adapter->get_ras_links(); wan_info)
+						{
+							auto ras_it = std::find_if(wan_info->cbegin(), wan_info->cend(), [this](auto& ras_link)
+								{
+									return default_adapter_->has_address(ras_link.ip_address);
+								});
+
+							if (ras_it != wan_info->cend())
+							{
+								// Store the remote MAC address (as may have multiply RAS connections)
+								remote_address_ = ras_it->remote_hw_address;
+								return true;
+							}
+						}
+
+						return false;
+					});
+
+				if (it != ndis_adapters.cend())
+				{
+					if_index_ = it - ndis_adapters.begin();
+					if_handle_ = (*it)->get_adapter();
+					mtu_ = default_adapter_->get_mtu();
+					return true;
+				}
+			}
+
+			{
+				std::ostringstream oss;
+				oss << "udp_proxy_server::update_network_configuration: Failed to find a matching WinpkFilter interface for the " << default_adapter_->get_adapter_name() << std::endl;
+				print_log(log_level::info, oss.str());
+			}
+			
+			return false;
+		}
+		
+		void ip_interface_changed_callback(PMIB_IPINTERFACE_ROW row, MIB_NOTIFICATION_TYPE notification_type)
+		{
+			auto adapter = iphelper::network_config_info<udp_proxy_server>::get_best_interface(command_server_address_);
+
+			if (!adapter && (status_ != proxy_status::stopping) && (status_ != proxy_status::stopped))
+			{
+				if (stop_internal())
+				{
+					default_adapter_ = adapter;
+					print_log(log_level::info, "udp_proxy_server::ip_interface_changed_callback: Internet is unreachable. Proxy is stopped.");
+				}
 				return;
 			}
 
-			network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
-
-			while (!server_stopped_)
+			if (*adapter == *default_adapter_ && adapter->is_same_address_info<false>(*default_adapter_))
 			{
-				[[maybe_unused]] auto wait_result = network_interfaces_[adapter_]->wait_event(INFINITE);
+				// nothing has changed, no reaction needed
+				return;
+			}
 
-				[[maybe_unused]] auto reset_result = network_interfaces_[adapter_]->reset_event();
+			if (auto result = stop_internal(); result && (result.value() == proxy_status::stopped))
+			{
+				print_log(log_level::info, "udp_proxy_server::ip_interface_changed_callback: UDP proxy was stopped successfully.");
+			}
 
-				while (!server_stopped_ && ReadPackets(read_request))
-				{
-					for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
-					{
-						auto packet_action = false;
-
-						const auto ether_header = reinterpret_cast<ether_header_ptr>(packet_buffer[i].m_IBuffer);
-
-						if constexpr (std::is_same_v<address_type_t, net::ip_address_v4>)
-						{
-							if (ntohs(ether_header->h_proto) == ETH_P_IP)
-							{
-								const auto ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1);
-
-								if (ip_header->ip_p == IPPROTO_UDP)
-								{
-									const auto udp_header = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) * ip_header->ip_hl);
-
-									if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
-									{
-										std::shared_lock<std::shared_mutex> lock(lock_);
-										auto it = proxy_sockets_.find(ntohs(udp_header->th_sport));
-
-										if((it != proxy_sockets_.end()) &&
-											(it->second->get_original_peer_address() == address_type_t(ip_header->ip_dst)) &&
-											(it->second->get_original_peer_port() == ntohs(udp_header->th_dport)))
-										{
-											packet_action = it->second->process_out_packet(packet_buffer[i]);
-										}
-										else
-										{
-											lock.unlock();
-											if(query_remote_peer_ != nullptr)
-											{
-												auto [address, port, context] = query_remote_peer_(ip_header->ip_src, ntohs(udp_header->th_sport), ip_header->ip_dst, ntohs(udp_header->th_dport));
-
-												if(port != 0)
-												{
-													
-													std::lock_guard<std::shared_mutex> guard_lock(lock_);
-													proxy_sockets_[ntohs(udp_header->th_sport)] = 
-														std::make_unique<T>(
-															this, 
-															ntohs(udp_header->th_sport),
-															address,
-															port,
-															ip_header->ip_dst,
-															ntohs(udp_header->th_dport),
-															std::move(context));
-													
-													proxy_sockets_[ntohs(udp_header->th_sport)]->start(network_interfaces_[adapter_]->get_adapter(), packet_buffer[i]);
-													packet_action = proxy_sockets_[ntohs(udp_header->th_sport)]->process_out_packet(packet_buffer[i]);
-												}
-											}
-										}
-									}
-									else
-									{
-										std::shared_lock<std::shared_mutex> lock(lock_);
-										auto it = proxy_sockets_.find(ntohs(udp_header->th_dport));
-
-										if (it != proxy_sockets_.end())
-										{
-											packet_action = it->second->process_in_packet(packet_buffer[i]);
-										}
-									}
-								}
-							}
-						}
-						else if constexpr(std::is_same_v<address_type_t, net::ip_address_v6>)
-						{
-							if (ntohs(ether_header->h_proto) == ETH_P_IPV6)
-							{
-								const auto ip_header = reinterpret_cast<ipv6hdr_ptr>(ether_header + 1);
-								auto [header, protocol] = net::ipv6_helper::find_transport_header(ip_header, packet_buffer[i].m_Length - ETHER_HEADER_LENGTH);
-
-								if (protocol == IPPROTO_UDP)
-								{
-									const auto udp_header = reinterpret_cast<udphdr_ptr>(header);
-
-									if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
-									{
-										std::shared_lock<std::shared_mutex> lock(lock_);
-										auto it = proxy_sockets_.find(ntohs(udp_header->th_sport));
-
-										if ((it != proxy_sockets_.end()) &&
-											(it->second->get_original_peer_address() == address_type_t(ip_header->ip6_dst)) &&
-											(it->second->get_original_peer_port() == ntohs(udp_header->th_dport)))
-										{
-											packet_action = it->second->process_out_packet(packet_buffer[i]);
-										}
-										else
-										{
-											lock.unlock();
-											if (query_remote_peer_ != nullptr)
-											{
-												auto [address, port, context] = query_remote_peer_(ip_header->ip6_src, ntohs(udp_header->th_sport), ip_header->ip6_dst, ntohs(udp_header->th_dport));
-
-												if (port != 0)
-												{
-													std::lock_guard<std::shared_mutex> guard_lock(lock_);
-													proxy_sockets_[ntohs(udp_header->th_sport)] =
-														std::make_unique<T>(
-															this,
-															ntohs(udp_header->th_sport),
-															address,
-															port,
-															ip_header->ip6_dst,
-															ntohs(udp_header->th_dport),
-															std::move(context));
-
-													proxy_sockets_[ntohs(udp_header->th_sport)]->start(network_interfaces_[adapter_]->get_adapter(), packet_buffer[i]);
-													packet_action = proxy_sockets_[ntohs(udp_header->th_sport)]->process_out_packet(packet_buffer[i]);
-												}
-											}
-										}
-									}
-									else
-									{
-										std::shared_lock<std::shared_mutex> lock(lock_);
-										auto it = proxy_sockets_.find(ntohs(udp_header->th_dport));
-
-										if (it != proxy_sockets_.end())
-										{
-											packet_action = it->second->process_in_packet(packet_buffer[i]);
-										}
-									}
-								}
-							}
-						}
-
-						// Place packet back into the flow if was allowed to
-						if (packet_action == false)
-						{
-							if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
-							{
-								write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer[i];
-								++write_adapter_request->dwPacketsNumber;
-							}
-							else
-							{
-								write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer[i];
-								++write_mstcp_request->dwPacketsNumber;
-							}
-						}
-					}
-
-					if (write_adapter_request->dwPacketsNumber)
-					{
-						SendPacketsToAdapter(write_adapter_request);
-						write_adapter_request->dwPacketsNumber = 0;
-					}
-
-					if (write_mstcp_request->dwPacketsNumber)
-					{
-						SendPacketsToMstcp(write_mstcp_request);
-						write_mstcp_request->dwPacketsNumber = 0;
-					}
-
-					read_request->dwPacketsSuccess = 0;
-				}
+			if (auto result = start_internal(); result && (result.value() == proxy_status::started))
+			{
+				print_log(log_level::info, "udp_proxy_server::ip_interface_changed_callback: UDP proxy was started successfully.");
 			}
 		}
 
-		std::shared_mutex lock_;
+		void print_log(const log_level level, std::string const& message) const
+		{
+			if((level < log_level_) && log_printer_)
+			{
+				log_printer_(message.c_str());
+			}
+		}
+		
+		/// <summary>guards proxy_sockets_ access</summary>
+		std::unique_ptr<std::shared_mutex> lock_;
 
-		std::thread proxy_thread_;
+		/// <summary>keep alive thread object</summary>
 		std::thread	keep_alive_thread_;
 
+		/// <summary>maps local UDP port to proxy socket object</summary>
 		std::unordered_map<uint16_t, std::unique_ptr<T>> proxy_sockets_;
-
-		/// <summary>set to true on proxy termination</summary>
-		std::atomic_bool server_stopped_{ true };			
 		
+		/// <summary>routine provided by the client to supply the information for proxy socket creation</summary>
 		std::function<query_remote_peer_t> query_remote_peer_;
+
+		/// <summary>packet filter object</summary>
+		std::unique_ptr<ndisapi::simple_packet_filter> packet_filter_;
 
 		/// <summary>list of available network interfaces</summary>
 		std::vector<std::unique_ptr<network_adapter>> network_interfaces_;
 
-		/// <summary>filtered adapter index</summary>
-		size_t adapter_{ 0 };
+		/// <summary>filtered adapter</summary>
+		std::optional<iphelper::network_adapter_info> default_adapter_{};
+
+		/// <summary>default network interface MTU</summary>
+		uint16_t mtu_{ MAX_ETHER_FRAME };
+		
+		/// <summary>default network interface adapter index</summary>
+		size_t if_index_{};
+		
+		/// <summary>default network interface adapter handle</summary>
+		HANDLE if_handle_{ nullptr };
+		
+		/// <summary>this address is used to figure out the default interface</summary>
+		address_type_t command_server_address_;
+		
+		/// <summary>log printer</summary>
+		std::function<void(const char*)> log_printer_{};
+		
+		/// <summary>logging level for the log printer</summary>
+		log_level log_level_{ log_level::all };
+		
+		/// <summary>Current status of the proxy</summary>
+		std::atomic<proxy_status> status_{ proxy_status::stopped };
+		
+		/// <summary>remote hardware address for the RAS connection</summary>
+		std::optional<net::mac_address> remote_address_{};
 	};
 }
 

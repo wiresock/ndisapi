@@ -150,7 +150,7 @@ namespace proxy
 			}
 
 			{
-				std::lock_guard<std::mutex> lock(lock_);
+				std::shared_lock<std::shared_mutex> lock(lock_);
 				::WSASetEvent(std::get<0>(sock_array_events_[0]));
 			}
 
@@ -178,6 +178,20 @@ namespace proxy
 			{
 				proxy_sockets_.clear();
 			}
+		}
+
+		std::vector<negotiate_context_t> query_current_sessions_ctx()
+		{
+			std::shared_lock<std::shared_mutex> lock(lock_);
+			std::vector<negotiate_context_t> result;
+			result.reserve(proxy_sockets_.size());
+
+			std::transform(proxy_sockets_.cbegin(), proxy_sockets_.cend(), std::back_inserter(result), [](auto&& e)
+				{
+					return *reinterpret_cast<negotiate_context_t*>(e->get_negotiate_ctx());
+				});
+
+			return result;
 		}
 
 	private:
@@ -341,7 +355,7 @@ namespace proxy
 			// The client_service structure specifies the address family,
 			// IP address, and port of the server to be connected to.
 			{
-				std::lock_guard<std::mutex> lock(lock_);
+				std::lock_guard<std::shared_mutex> lock(lock_);
 
 				sock_array_events_.push_back(std::make_tuple(::WSACreateEvent(), accepted, remote_socket, std::move(negotiate_ctx)));
 			
@@ -425,7 +439,7 @@ namespace proxy
 					// initialize wait events array
 					wait_events.clear();
 
-					std::lock_guard<std::mutex> lock(lock_);
+					std::shared_lock<std::shared_mutex> lock(lock_);
 
 					std::transform(sock_array_events_.cbegin(), sock_array_events_.cend(), std::back_inserter(wait_events), [](auto&& e)
 					{
@@ -444,7 +458,7 @@ namespace proxy
 
 				if (event_index != 0)
 				{
-					std::lock_guard<std::mutex> lock(lock_);
+					std::lock_guard<std::shared_mutex> lock(lock_);
 
 					/*std::cout << "connect_to_remote_host_thread: " 
 					<< "event: " << wait_events[event_index] << " "
@@ -470,7 +484,7 @@ namespace proxy
 			}
 
 			// cleanup on exit
-			std::lock_guard<std::mutex> lock(lock_);
+			std::shared_lock<std::shared_mutex> lock(lock_);
 
 			for (auto&& a: sock_array_events_)
 			{
@@ -500,7 +514,7 @@ namespace proxy
 			while (end_server_ == false)
 			{
 				{
-					std::lock_guard<std::mutex> lock(lock_);
+					std::lock_guard<std::shared_mutex> lock(lock_);
 
 					proxy_sockets_.erase(std::remove_if(proxy_sockets_.begin(), proxy_sockets_.end(), [](auto&& a)
 						{
@@ -513,7 +527,7 @@ namespace proxy
 			}
 		}
 
-		std::mutex lock_;
+		std::shared_mutex lock_;
 	
 		std::thread proxy_server_;
 		std::thread	check_clients_thread_;

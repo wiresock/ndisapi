@@ -321,19 +321,19 @@ int main()
 		nullptr,
 		[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
 		{
-			const auto ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
+			auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
 
 			if (ntohs(ethernet_header->h_proto) == ETH_P_IP)
 			{
-				const auto ip_header = reinterpret_cast<iphdr_ptr>(ethernet_header + 1);
+				auto* const ip_header = reinterpret_cast<iphdr_ptr>(ethernet_header + 1);
 
 				if (ip_header->ip_p == IPPROTO_TCP)
 				{
-					const auto tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
+					auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
 
 					if(ntohs(tcp_header->th_dport) == 443)
 					{
-						const auto payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
+						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
 						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 * tcp_header->th_off);
 
 						if ((payload[0] == 0x16) && (payload[5] == 0x1))
@@ -346,7 +346,7 @@ int main()
 					}
 					else if (ntohs(tcp_header->th_dport) == 80)
 					{
-						const auto payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
+						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
 						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 * tcp_header->th_off);
 
 						if (payload_length > 26)

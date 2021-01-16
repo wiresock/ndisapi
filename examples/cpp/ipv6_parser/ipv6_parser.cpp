@@ -13,17 +13,14 @@ public:
 	/// </summary>
 	/// <param name="ip_header">pointer to IP header</param>
 	/// <param name="packet_size">size of IP packet in octets</param>
-	/// <param name="ip_proto">returns IPPROTO_ value</param>
-	/// <returns>pointer to IP packet payload (TCP, UDP, ICMPv6 and etc..)</returns>
+	/// <returns>pointer to IP packet payload (TCP, UDP, ICMPv6 and etc..) and protocol</returns>
 	// ********************************************************************************
 	static std::pair<void*, unsigned char> find_transport_header(
-		const ipv6hdr_ptr ip_header,		
+		ipv6hdr* ip_header,		
 		const unsigned packet_size
 	)
 	{
 		unsigned char next_proto = 0;
-		ipv6ext_ptr next_header = nullptr;
-		void* the_header = nullptr;
 
 		//
 		// Parse IPv6 headers
@@ -37,7 +34,7 @@ public:
 
 		// Find the first header
 		next_proto = ip_header->ip6_next;
-		next_header = reinterpret_cast<ipv6ext_ptr>(ip_header + 1);
+		auto* next_header = reinterpret_cast<ipv6ext_ptr>(ip_header + 1);
 
 		// Loop until we find the last IP header
 		while (TRUE)
@@ -53,7 +50,7 @@ public:
 				// Fragmentation
 			case IPPROTO_FRAGMENT:
 			{
-				const auto frag = reinterpret_cast<ipv6ext_frag_ptr>(next_header);
+				auto* const frag = reinterpret_cast<ipv6ext_frag_ptr>(next_header);
 
 				// If this isn't the FIRST fragment, there won't be a TCP/UDP header anyway
 				if ((frag->ip6_offlg & 0xFC) != 0)
@@ -96,113 +93,119 @@ public:
 
 int main()
 {
-	auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
-		[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
-		{
-			const auto ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
-
-			if (ntohs(ethernet_header->h_proto) == ETH_P_IPV6)
+	try {
+		auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
+			[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
 			{
-				const auto ip_header = reinterpret_cast<ipv6hdr_ptr>(ethernet_header + 1);
+				auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
 
-				const auto transport_header = ipv6_parser::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
-
-				if (transport_header.first && transport_header.second == IPPROTO_TCP)
+				if (ntohs(ethernet_header->h_proto) == ETH_P_IPV6)
 				{
-					const auto tcp_header = reinterpret_cast<tcphdr_ptr>(transport_header.first);
+					auto* const ip_header = reinterpret_cast<ipv6hdr_ptr>(ethernet_header + 1);
 
-					auto process = process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
-						ip_session<net::ip_address_v6>(ip_header->ip6_dst, ip_header->ip6_src, ntohs(tcp_header->th_dport), ntohs(tcp_header->th_sport)));
+					const auto [header, protocol] = ipv6_parser::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
 
-					if (process == nullptr)
+					if (header && protocol == IPPROTO_TCP)
 					{
-						process_lookup<net::ip_address_v6>::get_process_helper().actualize(true, false);
-						process = process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
-							ip_session<net::ip_address_v6>(ip_header->ip6_dst, ip_header->ip6_src, ntohs(tcp_header->th_dport), ntohs(tcp_header->th_sport)));
+						auto* const tcp_header = static_cast<tcphdr_ptr>(header);
+
+						auto process = iphelper::process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
+							net::ip_session<net::ip_address_v6>(ip_header->ip6_dst, ip_header->ip6_src, ntohs(tcp_header->th_dport), ntohs(tcp_header->th_sport)));
+
+						if (process == nullptr)
+						{
+							iphelper::process_lookup<net::ip_address_v6>::get_process_helper().actualize(true, false);
+							process = iphelper::process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
+								net::ip_session<net::ip_address_v6>(ip_header->ip6_dst, ip_header->ip6_src, ntohs(tcp_header->th_dport), ntohs(tcp_header->th_sport)));
+						}
+
+						std::cout << net::ip_address_v6(ip_header->ip6_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
+							net::ip_address_v6(ip_header->ip6_dst) << ":" << ntohs(tcp_header->th_dport);
+
+						if (process != nullptr)
+							std::wcout << " Id: " << process->id << " Name: " << process->name << " PathName: " << process->path_name << "\n";
+						else
+							std::wcout << "\n";
 					}
-
-					std::cout << net::ip_address_v6(ip_header->ip6_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
-						net::ip_address_v6(ip_header->ip6_dst) << ":" << ntohs(tcp_header->th_dport);
-
-					if (process != nullptr)
-						std::wcout << " Id: " << process->id << " Name: " << process->name << " PathName: " << process->path_name << "\n";
-					else
-						std::wcout << "\n";
 				}
-			}
 
-			return ndisapi::packet_action::pass;
-		},
-		[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
-		{
-			const auto ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
-
-			if (ntohs(ethernet_header->h_proto) == ETH_P_IPV6)
+				return ndisapi::packet_action::pass;
+			},
+			[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
 			{
-				const auto ip_header = reinterpret_cast<ipv6hdr_ptr>(ethernet_header + 1);
+				auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
 
-				const auto transport_header = ipv6_parser::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
-
-				if (transport_header.first && transport_header.second == IPPROTO_TCP)
+				if (ntohs(ethernet_header->h_proto) == ETH_P_IPV6)
 				{
-					const auto tcp_header = reinterpret_cast<tcphdr_ptr>(transport_header.first);
+					auto* const ip_header = reinterpret_cast<ipv6hdr_ptr>(ethernet_header + 1);
 
-					auto process = process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
-						ip_session<net::ip_address_v6>(ip_header->ip6_src, ip_header->ip6_dst, ntohs(tcp_header->th_sport), ntohs(tcp_header->th_dport)));
+					const auto [header, protocol] = ipv6_parser::find_transport_header(ip_header, buffer.m_Length - ETHER_HEADER_LENGTH);
 
-					if(process == nullptr)
+					if (header && protocol == IPPROTO_TCP)
 					{
-						process_lookup<net::ip_address_v6>::get_process_helper().actualize(true, false);
-						process = process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
-							ip_session<net::ip_address_v6>(ip_header->ip6_src, ip_header->ip6_dst, ntohs(tcp_header->th_sport),ntohs(tcp_header->th_dport)));
+						auto* const tcp_header = static_cast<tcphdr_ptr>(header);
+
+						auto process = iphelper::process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
+							net::ip_session<net::ip_address_v6>(ip_header->ip6_src, ip_header->ip6_dst, ntohs(tcp_header->th_sport), ntohs(tcp_header->th_dport)));
+
+						if (process == nullptr)
+						{
+							iphelper::process_lookup<net::ip_address_v6>::get_process_helper().actualize(true, false);
+							process = iphelper::process_lookup<net::ip_address_v6>::get_process_helper().lookup_process_for_tcp<false>(
+								net::ip_session<net::ip_address_v6>(ip_header->ip6_src, ip_header->ip6_dst, ntohs(tcp_header->th_sport), ntohs(tcp_header->th_dport)));
+						}
+
+						std::cout << net::ip_address_v6(ip_header->ip6_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
+							net::ip_address_v6(ip_header->ip6_dst) << ":" << ntohs(tcp_header->th_dport);
+
+						if (process != nullptr)
+							std::wcout << " Id: " << process->id << " Name: " << process->name << " PathName: " << process->path_name << "\n";
+						else
+							std::wcout << "\n";
 					}
-
-					std::cout << net::ip_address_v6(ip_header->ip6_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
-						net::ip_address_v6(ip_header->ip6_dst) << ":" << ntohs(tcp_header->th_dport);
-
-					if (process != nullptr)
-						std::wcout << " Id: " << process->id << " Name: " << process->name << " PathName: " << process->path_name << "\n";
-					else
-						std::wcout << "\n";
 				}
-			}
 
-			return ndisapi::packet_action::pass;
-		}, true);
+				return ndisapi::packet_action::pass;
+			}, true);
 
-	if (ndis_api->IsDriverLoaded())
-	{
-		std::cout << "WinpkFilter is loaded" << std::endl << std::endl;
+		if (ndis_api->IsDriverLoaded())
+		{
+			std::cout << "WinpkFilter is loaded" << std::endl << std::endl;
+		}
+		else
+		{
+			std::cout << "WinpkFilter is not loaded" << std::endl << std::endl;
+			return 1;
+		}
+
+		std::cout << "Available network interfaces:" << std::endl << std::endl;
+		size_t index = 0;
+		for (auto& e : ndis_api->get_interface_names_list())
+		{
+			std::cout << ++index << ")\t" << e << std::endl;
+		}
+
+		std::cout << std::endl << "Select interface to filter:";
+		std::cin >> index;
+
+		if (index > ndis_api->get_interface_names_list().size())
+		{
+			std::cout << "Wrong parameter was selected. Out of range." << std::endl;
+			return 0;
+		}
+
+		ndis_api->start_filter(index - 1);
+
+		std::cout << "Press any key to stop filtering" << std::endl;
+
+		std::ignore = _getch();
+
+		std::cout << "Exiting..." << std::endl;
 	}
-	else
+	catch(const std::exception& ex)
 	{
-		std::cout << "WinpkFilter is not loaded" << std::endl << std::endl;
-		return 1;
+		std::cout << "Exception occurred: " << ex.what() << std::endl;
 	}
-
-	std::cout << "Available network interfaces:" << std::endl << std::endl;
-	size_t index = 0;
-	for (auto& e : ndis_api->get_interface_names_list())
-	{
-		std::cout << ++index << ")\t" << e << std::endl;
-	}
-
-	std::cout << std::endl << "Select interface to filter:";
-	std::cin >> index;
-
-	if (index > ndis_api->get_interface_names_list().size())
-	{
-		std::cout << "Wrong parameter was selected. Out of range." << std::endl;
-		return 0;
-	}
-
-	ndis_api->start_filter(index - 1);
-
-	std::cout << "Press any key to stop filtering" << std::endl;
-
-	std::ignore = _getch();
-
-	std::cout << "Exiting..." << std::endl;
 
 	return 0;
 }

@@ -11,7 +11,7 @@ namespace ndisapi
 {
 	inline constexpr size_t fast_io_size = 0x300000;
 	inline constexpr uint32_t fast_io_packets_num = (fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(INTERMEDIATE_BUFFER);
-	inline constexpr size_t maximum_packet_block = 2048;
+	inline constexpr size_t maximum_packet_block = 2048 * 3;
 
 	enum class packet_action
 	{
@@ -38,7 +38,7 @@ namespace ndisapi
 			stopping
 		};
 		
-		explicit fastio_packet_filter(const bool sleep_on_poll = false) noexcept :
+		explicit fastio_packet_filter(const bool sleep_on_poll = false) :
 		sleep_on_poll_(sleep_on_poll) 
 		{
 			initialize_network_interfaces();
@@ -149,14 +149,14 @@ namespace ndisapi
 		bool sleep_on_poll_{ false };
 		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
 		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
-		/// <summary>driver request for reading packets</summary>
-		std::unique_ptr<request_storage_type_t> read_request_ptr_;
 		/// <summary>driver request for writing packets to adapter</summary>
 		std::unique_ptr<request_storage_type_t> write_adapter_request_ptr_;
 		/// <summary>driver request for writing packets up to protocol stack</summary>
 		std::unique_ptr<request_storage_type_t> write_mstcp_request_ptr_;
 		/// <summary>shared fast i/o memory</summary>
 		std::unique_ptr<fast_io_storage_type_t> fast_io_ptr_;
+		/// <summary>secondary shared fast i/o memory</summary>
+		std::unique_ptr<fast_io_storage_type_t> fast_io_ptr_2_;
 	};
 
 	inline bool fastio_packet_filter::init_filter()
@@ -165,24 +165,14 @@ namespace ndisapi
 		{
 			packet_buffer_ = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
-			read_request_ptr_ = std::make_unique<request_storage_type_t>();
 			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
 			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
 			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t>();
+			fast_io_ptr_2_ = std::make_unique<fast_io_storage_type_t>();
 		}
 		catch (const std::bad_alloc&)
 		{
 			return false;
-		}
-
-		const auto read_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(read_request_ptr_.get());
-		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
-		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
-
-		// Initialize read request
-		for (size_t i = 0; i < maximum_packet_block; ++i)
-		{
-			read_request[i] = &packet_buffer_[i];
 		}
 
 		//
@@ -191,27 +181,40 @@ namespace ndisapi
 		if (!network_interfaces_[adapter_]->set_packet_event())
 		{
 			packet_buffer_.reset();
-			read_request_ptr_.reset();
 			write_adapter_request_ptr_.reset();
 			write_mstcp_request_ptr_.reset();
 			fast_io_ptr_.reset();
+			fast_io_ptr_2_.reset();
 			
 			return false;
 		}
 		
-		const auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
+		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
 
 		if (!InitializeFastIo(fast_io_section, fast_io_size))
 		{
 			packet_buffer_.reset();
-			read_request_ptr_.reset();
 			write_adapter_request_ptr_.reset();
 			write_mstcp_request_ptr_.reset();
 			fast_io_ptr_.reset();
-
+			fast_io_ptr_2_.reset();
+			
 			return false;
 		}
 
+		fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_2_.get());
+
+		if (!AddSecondaryFastIo(fast_io_section, fast_io_size))
+		{
+			packet_buffer_.reset();
+			write_adapter_request_ptr_.reset();
+			write_mstcp_request_ptr_.reset();
+			fast_io_ptr_.reset();
+			fast_io_ptr_2_.reset();
+
+			return false;
+		}
+		
 		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
 
 		return true;
@@ -226,10 +229,10 @@ namespace ndisapi
 			working_thread_.join();
 
 		packet_buffer_.reset();
-		read_request_ptr_.reset();
 		write_adapter_request_ptr_.reset();
 		write_mstcp_request_ptr_.reset();
 		fast_io_ptr_.reset();
+		fast_io_ptr_2_.reset();
 	}
 
 	inline bool fastio_packet_filter::reconfigure()
@@ -311,7 +314,9 @@ namespace ndisapi
 					ad_list.m_nAdapterHandle[i],
 					ad_list.m_czCurrentAddress[i],
 					std::string(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i])),
-					std::string(friendly_name.data())));
+					std::string(friendly_name.data()),
+					ad_list.m_nAdapterMediumList[i],
+					ad_list.m_usMTU[i]));
 		}
 	}
 
@@ -322,14 +327,15 @@ namespace ndisapi
 		filter_state_ = filter_state::running;
 		
 		DWORD sent_success = 0;
-		DWORD fast_io_packets_success = 0;
-		DWORD queue_io_packets_success = 0;
+		DWORD fast_io_packets_success[] = { 0, 0 };
 
-		const auto read_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(read_request_ptr_.get());
 		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
 		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
 
-		const auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
+		const PFAST_IO_SECTION fast_io_section[] = {
+			reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get()),
+			reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_2_.get())
+		};
 
 #ifdef FAST_IO_MEASURE_STATS
 		uint64_t fast_io_packets_total = 0;
@@ -343,70 +349,88 @@ namespace ndisapi
 			//
 			// Fast I/O processing section
 			//
-			if (InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0))
+			if (const auto first = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0); first ||
+				InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0))
 			{
-				InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 1);
-
-				auto write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-
-				fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-
-				//
-				// Copy packets and reset section
-				//
-
-				memmove(&packet_buffer_[0], &fast_io_section->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success - 1));
-
-				// For the last packet(s) wait the write completion if in progress
-				write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-
-				while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
+				if (first)
 				{
-					//std::this_thread::yield();
-					write_union = InterlockedCompareExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					InterlockedExchange(&fast_io_section[0]->fast_io_header.read_in_progress_flag, 1);
+
+					auto write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+
+					fast_io_packets_success[0] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+
+					//
+					// Copy packets and reset section
+					//
+
+					memmove(&packet_buffer_[0], &fast_io_section[0]->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success[0] - 1));
+
+					// For the last packet(s) wait the write completion if in progress
+					write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+
+					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
+					{
+						//std::this_thread::yield();
+						write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					}
+
+					// Copy the last packet(s)
+					memmove(&packet_buffer_[fast_io_packets_success[0] - 1], &fast_io_section[0]->fast_io_packets[fast_io_packets_success[0] - 1], sizeof(INTERMEDIATE_BUFFER));
+					if (fast_io_packets_success[0] < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+					{
+						fast_io_packets_success[0] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+						memmove(&packet_buffer_[fast_io_packets_success[0] - 1], &fast_io_section[0]->fast_io_packets[fast_io_packets_success[0] - 1], sizeof(INTERMEDIATE_BUFFER));
+					}
+
+					InterlockedExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0);
+					InterlockedExchange(&fast_io_section[0]->fast_io_header.read_in_progress_flag, 0);
 				}
 
-				// Copy the last packet(s)
-				memmove(&packet_buffer_[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
-				if (fast_io_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+				if(InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0))
 				{
-					fast_io_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-					memmove(&packet_buffer_[fast_io_packets_success - 1], &fast_io_section->fast_io_packets[fast_io_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+					InterlockedExchange(&fast_io_section[1]->fast_io_header.read_in_progress_flag, 1);
+
+					auto write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+
+					fast_io_packets_success[1] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+
+					//
+					// Copy packets and reset section
+					//
+
+					memmove(&packet_buffer_[fast_io_packets_success[0]], &fast_io_section[1]->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success[1] - 1));
+
+					// For the last packet(s) wait the write completion if in progress
+					write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+
+					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
+					{
+						//std::this_thread::yield();
+						write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					}
+
+					// Copy the last packet(s)
+					memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1] - 1], &fast_io_section[1]->fast_io_packets[fast_io_packets_success[1] - 1], sizeof(INTERMEDIATE_BUFFER));
+					if (fast_io_packets_success[1] < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+					{
+						fast_io_packets_success[1] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+						memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1] - 1], &fast_io_section[1]->fast_io_packets[fast_io_packets_success[1] - 1], sizeof(INTERMEDIATE_BUFFER));
+					}
+
+					InterlockedExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0);
+					InterlockedExchange(&fast_io_section[1]->fast_io_header.read_in_progress_flag, 0);
 				}
-
-				InterlockedExchange(&fast_io_section->fast_io_header.fast_io_write_union.union_.join, 0);
-
-				const auto original_read_in_progress_flag = InterlockedExchange(&fast_io_section->fast_io_header.read_in_progress_flag, 0);
 
 				auto send_to_adapter_num = 0;
 				auto send_to_mstcp_num = 0;
 
 #ifdef FAST_IO_MEASURE_STATS
-				fast_io_packets_total += fast_io_packets_success;
+				fast_io_packets_total += static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1];
 				++fast_io_reads_total;
 #endif //FAST_IO_MEASURE_STATS
 
-				// Read the remaining packets from the queue
-				if (original_read_in_progress_flag == 2 || fast_io_packets_success == fast_io_packets_num)
-				{
-					if (!ReadPacketsUnsorted(&read_request[fast_io_packets_success], maximum_packet_block - fast_io_packets_success, &queue_io_packets_success))
-					{
-						queue_io_packets_success = 0;
-					}
-					else
-					{
-#ifdef FAST_IO_MEASURE_STATS
-						queued_io_packets_total += queue_io_packets_success;
-						++queued_io_reads_total;
-#endif //FAST_IO_MEASURE_STATS
-					}
-				}
-				else
-				{
-					queue_io_packets_success = 0;
-				}
-
-				for (uint32_t i = 0; i < (queue_io_packets_success + fast_io_packets_success); ++i)
+				for (uint32_t i = 0; i < (fast_io_packets_success[0] + fast_io_packets_success[1]); ++i)
 				{
 					auto packet_action = packet_action::pass;
 

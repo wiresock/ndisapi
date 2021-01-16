@@ -118,6 +118,7 @@ public:
 	BOOL	GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList ) const;
 	BOOL	IsDriverLoaded () const;
 	BOOL	InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
+	BOOL	AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
 	BOOL	ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const;
 	BOOL	SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
 	BOOL	SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;

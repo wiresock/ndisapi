@@ -89,6 +89,58 @@ namespace net
 			}
 		}
 
+		// ********************************************************************************
+		/// <summary>
+		/// Recalculates TCP/UDP checksum for IPv6 packet in INTERMEDIATE_BUFFER container 
+		/// </summary>
+		/// <param name="packet">pinter to INTRMEDIATE_BUFFER structure</param>
+		// ********************************************************************************
+		static void recalculate_tcp_udp_checksum(PINTERMEDIATE_BUFFER packet)
+		{
+			tcphdr_ptr	tcp_header = nullptr;
+			udphdr_ptr	udp_header = nullptr;
+			icmpv6hdr_ptr icmp_header = nullptr;
+
+			const auto ipv6_header = reinterpret_cast<ipv6hdr_ptr>(&packet->m_IBuffer[ETHER_HEADER_LENGTH]);
+			auto [header, protocol] = find_transport_header(ipv6_header, packet->m_Length - ETHER_HEADER_LENGTH);
+
+			if (protocol == IPPROTO_TCP)
+			{
+				tcp_header = reinterpret_cast<tcphdr_ptr>(header);
+				tcp_header->th_sum = 0;
+			}
+			else if (protocol == IPPROTO_UDP)
+			{
+				udp_header = reinterpret_cast<udphdr_ptr>(header);
+				udp_header->th_sum = 0;
+			}
+			else if (protocol == IPPROTO_ICMPV6)
+			{
+				icmp_header = reinterpret_cast<icmpv6hdr_ptr>(header);
+				icmp_header->checksum = 0;
+			}
+
+			const auto checksum = tcp_udp_v6_checksum(
+				&ipv6_header->ip6_src,
+				&ipv6_header->ip6_dst,
+				protocol,
+				header,
+				packet->m_Length - static_cast<uint32_t>(reinterpret_cast<uint8_t*>(header) - packet->m_IBuffer));
+
+			if (protocol == IPPROTO_TCP)
+			{
+				tcp_header->th_sum = checksum;
+			}
+			else if (protocol == IPPROTO_UDP)
+			{
+				udp_header->th_sum = checksum;
+			}
+			else if (protocol == IPPROTO_ICMPV6)
+			{
+				icmp_header->checksum = checksum;
+			}
+		}
+
 	private:
 		static uint64_t ip_checksum_partial(const void* p, size_t len, uint64_t sum)
 		{
@@ -126,7 +178,6 @@ namespace net
 
 			return static_cast<uint16_t>(~sum);
 		}
-
 
 		static uint64_t tcp_udp_v6_header_checksum_partial(const in6_addr* src_ip, const in6_addr* dst_ip, uint8_t protocol, uint32_t len)
 		{
@@ -173,44 +224,6 @@ namespace net
 			auto sum = tcp_udp_v6_header_checksum_partial(src_ip, dst_ip, protocol, len);
 			sum = ip_checksum_partial(payload, len, sum);
 			return ip_checksum_fold(sum);
-		}
-
-	public:
-
-		static void recalculate_tcp_udp_checksum(PINTERMEDIATE_BUFFER packet)
-		{
-			tcphdr_ptr	tcp_header = nullptr;
-			udphdr_ptr	udp_header = nullptr;
-
-			const auto ipv6_header = reinterpret_cast<ipv6hdr_ptr>(&packet->m_IBuffer[ETHER_HEADER_LENGTH]);
-			auto[header, protocol] = find_transport_header(ipv6_header, packet->m_Length - ETHER_HEADER_LENGTH);
-
-			if (protocol == IPPROTO_TCP)
-			{
-				tcp_header = reinterpret_cast<tcphdr_ptr>(header);
-				tcp_header->th_sum = 0;
-			}
-			else if (protocol == IPPROTO_UDP)
-			{
-				udp_header = reinterpret_cast<udphdr_ptr>(header);
-				udp_header->th_sum = 0;
-			}
-
-			const auto checksum = tcp_udp_v6_checksum(
-				&ipv6_header->ip6_src,
-				&ipv6_header->ip6_dst,
-				protocol,
-				(protocol == IPPROTO_TCP) ? reinterpret_cast<void*>(tcp_header) : reinterpret_cast<void*>(udp_header),
-				packet->m_Length - static_cast<uint32_t>(reinterpret_cast<uint8_t*>(header) - packet->m_IBuffer));
-
-			if (protocol == IPPROTO_TCP)
-			{
-				tcp_header->th_sum = checksum;
-			}
-			else if (protocol == IPPROTO_UDP)
-			{
-				udp_header->th_sum = checksum;
-			}
 		}
 	};
 }

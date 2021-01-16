@@ -24,8 +24,8 @@ namespace net
 	{
 		static constexpr size_t ipv4_address_max_length = 16;
 		static constexpr ADDRESS_FAMILY af_type = AF_INET;
-
-		explicit ip_address_v4(const uint32_t addr = 0) : in_addr() { S_un.S_addr = addr; }
+		
+		explicit constexpr ip_address_v4(const uint32_t addr = 0) : in_addr() { S_un.S_addr = addr; }
 		ip_address_v4(const in_addr& ip) : in_addr() { *static_cast<in_addr*>(this) = ip; }
 
 		explicit ip_address_v4(const std::string& ip) : in_addr()
@@ -86,6 +86,14 @@ namespace net
 		bool operator !=(const ip_address_v4& rhs) const { return (S_un.S_addr != rhs.S_un.S_addr); }
 		bool operator <(const ip_address_v4& rhs) const { return (S_un.S_addr < rhs.S_un.S_addr); }
 
+		bool is_auto_config()
+		{
+			if (S_un.S_un_b.s_b1 == 169 && S_un.S_un_b.s_b2 == 254)
+				return true;
+
+			return false;
+		}
+
 		friend std::ostream& operator<<(std::ostream& os, const ip_address_v4& dt);
 		friend std::wostream& operator<<(std::wostream& os, const ip_address_v4& dt);
 	};
@@ -113,9 +121,9 @@ namespace net
 		static constexpr size_t ipv6_address_max_length = 16;
 		static constexpr ADDRESS_FAMILY af_type = AF_INET6;
 
-		ip_address_v6() : in6_addr() { memset(reinterpret_cast<void*>(this), 0, sizeof(ip_address_v6)); }
+		constexpr ip_address_v6() : in6_addr() {this->u.Word[0] = 0; this->u.Word[1] = 0; this->u.Word[2] = 0; this->u.Word[3] = 0; this->u.Word[4] = 0; this->u.Word[5] = 0; this->u.Word[6] = 0; this->u.Word[7] = 0;	}
 		explicit ip_address_v6(const uint8_t addr[ipv6_address_max_length]) : in6_addr() { memmove(reinterpret_cast<void*>(this), addr, sizeof(in_addr6)); }
-		ip_address_v6(const in_addr6& ip) : in6_addr() { memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
+		ip_address_v6(const in_addr6& ip) : in6_addr() { memmove(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(&ip), sizeof(ip_address_v6)); }
 
 		explicit ip_address_v6(const std::string& ip) : in6_addr()
 		{
@@ -189,6 +197,11 @@ namespace net
 			return dword[0] ^ dword[1] ^ dword[2] ^ dword[3];
 		}
 
+		bool is_global_unicast() const noexcept
+		{
+			return ((u.Byte[0] & 0x3F) == u.Byte[0]);
+		}
+
 		friend std::ostream& operator<<(std::ostream& os, const ip_address_v6& dt);
 		friend std::wostream& operator<<(std::wostream& os, const ip_address_v6& dt);
 	};
@@ -204,6 +217,9 @@ namespace net
 		os << std::wstring(dt);
 		return os;
 	}
+
+	static constexpr ip_address_v4 zero_ip_address_v4;
+	static constexpr ip_address_v6 zero_ip_address_v6;
 }
 
 namespace std
