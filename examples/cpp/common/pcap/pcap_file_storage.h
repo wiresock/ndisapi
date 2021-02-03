@@ -19,14 +19,13 @@ namespace pcap
 		
 		pcap_file_storage() = default;
 
-
 		pcap_file_storage(const pcap_file_storage& other) = delete;
 
-		pcap_file_storage(pcap_file_storage&& other) noexcept = delete;
+		pcap_file_storage(pcap_file_storage&& other) noexcept = default;
 
 		pcap_file_storage& operator=(const pcap_file_storage& other) = delete;
 
-		pcap_file_storage& operator=(pcap_file_storage&& other) noexcept = delete;
+		pcap_file_storage& operator=(pcap_file_storage&& other) noexcept = default;
 
 		~pcap_file_storage()
 		{
