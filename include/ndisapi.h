@@ -237,6 +237,7 @@ extern "C"
 	DWORD	__stdcall		GetAdaptersStartupMode();
 	BOOL	__stdcall		IsDriverLoaded(HANDLE hOpen);
 	BOOL	__stdcall		InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
+	BOOL	__stdcall		AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
 	BOOL	__stdcall		ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess);
 	BOOL	__stdcall		SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
 	BOOL	__stdcall		SendPacketsToMstcpUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
