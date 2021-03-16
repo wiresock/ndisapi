@@ -2708,7 +2708,7 @@ BOOL __stdcall AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD 
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->InitializeFastIo(pFastIo, dwSize);
+	return pApi->AddSecondaryFastIo(pFastIo, dwSize);
 }
 
 BOOL __stdcall ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess)

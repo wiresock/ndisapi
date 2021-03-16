@@ -32,6 +32,7 @@ SetAdaptersStartupMode
 GetAdaptersStartupMode
 IsDriverLoaded
 InitializeFastIo
+AddSecondaryFastIo
 ReadPacketsUnsorted
 SendPacketsToAdaptersUnsorted
 SendPacketsToMstcpUnsorted
