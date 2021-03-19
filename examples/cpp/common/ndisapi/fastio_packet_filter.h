@@ -175,14 +175,17 @@ namespace ndisapi
 		//
 		// Set events for helper driver
 		//
-		if (!network_interfaces_[adapter_]->set_packet_event())
+		if (wait_on_poll_)
 		{
-			packet_buffer_.reset();
-			write_adapter_request_ptr_.reset();
-			write_mstcp_request_ptr_.reset();
-			fast_io_ptr_.reset();
-			
-			return false;
+			if (!network_interfaces_[adapter_]->set_packet_event())
+			{
+				packet_buffer_.reset();
+				write_adapter_request_ptr_.reset();
+				write_mstcp_request_ptr_.reset();
+				fast_io_ptr_.reset();
+
+				return false;
+			}
 		}
 		
 		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]);
