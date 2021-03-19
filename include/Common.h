@@ -1,5 +1,5 @@
 /*************************************************************************/
-/*                Copyright (c) 2000-2018 NT Kernel Resources.           */
+/*                Copyright (c) 2000-2021 NT Kernel Resources.           */
 /*                           All Rights Reserved.                        */
 /*                          http://www.ntkernel.com                      */
 /*                           ndisrd@ntkernel.com                         */
@@ -20,9 +20,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x021C3000
+#define NDISRD_VERSION			0x021D3000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x021C
+#define NDISRD_MINOR_VERSION	0x021D
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"

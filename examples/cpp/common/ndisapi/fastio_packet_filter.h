@@ -38,8 +38,8 @@ namespace ndisapi
 			stopping
 		};
 		
-		explicit fastio_packet_filter(const bool sleep_on_poll = false) :
-		sleep_on_poll_(sleep_on_poll) 
+		explicit fastio_packet_filter(const bool wait_on_poll = false) :
+		wait_on_poll_(wait_on_poll) 
 		{
 			initialize_network_interfaces();
 		}
@@ -146,7 +146,7 @@ namespace ndisapi
 		/// <summary>filtered adapter index</summary>
 		size_t adapter_{ 0 };
 		/// <summary>specifies if sleep should be used on polling fas I/O</summary>
-		bool sleep_on_poll_{ false };
+		bool wait_on_poll_{ false };
 		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
 		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
 		/// <summary>driver request for writing packets to adapter</summary>
@@ -154,9 +154,7 @@ namespace ndisapi
 		/// <summary>driver request for writing packets up to protocol stack</summary>
 		std::unique_ptr<request_storage_type_t> write_mstcp_request_ptr_;
 		/// <summary>shared fast i/o memory</summary>
-		std::unique_ptr<fast_io_storage_type_t> fast_io_ptr_;
-		/// <summary>secondary shared fast i/o memory</summary>
-		std::unique_ptr<fast_io_storage_type_t> fast_io_ptr_2_;
+		std::unique_ptr<fast_io_storage_type_t[]> fast_io_ptr_;
 	};
 
 	inline bool fastio_packet_filter::init_filter()
@@ -167,8 +165,7 @@ namespace ndisapi
 
 			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
 			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
-			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t>();
-			fast_io_ptr_2_ = std::make_unique<fast_io_storage_type_t>();
+			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t[]>(4);
 		}
 		catch (const std::bad_alloc&)
 		{
@@ -184,12 +181,11 @@ namespace ndisapi
 			write_adapter_request_ptr_.reset();
 			write_mstcp_request_ptr_.reset();
 			fast_io_ptr_.reset();
-			fast_io_ptr_2_.reset();
 			
 			return false;
 		}
 		
-		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get());
+		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]);
 
 		if (!InitializeFastIo(fast_io_section, fast_io_size))
 		{
@@ -197,22 +193,23 @@ namespace ndisapi
 			write_adapter_request_ptr_.reset();
 			write_mstcp_request_ptr_.reset();
 			fast_io_ptr_.reset();
-			fast_io_ptr_2_.reset();
 			
 			return false;
 		}
 
-		fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_2_.get());
-
-		if (!AddSecondaryFastIo(fast_io_section, fast_io_size))
+		for (auto i = 1; i < 4; ++i)
 		{
-			packet_buffer_.reset();
-			write_adapter_request_ptr_.reset();
-			write_mstcp_request_ptr_.reset();
-			fast_io_ptr_.reset();
-			fast_io_ptr_2_.reset();
+			fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[i]);
 
-			return false;
+			if (!AddSecondaryFastIo(fast_io_section, fast_io_size))
+			{
+				packet_buffer_.reset();
+				write_adapter_request_ptr_.reset();
+				write_mstcp_request_ptr_.reset();
+				fast_io_ptr_.reset();
+
+				return false;
+			}
 		}
 		
 		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
@@ -232,7 +229,6 @@ namespace ndisapi
 		write_adapter_request_ptr_.reset();
 		write_mstcp_request_ptr_.reset();
 		fast_io_ptr_.reset();
-		fast_io_ptr_2_.reset();
 	}
 
 	inline bool fastio_packet_filter::reconfigure()
@@ -327,14 +323,16 @@ namespace ndisapi
 		filter_state_ = filter_state::running;
 		
 		DWORD sent_success = 0;
-		DWORD fast_io_packets_success[] = { 0, 0 };
+		DWORD fast_io_packets_success = 0;
 
-		const auto write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
-		const auto write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
+		auto* const write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
+		auto* const write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
 
 		const PFAST_IO_SECTION fast_io_section[] = {
-			reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_.get()),
-			reinterpret_cast<PFAST_IO_SECTION>(fast_io_ptr_2_.get())
+			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]),
+			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[1]),
+			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[2]),
+			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[3]),
 		};
 
 #ifdef FAST_IO_MEASURE_STATS
@@ -349,149 +347,117 @@ namespace ndisapi
 			//
 			// Fast I/O processing section
 			//
-			if (const auto first = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0); first ||
-				InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0))
+						
+			for (auto i : fast_io_section)
 			{
-				if (first)
+				if (InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0))
 				{
-					InterlockedExchange(&fast_io_section[0]->fast_io_header.read_in_progress_flag, 1);
+					InterlockedExchange(&i->fast_io_header.read_in_progress_flag, 1);
 
-					auto write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					auto write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 
-					fast_io_packets_success[0] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+					auto current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
 
 					//
 					// Copy packets and reset section
 					//
 
-					memmove(&packet_buffer_[0], &fast_io_section[0]->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success[0] - 1));
+					memmove(&packet_buffer_[fast_io_packets_success], &i->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (current_packets_success - 1));
 
 					// For the last packet(s) wait the write completion if in progress
-					write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 
 					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
 					{
-						//std::this_thread::yield();
-						write_union = InterlockedCompareExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+						write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 					}
 
 					// Copy the last packet(s)
-					memmove(&packet_buffer_[fast_io_packets_success[0] - 1], &fast_io_section[0]->fast_io_packets[fast_io_packets_success[0] - 1], sizeof(INTERMEDIATE_BUFFER));
-					if (fast_io_packets_success[0] < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+					memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
+					        i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+					if (current_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
 					{
-						fast_io_packets_success[0] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-						memmove(&packet_buffer_[fast_io_packets_success[0] - 1], &fast_io_section[0]->fast_io_packets[fast_io_packets_success[0] - 1], sizeof(INTERMEDIATE_BUFFER));
+						current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+						memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
+						        i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
 					}
 
-					InterlockedExchange(&fast_io_section[0]->fast_io_header.fast_io_write_union.union_.join, 0);
-					InterlockedExchange(&fast_io_section[0]->fast_io_header.read_in_progress_flag, 0);
+					InterlockedExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0);
+					InterlockedExchange(&i->fast_io_header.read_in_progress_flag, 0);
+
+					fast_io_packets_success += current_packets_success;
 				}
+			}
 
-				if(InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0))
-				{
-					InterlockedExchange(&fast_io_section[1]->fast_io_header.read_in_progress_flag, 1);
-
-					auto write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-
-					fast_io_packets_success[1] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-
-					//
-					// Copy packets and reset section
-					//
-
-					memmove(&packet_buffer_[fast_io_packets_success[0]], &fast_io_section[1]->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (fast_io_packets_success[1] - 1));
-
-					// For the last packet(s) wait the write completion if in progress
-					write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-
-					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
-					{
-						//std::this_thread::yield();
-						write_union = InterlockedCompareExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-					}
-
-					// Copy the last packet(s)
-					memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1] - 1], &fast_io_section[1]->fast_io_packets[fast_io_packets_success[1] - 1], sizeof(INTERMEDIATE_BUFFER));
-					if (fast_io_packets_success[1] < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
-					{
-						fast_io_packets_success[1] = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-						memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1] - 1], &fast_io_section[1]->fast_io_packets[fast_io_packets_success[1] - 1], sizeof(INTERMEDIATE_BUFFER));
-					}
-
-					InterlockedExchange(&fast_io_section[1]->fast_io_header.fast_io_write_union.union_.join, 0);
-					InterlockedExchange(&fast_io_section[1]->fast_io_header.read_in_progress_flag, 0);
-				}
-
-				auto send_to_adapter_num = 0;
-				auto send_to_mstcp_num = 0;
+			auto send_to_adapter_num = 0;
+			auto send_to_mstcp_num = 0;
 
 #ifdef FAST_IO_MEASURE_STATS
-				fast_io_packets_total += static_cast<uint64_t>(fast_io_packets_success[0]) + fast_io_packets_success[1];
-				++fast_io_reads_total;
+			fast_io_packets_total += static_cast<uint64_t>(fast_io_packets_success);
+			++fast_io_reads_total;
 #endif //FAST_IO_MEASURE_STATS
 
-				for (uint32_t i = 0; i < (fast_io_packets_success[0] + fast_io_packets_success[1]); ++i)
-				{
-					auto packet_action = packet_action::pass;
+			for (uint32_t i = 0; i < fast_io_packets_success; ++i)
+			{
+				auto packet_action = packet_action::pass;
 
-					if(packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+				if(packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+				{
+					if (filter_outgoing_packet_ != nullptr)
+						packet_action = filter_outgoing_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
+				}
+				else
+				{
+					if (filter_incoming_packet_ != nullptr)
+						packet_action = filter_incoming_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
+				}
+
+				// Place packet back into the flow if was allowed to
+				if (packet_action == packet_action::pass)
+				{
+					if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 					{
-						if (filter_outgoing_packet_ != nullptr)
-							packet_action = filter_outgoing_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
+						write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
+						++send_to_adapter_num;
 					}
 					else
 					{
-						if (filter_incoming_packet_ != nullptr)
-							packet_action = filter_incoming_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);
-					}
-
-					// Place packet back into the flow if was allowed to
-					if (packet_action == packet_action::pass)
-					{
-						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
-						{
-							write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
-							++send_to_adapter_num;
-						}
-						else
-						{
-							write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
-							++send_to_mstcp_num;
-						}
-					}
-					else if (packet_action == packet_action::revert)
-					{
-						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
-						{
-							write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
-							++send_to_adapter_num;
-						}
-						else
-						{
-							write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
-							++send_to_mstcp_num;
-						}
+						write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
+						++send_to_mstcp_num;
 					}
 				}
-
-				if (send_to_adapter_num > 0)
+				else if (packet_action == packet_action::revert)
 				{
-					SendPacketsToAdaptersUnsorted(write_adapter_request, send_to_adapter_num, &sent_success);
-				}
-
-				if (send_to_mstcp_num > 0)
-				{
-					SendPacketsToMstcpUnsorted(write_mstcp_request, send_to_mstcp_num, &sent_success);
+					if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
+					{
+						write_adapter_request[send_to_adapter_num] = &packet_buffer_[i];
+						++send_to_adapter_num;
+					}
+					else
+					{
+						write_mstcp_request[send_to_mstcp_num] = &packet_buffer_[i];
+						++send_to_mstcp_num;
+					}
 				}
 			}
-			else
+
+			if (send_to_adapter_num > 0)
 			{
-				if (sleep_on_poll_)
-					std::this_thread::sleep_for(1us);
-				//else
-				//	std::this_thread::yield(); //::SwitchToThread();
-				//	
+				SendPacketsToAdaptersUnsorted(write_adapter_request, send_to_adapter_num, &sent_success);
 			}
+
+			if (send_to_mstcp_num > 0)
+			{
+				SendPacketsToMstcpUnsorted(write_mstcp_request, send_to_mstcp_num, &sent_success);
+			}
+
+			if (fast_io_packets_success == 0 && wait_on_poll_)
+			{
+				auto [[maybe_unused]] result = network_interfaces_[adapter_]->wait_event(INFINITE);
+				result = network_interfaces_[adapter_]->reset_event();
+			}
+
+			fast_io_packets_success = 0;
 		}
 
 #ifdef FAST_IO_MEASURE_STATS
