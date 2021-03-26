@@ -11,7 +11,7 @@ namespace net {
 	struct mac_address {
 		static constexpr int eth_addr_length = 6;
 
-		mac_address() { data.fill(0); }
+		mac_address() { data.fill(0); }  // NOLINT(cppcoreguidelines-pro-type-member-init)
 		explicit mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, eth_addr_length); }
 
 		unsigned char& operator[](const size_t index) { return data[index]; }
@@ -29,7 +29,7 @@ namespace net {
 			return (memcmp(&data[0], &rhs.data[0], eth_addr_length) < 0);
 		}
 
-		explicit operator bool() const { return *this == mac_address{}; };
+		explicit operator bool() const { return *this != mac_address{}; };
 
 		explicit operator std::array<unsigned char, eth_addr_length>() const { return data; }
 
@@ -54,6 +54,22 @@ namespace net {
 		}
 
 		const mac_address& reverse() { std::reverse(data.begin(), data.end()); return *this; }
+
+		[[nodiscard]] bool is_broadcast() const
+		{
+			auto broadcast = mac_address{};
+			broadcast.data.fill(0xFF);
+			if (broadcast == *this)
+				return true;
+			return false;
+		}
+
+		[[nodiscard]] bool is_multicast() const
+		{
+			if ((data[0] & 0x01) == 0x01)
+				return true;
+			return false;
+		}
 
 		std::array<unsigned char, eth_addr_length> data;
 	};

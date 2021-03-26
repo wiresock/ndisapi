@@ -176,6 +176,8 @@
     <ClInclude Include="..\common\iphlp.h" />
     <ClInclude Include="..\common\net\ip_address.h" />
     <ClInclude Include="..\common\net\mac_address.h" />
+    <ClInclude Include="..\common\pcap\pcap.h" />
+    <ClInclude Include="..\common\pcap\pcap_file_storage.h" />
     <ClInclude Include="..\common\winsys\event.h" />
     <ClInclude Include="..\common\winsys\object.h" />
     <ClInclude Include="EthernetBridge.h" />

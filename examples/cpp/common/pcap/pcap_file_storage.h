@@ -57,25 +57,22 @@ namespace pcap
 		pcap_file_storage& operator<<(const INTERMEDIATE_BUFFER& buffer)
 		{
 			static std::mutex lock;  // NOLINT(clang-diagnostic-exit-time-destructors)
-			static auto last_time_stamp = time(nullptr);
-			static uint32_t sequence = 0;
 
 			std::lock_guard<std::mutex> write_lock(lock);
-			
-			const auto current_time = time(nullptr);
-			if (current_time == last_time_stamp)
-			{
-				++sequence;
-			}
-			else
-			{
-				last_time_stamp = current_time;
-				sequence = 0;
-			}
 
+			const auto now = std::chrono::high_resolution_clock::now();
+
+			const auto milliseconds =
+				std::chrono::duration_cast<std::chrono::milliseconds>(
+					now.time_since_epoch()
+					);
+
+			const auto seconds = static_cast<uint32_t>(milliseconds.count() / 1000);
+			const auto microseconds_remain = static_cast<uint32_t>((milliseconds.count() % 1000) * 1000);
+			
 			const auto* const ethernet_header = reinterpret_cast<char const*>(buffer.m_IBuffer);
 
-			file_stream_ << pcap_record_header(static_cast<const uint32_t>(current_time), sequence,
+			file_stream_ << pcap_record_header(static_cast<const uint32_t>(seconds), microseconds_remain,
 			                                         buffer.m_Length, buffer.m_Length, ethernet_header);
 			return *this;
 		}

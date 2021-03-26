@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <shared_mutex>
 #include <optional>
+#include <map>
+#include <fstream>
 
 using namespace std;
 
@@ -40,6 +42,8 @@ using namespace std;
 #include "../common/net/mac_address.h"
 #include "../common/winsys/object.h"
 #include "../common/winsys/event.h"
+#include "../common/pcap/pcap.h"
+#include "../common/pcap/pcap_file_storage.h"
 #include "NetworkAdapter.h"
 #include "EthernetBridge.h"
 

@@ -151,6 +151,14 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 {
 	const auto packet_buffer = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
+#ifdef _DEBUG
+	using namespace std::string_literals;
+	pcap::pcap_file_storage capture_in("bridge_in_"s + std::to_string(index) + ".pcap"s);
+	std::map<std::size_t, pcap::pcap_file_storage> capture_out;
+	for (auto&& a : bridged_interfaces_)
+		capture_out[a] = pcap::pcap_file_storage("bridge_"s + std::to_string(index) + "_to_"s + std::to_string(a)+ ".pcap"s);
+#endif //_DEBUG
+
 	//
 	// Thread reads packets from the network interface and duplicates non-local packets to the second
 	//
@@ -165,9 +173,9 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1), 0x1000>;
 
 	// 1. Allocate memory using unique_ptr for auto-delete on thread exit
-	auto read_request_ptr = std::make_unique<request_storage_type_t>();
-	auto bridge_request_ptr = std::make_unique<request_storage_type_t>();
-	auto mstcp_bridge_request_ptr = std::make_unique<request_storage_type_t>();
+	const auto read_request_ptr = std::make_unique<request_storage_type_t>();
+	const auto bridge_request_ptr = std::make_unique<request_storage_type_t>();
+	const auto mstcp_bridge_request_ptr = std::make_unique<request_storage_type_t>();
 
 	// 2. Get raw pointers for convenience
 	auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr.get());
@@ -218,8 +226,12 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 
 		while (ReadPackets(read_request))
 		{
+
 			for (size_t i = 0; i < read_request->dwPacketsSuccess; ++i)
 			{
+#ifdef _DEBUG
+				capture_in << *read_request->EthPacket[i].Buffer;
+#endif //_DEBUG
 				if (packet_buffer[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 				{
 					auto ether_header = reinterpret_cast<ether_header_ptr>(read_request->EthPacket[i].Buffer->m_IBuffer);
@@ -260,7 +272,7 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 						else
 						{
 							auto dest_mac = adapters[index]->get_mac_by_ip(*reinterpret_cast<net::ip_address_v4*>(arp_hdr->arp_tpa));
-							if (dest_mac)
+							if (static_cast<bool>(dest_mac))
 							{
 								memcpy(ether_header->h_dest, &dest_mac[0], ETH_ALEN);
 								memcpy(arp_hdr->arp_tha, &dest_mac[0], ETH_ALEN);
@@ -368,6 +380,9 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 								continue;
 
 							bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+#ifdef _DEBUG
+							capture_out[a] << *bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer;
+#endif //_DEBUG
 							++bridge_request->dwPacketsNumber;
 						}
 					}
@@ -381,6 +396,9 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 								continue;
 
 							bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+#ifdef _DEBUG
+							capture_out[a] << *bridge_request->EthPacket[bridge_request->dwPacketsNumber].Buffer;
+#endif //_DEBUG
 							++bridge_request->dwPacketsNumber;
 						}
 					}
@@ -391,6 +409,9 @@ void ethernet_bridge::bridge_working_thread(const size_t index)
 						)
 					{
 						mstcp_bridge_request->EthPacket[mstcp_bridge_request->dwPacketsNumber].Buffer = &packet_buffer[i];
+#ifdef _DEBUG
+						capture_out[a] << *mstcp_bridge_request->EthPacket[mstcp_bridge_request->dwPacketsNumber].Buffer;
+#endif //_DEBUG
 						++mstcp_bridge_request->dwPacketsNumber;
 					}
 				}

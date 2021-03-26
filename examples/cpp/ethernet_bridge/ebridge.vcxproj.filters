@@ -22,6 +22,9 @@
     <Filter Include="Header Files\common\winsys">
       <UniqueIdentifier>{5c8484d0-7242-4fa9-a116-0e3796fad6ed}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\common\pcap">
+      <UniqueIdentifier>{45646586-0d2f-4559-be2c-08a2c2412fee}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -53,6 +56,12 @@
     </ClInclude>
     <ClInclude Include="..\common\winsys\object.h">
       <Filter>Header Files\common\winsys</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\pcap\pcap.h">
+      <Filter>Header Files\common\pcap</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\pcap\pcap_file_storage.h">
+      <Filter>Header Files\common\pcap</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
