@@ -12,11 +12,11 @@ class tls_parser
 	static constexpr auto tls_handshake_content_type = 0x16;
 	static constexpr auto tls_handshake_type_client_hello = 0x01;
 
-	static std::optional<std::string> parse_server_name_extension(const uint8_t* data, const size_t length) 
+	static std::optional<std::string> parse_server_name_extension(const uint8_t* data, const size_t length)
 	{
 		size_t position = 2; // skip server name list length
 
-		while (position + 3 < length) 
+		while (position + 3 < length)
 		{
 			const auto len = (static_cast<size_t>(data[position + 1]) << 8) + static_cast<size_t>(data[position + 2]);
 
@@ -27,7 +27,7 @@ class tls_parser
 			}
 
 			switch (data[position]) // name type
-			{ 
+			{
 			case 0x00: // host_name
 				return std::string(reinterpret_cast<const char*>(data + position + 3), len);
 			default:
@@ -36,7 +36,7 @@ class tls_parser
 			}
 			position += 3 + len;
 		}
-		
+
 		// Check we ended where we expected to
 		if (position != length)
 		{
@@ -48,18 +48,18 @@ class tls_parser
 		return std::nullopt;
 	}
 
-	static std::optional<std::string> parse_extensions(const uint8_t* data, const size_t length) 
+	static std::optional<std::string> parse_extensions(const uint8_t* data, const size_t length)
 	{
 		size_t position = 0;
 
 		// Parse each 4 bytes for the extension header
-		while (position + 4 <= length) 
+		while (position + 4 <= length)
 		{
 			// Extension Length
 			const auto len = (static_cast<size_t>(data[position + 2]) << 8) + static_cast<size_t>(data[position + 3]);
 
 			// Check if it's a server name extension
-			if (data[position] == 0x00 && data[position + 1] == 0x00) 
+			if (data[position] == 0x00 && data[position + 1] == 0x00)
 			{
 				// There can be only one extension of each type, so we break our state and move p to beginning of the extension here
 				if (position + 4 + len > length)
@@ -85,7 +85,6 @@ class tls_parser
 	}
 
 public:
-
 	// ********************************************************************************
 	/// <summary>
 	/// Parse a TLS packet for the Server Name Indication extension in the client
@@ -95,7 +94,7 @@ public:
 	/// <param name="length">SSL packet size</param>
 	/// <returns>optional string with SNI found </returns>
 	// ********************************************************************************
-	static std::optional<std::string> parse_tls_header(const uint8_t* data, size_t length) 
+	static std::optional<std::string> parse_tls_header(const uint8_t* data, size_t length)
 	{
 		size_t position = tls_header_len;
 
@@ -109,14 +108,13 @@ public:
 		// SSL 2.0 compatible Client Hello
 		// High bit of first byte (length) and content type is Client Hello
 		// See RFC5246 Appendix E.2
-		if (data[0] & 0x80 && data[2] == 1) 
+		if (data[0] & 0x80 && data[2] == 1)
 		{
 			std::cout << "Received SSL 2.0 Client Hello which can not support SNI." << "\n";
 			return std::nullopt;
 		}
 
-		const auto tls_content_type = data[0];
-		if (tls_content_type != tls_handshake_content_type) 
+		if (const auto tls_content_type = data[0]; tls_content_type != tls_handshake_content_type)
 		{
 			std::cout << "Request did not begin with TLS handshake." << "\n";
 			return std::nullopt;
@@ -124,9 +122,10 @@ public:
 
 		const auto tls_version_major = data[1];
 		const auto tls_version_minor = data[2];
-		if (tls_version_major < 3) 
+		if (tls_version_major < 3)
 		{
-			std::cout << "Received SSL " << tls_version_major << "." << tls_version_minor << " handshake which can not support SNI." << "\n";
+			std::cout << "Received SSL " << tls_version_major << "." << tls_version_minor <<
+				" handshake which can not support SNI." << "\n";
 			return std::nullopt;
 		}
 
@@ -139,13 +138,13 @@ public:
 			return std::nullopt;
 
 		// Handshake
-		if (position + 1 > length) 
+		if (position + 1 > length)
 		{
 			std::cout << "Invalid TLS client hello" << "\n";
 			return std::nullopt;
 		}
 
-		if (data[position] != tls_handshake_type_client_hello) 
+		if (data[position] != tls_handshake_type_client_hello)
 		{
 			std::cout << "Not a client hello" << "\n";
 			return std::nullopt;
@@ -190,7 +189,7 @@ public:
 		len = static_cast<size_t>(data[position]);
 		position += 1 + len;
 
-		if (position == length && tls_version_major == 3 && tls_version_minor == 0) 
+		if (position == length && tls_version_major == 3 && tls_version_minor == 0)
 		{
 			std::cout << "Received SSL 3.0 handshake without extensions" << "\n";
 			return std::nullopt;
@@ -221,10 +220,10 @@ class http_parser
 	static constexpr auto server_name_len = 256;
 	static constexpr auto http_request_min_len = 26;
 
-	static size_t next_header(const char** data, size_t* length) 
+	static size_t next_header(const char** data, size_t* length)
 	{
 		// walk data stream until the end of the header
-		while (*length > 2 && (*data)[0] != '\r' && (*data)[1] != '\n') 
+		while (*length > 2 && (*data)[0] != '\r' && (*data)[1] != '\n')
 		{
 			(*length)--;
 			(*data)++;
@@ -246,7 +245,7 @@ class http_parser
 		return header_length;
 	}
 
-	static std::optional<std::string> get_header(const char* header, const char* data, size_t length) 
+	static std::optional<std::string> get_header(const char* header, const char* data, size_t length)
 	{
 		size_t len;
 
@@ -278,7 +277,6 @@ class http_parser
 	}
 
 public:
-
 	// ********************************************************************************
 	/// <summary>
 	/// Parses a HTTP request for the Host: header
@@ -319,49 +317,54 @@ int main()
 {
 	auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
 		nullptr,
-		[](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
+		[](HANDLE, INTERMEDIATE_BUFFER& buffer)
 		{
-			auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
-
-			if (ntohs(ethernet_header->h_proto) == ETH_P_IP)
+			if (auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer); ntohs(
+				ethernet_header->h_proto) == ETH_P_IP)
 			{
-				auto* const ip_header = reinterpret_cast<iphdr_ptr>(ethernet_header + 1);
-
-				if (ip_header->ip_p == IPPROTO_TCP)
+				if (auto* const ip_header = reinterpret_cast<iphdr_ptr>(ethernet_header + 1); ip_header->ip_p ==
+					IPPROTO_TCP)
 				{
-					auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
-
-					if(ntohs(tcp_header->th_dport) == 443)
+					if (auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) +
+						sizeof(DWORD) * ip_header->ip_hl); ntohs(tcp_header->th_dport) == 443)
 					{
 						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
-						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 * tcp_header->th_off);
+						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 *
+							tcp_header->th_off);
 
 						if ((payload[0] == 0x16) && (payload[5] == 0x1))
 						{
-							std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
+							std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) <<
+								" --> " <<
 								net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " SNI: ";
 
-							std::cout << tls_parser::parse_tls_header(payload, payload_length).value_or("no SNI") << std::endl;
+							std::cout << tls_parser::parse_tls_header(payload, payload_length).value_or("no SNI") <<
+								std::endl;
 						}
 					}
 					else if (ntohs(tcp_header->th_dport) == 80)
 					{
 						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
-						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 * tcp_header->th_off);
 
-						if (payload_length > 26)
+						if (const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl +
+							4 * tcp_header->th_off); payload_length > 26)
 						{
-							if (auto host = http_parser::parse_http_header(reinterpret_cast<char*>(payload), payload_length); host.has_value())
+							if (auto host = http_parser::parse_http_header(
+								reinterpret_cast<char*>(payload), payload_length); host.has_value())
 							{
-								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
-									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " Host: ";
+								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
+									<< " --> " <<
+									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
+									" Host: ";
 
 								std::cout << host.value() << std::endl;
 							}
 							else
 							{
-								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) << " --> " <<
-									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " length: ";
+								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
+									<< " --> " <<
+									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
+									" length: ";
 
 								std::cout << payload_length << std::endl;
 							}
@@ -370,7 +373,7 @@ int main()
 				}
 			}
 
-			return ndisapi::packet_action::pass;
+			return ndisapi::fastio_packet_filter::packet_action::pass;
 		}, true);
 
 	if (ndis_api->IsDriverLoaded())
@@ -409,4 +412,3 @@ int main()
 
 	return 0;
 }
-

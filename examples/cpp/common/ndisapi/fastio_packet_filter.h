@@ -10,15 +10,9 @@
 namespace ndisapi
 {
 	inline constexpr size_t fast_io_size = 0x300000;
-	inline constexpr uint32_t fast_io_packets_num = (fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(INTERMEDIATE_BUFFER);
+	inline constexpr uint32_t fast_io_packets_num = (fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(
+		INTERMEDIATE_BUFFER);
 	inline constexpr size_t maximum_packet_block = 2048 * 3;
-
-	enum class packet_action
-	{
-		pass,
-		drop,
-		revert
-	};
 
 	// --------------------------------------------------------------------------------
 	/// <summary>
@@ -27,7 +21,17 @@ namespace ndisapi
 	// --------------------------------------------------------------------------------
 	class fastio_packet_filter final : public CNdisApi
 	{
-		using request_storage_type_t = std::aligned_storage_t<sizeof(PINTERMEDIATE_BUFFER)* maximum_packet_block, 0x1000>;
+	public:
+		enum class packet_action
+		{
+			pass,
+			drop,
+			revert
+		};
+
+	private:
+		using request_storage_type_t = std::aligned_storage_t<
+			sizeof(PINTERMEDIATE_BUFFER) * maximum_packet_block, 0x1000>;
 		using fast_io_storage_type_t = std::aligned_storage_t<fast_io_size, 0x1000>;
 
 		enum class filter_state
@@ -37,15 +41,15 @@ namespace ndisapi
 			running,
 			stopping
 		};
-		
+
 		explicit fastio_packet_filter(const bool wait_on_poll = false) :
-		wait_on_poll_(wait_on_poll) 
+			wait_on_poll_(wait_on_poll)
 		{
 			initialize_network_interfaces();
 		}
-	
+
 	public:
-		~fastio_packet_filter() { stop_filter(); }
+		~fastio_packet_filter() override { stop_filter(); }
 
 		fastio_packet_filter(const fastio_packet_filter& other) = delete;
 		fastio_packet_filter(fastio_packet_filter&& other) noexcept = delete;
@@ -60,13 +64,14 @@ namespace ndisapi
 		/// <param name="out">outgoing packet handling routine</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		template<typename F1, typename F2>
-		fastio_packet_filter(F1 in, F2 out, const bool sleep_on_poll = false): 
-		fastio_packet_filter(sleep_on_poll)
+		template <typename F1, typename F2>
+		fastio_packet_filter(F1 in, F2 out, const bool sleep_on_poll = false):
+			fastio_packet_filter(sleep_on_poll)
 		{
 			filter_incoming_packet_ = in;
 			filter_outgoing_packet_ = out;
 		}
+
 		// ********************************************************************************
 		/// <summary>
 		/// Updates available network interfaces. Should be called when the filter is inactive. 
@@ -104,6 +109,17 @@ namespace ndisapi
 		/// <returns>vector of available network adapters</returns>
 		// ********************************************************************************
 		const std::vector<std::unique_ptr<network_adapter>>& get_interface_list() const;
+
+		// ********************************************************************************
+		/// <summary>
+		/// Returns current filter state
+		/// </summary>
+		/// <returns>current filter state</returns>
+		// ********************************************************************************
+		[[nodiscard]] filter_state get_filter_state() const
+		{
+			return filter_state_.load();
+		}
 
 	private:
 		// ********************************************************************************
@@ -144,9 +160,9 @@ namespace ndisapi
 		/// <summary>working thread object</summary>
 		std::thread working_thread_;
 		/// <summary>filtered adapter index</summary>
-		size_t adapter_{ 0 };
+		size_t adapter_{0};
 		/// <summary>specifies if sleep should be used on polling fas I/O</summary>
-		bool wait_on_poll_{ false };
+		bool wait_on_poll_{false};
 		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
 		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
 		/// <summary>driver request for writing packets to adapter</summary>
@@ -187,7 +203,7 @@ namespace ndisapi
 				return false;
 			}
 		}
-		
+
 		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]);
 
 		if (!InitializeFastIo(fast_io_section, fast_io_size))
@@ -196,7 +212,7 @@ namespace ndisapi
 			write_adapter_request_ptr_.reset();
 			write_mstcp_request_ptr_.reset();
 			fast_io_ptr_.reset();
-			
+
 			return false;
 		}
 
@@ -214,7 +230,7 @@ namespace ndisapi
 				return false;
 			}
 		}
-		
+
 		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
 
 		return true;
@@ -297,15 +313,16 @@ namespace ndisapi
 
 	inline void fastio_packet_filter::initialize_network_interfaces()
 	{
-		TCP_AdapterList			ad_list;
-		std::vector<char>		friendly_name(MAX_PATH * 4);
+		TCP_AdapterList ad_list;
+		std::vector<char> friendly_name(MAX_PATH * 4);
 
 		if (!GetTcpipBoundAdaptersInfo(&ad_list))
 			return;
 
 		for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
 		{
-			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
+			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]),
+			                              friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
 
 			network_interfaces_.push_back(
 				std::make_unique<network_adapter>(
@@ -320,11 +337,11 @@ namespace ndisapi
 	}
 
 	inline void fastio_packet_filter::filter_working_thread()
-	{		
+	{
 		using namespace std::chrono_literals;
 
 		filter_state_ = filter_state::running;
-		
+
 		DWORD sent_success = 0;
 		DWORD fast_io_packets_success = 0;
 
@@ -344,45 +361,54 @@ namespace ndisapi
 		uint64_t fast_io_reads_total = 0;
 		uint64_t queued_io_reads_total = 0;
 #endif //FAST_IO_MEASURE_STATS
-		
+
 		while (filter_state_ == filter_state::running)
 		{
 			//
 			// Fast I/O processing section
 			//
-						
+
 			for (auto i : fast_io_section)
 			{
 				if (InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0))
 				{
 					InterlockedExchange(&i->fast_io_header.read_in_progress_flag, 1);
 
-					auto write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+					auto write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0,
+					                                              0);
 
-					auto current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
+					auto current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
+						number_of_packets;
 
 					//
 					// Copy packets and reset section
 					//
 
-					memmove(&packet_buffer_[fast_io_packets_success], &i->fast_io_packets[0], sizeof(INTERMEDIATE_BUFFER) * (current_packets_success - 1));
+					memmove(&packet_buffer_[fast_io_packets_success], &i->fast_io_packets[0],
+					        sizeof(INTERMEDIATE_BUFFER) * (current_packets_success - 1));
 
 					// For the last packet(s) wait the write completion if in progress
 					write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
 
 					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
 					{
-						write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
+						write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0,
+						                                         0);
 					}
 
 					// Copy the last packet(s)
-					memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
-					        i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
-					if (current_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets)
+					memmove(
+						&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
+						i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+					if (current_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
+						number_of_packets)
 					{
-						current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.number_of_packets;
-						memmove(&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
-						        i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
+						current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
+							number_of_packets;
+						memmove(
+							&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success -
+								1], &
+							i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
 					}
 
 					InterlockedExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0);
@@ -404,7 +430,7 @@ namespace ndisapi
 			{
 				auto packet_action = packet_action::pass;
 
-				if(packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
+				if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 				{
 					if (filter_outgoing_packet_ != nullptr)
 						packet_action = filter_outgoing_packet_(packet_buffer_[i].m_hAdapter, packet_buffer_[i]);

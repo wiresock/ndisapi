@@ -6,7 +6,8 @@
 
 int main()
 {
-	try {
+	try
+	{
 		std::wstring app_name_w;
 		uint16_t local_proxy_port;
 		uint16_t socks5_server_port;
@@ -14,9 +15,8 @@ int main()
 		std::mutex mapper_lock;
 
 		WSADATA wsa_data;
-		const auto version_requested = MAKEWORD(2, 2);
 
-		if (::WSAStartup(version_requested, &wsa_data) != 0)
+		if (const auto version_requested = MAKEWORD(2, 2); WSAStartup(version_requested, &wsa_data) != 0)
 		{
 			std::cout << "WSAStartup failed with error\n";
 			return 1;
@@ -26,26 +26,29 @@ int main()
 			nullptr,
 			[&app_name_w, &local_proxy_port, &mapper, &mapper_lock](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
 			{
-				thread_local ndisapi::local_redirector redirect{ local_proxy_port };  // NOLINT(clang-diagnostic-exit-time-destructors)
+				thread_local ndisapi::local_redirector redirect{local_proxy_port};  // NOLINT(clang-diagnostic-exit-time-destructors)
 
-				auto* const ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer);
-
-				if (ntohs(ether_header->h_proto) == ETH_P_IP)
+				if (auto * const ether_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer); ntohs(ether_header->h_proto) == ETH_P_IP)
 				{
-					auto* const ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1);
-
-					if (ip_header->ip_p == IPPROTO_TCP)
+					if (auto * const ip_header = reinterpret_cast<iphdr_ptr>(ether_header + 1); ip_header->ip_p == IPPROTO_TCP)
 					{
-						auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) * ip_header->ip_hl);
+						auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) +
+							sizeof(DWORD) * ip_header->ip_hl);
 
 						auto process = iphelper::process_lookup<net::ip_address_v4>::get_process_helper().
-							lookup_process_for_tcp<false>(net::ip_session<net::ip_address_v4>{ip_header->ip_src, ip_header->ip_dst, ntohs(tcp_header->th_sport), ntohs(tcp_header->th_dport)});
+							lookup_process_for_tcp<false>(net::ip_session<net::ip_address_v4>{
+								ip_header->ip_src, ip_header->ip_dst, ntohs(tcp_header->th_sport),
+								ntohs(tcp_header->th_dport)
+							});
 
 						if (!process)
 						{
 							iphelper::process_lookup<net::ip_address_v4>::get_process_helper().actualize(true, false);
 							process = iphelper::process_lookup<net::ip_address_v4>::get_process_helper().
-								lookup_process_for_tcp<true>(net::ip_session<net::ip_address_v4>{ip_header->ip_src, ip_header->ip_dst, ntohs(tcp_header->th_sport), ntohs(tcp_header->th_dport)});
+								lookup_process_for_tcp<true>(net::ip_session<net::ip_address_v4>{
+									ip_header->ip_src, ip_header->ip_dst, ntohs(tcp_header->th_sport),
+									ntohs(tcp_header->th_dport)
+								});
 						}
 
 						if (process->name.find(app_name_w) != std::wstring::npos)
@@ -53,7 +56,8 @@ int main()
 							if (tcp_header->th_flags == TH_SYN)
 							{
 								std::lock_guard<std::mutex> lock(mapper_lock);
-								mapper[ntohs(tcp_header->th_sport)] = std::make_pair(net::ip_address_v4(ip_header->ip_dst), ntohs(tcp_header->th_dport));
+								mapper[ntohs(tcp_header->th_sport)] = std::make_pair(
+									net::ip_address_v4(ip_header->ip_dst), ntohs(tcp_header->th_dport));
 							}
 
 							if (redirect.process_client_to_server_packet(buffer))
@@ -75,7 +79,7 @@ int main()
 					}
 				}
 
-				return ndisapi::packet_action::pass;
+				return ndisapi::fastio_packet_filter::packet_action::pass;
 			}, false);
 
 		if (ndis_api->IsDriverLoaded())
@@ -119,30 +123,31 @@ int main()
 
 		proxy::tcp_proxy_server<proxy::socks5_tcp_proxy_socket<net::ip_address_v4>> proxy(
 			local_proxy_port, io_port, [&socks5_server_port, &mapper, &mapper_lock](
-				net::ip_address_v4 address, const uint16_t port)->std::tuple<net::ip_address_v4, uint16_t, std::unique_ptr<proxy::tcp_proxy_server<proxy::
-			socks5_tcp_proxy_socket<net::ip_address_v4>>::negotiate_context_t>>
-		{
-
-			std::lock_guard<std::mutex> lock(mapper_lock);
-
-			const auto it = mapper.find(port);
-
-			if (it != mapper.end())
+			net::ip_address_v4 address,
+			const uint16_t port)-> std::tuple<net::ip_address_v4, uint16_t, std::unique_ptr<proxy::tcp_proxy_server<
+				                                  proxy::
+				                                  socks5_tcp_proxy_socket<net::ip_address_v4>>::negotiate_context_t>>
 			{
-				std::cout << "Redirect entry was found for the port " << port << " is " << it->second.first << ":" << it->second.second << "\n";
+				std::lock_guard<std::mutex> lock(mapper_lock);
 
-				auto remote_address = it->second.first;
-				auto remote_port = it->second.second;
+				if (const auto it = mapper.find(port); it != mapper.end())
+				{
+					std::cout << "Redirect entry was found for the port " << port << " is " << it->second.first << ":"
+						<< it->second.second << "\n";
 
-				mapper.erase(it);
+					auto remote_address = it->second.first;
+					auto remote_port = it->second.second;
 
-				return std::make_tuple(net::ip_address_v4("127.0.0.1"), socks5_server_port,
-					std::make_unique<proxy::socks5_tcp_proxy_socket<net::ip_address_v4>::negotiate_context_t>(
-						remote_address, remote_port));
-			}
+					mapper.erase(it);
 
-			return std::make_tuple(net::ip_address_v4{}, 0, nullptr);
-		});
+					return std::make_tuple(net::ip_address_v4("127.0.0.1"), socks5_server_port,
+					                       std::make_unique<proxy::socks5_tcp_proxy_socket<
+						                       net::ip_address_v4>::negotiate_context_t>(
+						                       remote_address, remote_port));
+				}
+
+				return std::make_tuple(net::ip_address_v4{}, 0, nullptr);
+			}, nullptr, netlib::log::log_level::none);
 
 		ndis_api->start_filter(index - 1);
 
@@ -154,15 +159,14 @@ int main()
 
 		io_port.stop_thread_pool();
 
-		::WSACleanup();
+		WSACleanup();
 
 		std::cout << "Exiting..." << std::endl;
 	}
-	catch(const std::exception& ex)
+	catch (const std::exception& ex)
 	{
 		std::cout << "Exception occurred: " << ex.what() << std::endl;
 	}
 
 	return 0;
 }
-

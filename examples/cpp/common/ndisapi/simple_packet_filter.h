@@ -9,15 +9,6 @@
 
 namespace ndisapi
 {
-	inline const size_t maximum_packet_block = 510;
-
-	enum class packet_action
-	{
-		pass,
-		drop,
-		revert
-	};
-
 	// --------------------------------------------------------------------------------
 	/// <summary>
 	/// simple winpkfilter based filter class for quick prototyping 
@@ -25,9 +16,27 @@ namespace ndisapi
 	// --------------------------------------------------------------------------------
 	class simple_packet_filter final : public CNdisApi
 	{
-		using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
-			sizeof(NDISRD_ETH_Packet) * (maximum_packet_block - 1), 0x1000>;
+	public:
+		enum class packet_action
+		{
+			pass,
+			drop,
+			revert
+		};
 
+	private:
+		static constexpr size_t maximum_packet_block = 510;
+
+		using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
+		                                                      sizeof(NDISRD_ETH_Packet) * (maximum_packet_block - 1),
+		                                                      0x1000>;
+
+		simple_packet_filter()
+		{
+			initialize_network_interfaces();
+		}
+
+	public:
 		enum class filter_state
 		{
 			stopped,
@@ -35,14 +44,8 @@ namespace ndisapi
 			running,
 			stopping
 		};
-		
-		simple_packet_filter()
-		{
-			initialize_network_interfaces();
-		}
-	
-	public:
-		~simple_packet_filter() { stop_filter(); }
+
+		~simple_packet_filter() override { stop_filter(); }
 
 		simple_packet_filter(const simple_packet_filter& other) = delete;
 		simple_packet_filter(simple_packet_filter&& other) noexcept = delete;
@@ -57,12 +60,13 @@ namespace ndisapi
 		/// <param name="out">outgoing packet handling routine</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		template<typename F1, typename F2>
+		template <typename F1, typename F2>
 		simple_packet_filter(F1 in, F2 out) : simple_packet_filter()
 		{
 			filter_incoming_packet_ = in;
 			filter_outgoing_packet_ = out;
 		}
+
 		// ********************************************************************************
 		/// <summary>
 		/// Updates available network interfaces. Should be called when the filter is inactive. 
@@ -100,6 +104,17 @@ namespace ndisapi
 		/// <returns>vector of available network adapters</returns>
 		// ********************************************************************************
 		const std::vector<std::unique_ptr<network_adapter>>& get_interface_list() const;
+
+		// ********************************************************************************
+		/// <summary>
+		/// Returns current filter state
+		/// </summary>
+		/// <returns>current filter state</returns>
+		// ********************************************************************************
+		[[nodiscard]] filter_state get_filter_state() const
+		{
+			return filter_state_.load();
+		}
 
 	private:
 		// ********************************************************************************
@@ -139,7 +154,7 @@ namespace ndisapi
 		/// <summary>working thread object</summary>
 		std::thread working_thread_;
 		/// <summary>filtered adapter index</summary>
-		size_t adapter_{ 0 };
+		size_t adapter_{0};
 		/// <summary>array of INTERMEDIATE_BUFFER structures</summary>
 		std::unique_ptr<INTERMEDIATE_BUFFER[]> packet_buffer_;
 		/// <summary>driver request for reading packets</summary>
@@ -165,9 +180,9 @@ namespace ndisapi
 			return false;
 		}
 
-		auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
-		auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
-		auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
+		auto* read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
+		auto* write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
+		auto* write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
 
 		read_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
 		write_adapter_request->hAdapterHandle = network_interfaces_[adapter_]->get_adapter();
@@ -233,7 +248,7 @@ namespace ndisapi
 	{
 		if (filter_state_ != filter_state::stopped)
 			return false;
-		
+
 		filter_state_ = filter_state::starting;
 
 		adapter_ = adapter;
@@ -280,14 +295,15 @@ namespace ndisapi
 
 	inline void simple_packet_filter::initialize_network_interfaces()
 	{
-		TCP_AdapterList			ad_list;
-		std::vector<char>		friendly_name(MAX_PATH * 4);
+		TCP_AdapterList ad_list;
+		std::vector<char> friendly_name(MAX_PATH * 4);
 
 		GetTcpipBoundAdaptersInfo(&ad_list);
 
 		for (size_t i = 0; i < ad_list.m_nAdapterCount; ++i)
 		{
-			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]), friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
+			ConvertWindows2000AdapterName(reinterpret_cast<const char*>(ad_list.m_szAdapterNameList[i]),
+			                              friendly_name.data(), static_cast<DWORD>(friendly_name.size()));
 
 			network_interfaces_.push_back(
 				std::make_unique<network_adapter>(
@@ -304,10 +320,10 @@ namespace ndisapi
 	inline void simple_packet_filter::filter_working_thread()
 	{
 		filter_state_ = filter_state::running;
-		
-		auto read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
-		auto write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
-		auto write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
+
+		auto* read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
+		auto* write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
+		auto* write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
 
 		while (filter_state_ == filter_state::running)
 		{
@@ -337,25 +353,29 @@ namespace ndisapi
 					{
 						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_SEND)
 						{
-							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
+							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &
+								packet_buffer_[i];
 							++write_adapter_request->dwPacketsNumber;
 						}
 						else
 						{
-							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
+							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &
+								packet_buffer_[i];
 							++write_mstcp_request->dwPacketsNumber;
 						}
 					}
-					else if(packet_action == packet_action::revert)
+					else if (packet_action == packet_action::revert)
 					{
 						if (packet_buffer_[i].m_dwDeviceFlags == PACKET_FLAG_ON_RECEIVE)
 						{
-							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
+							write_adapter_request->EthPacket[write_adapter_request->dwPacketsNumber].Buffer = &
+								packet_buffer_[i];
 							++write_adapter_request->dwPacketsNumber;
 						}
 						else
 						{
-							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &packet_buffer_[i];
+							write_mstcp_request->EthPacket[write_mstcp_request->dwPacketsNumber].Buffer = &
+								packet_buffer_[i];
 							++write_mstcp_request->dwPacketsNumber;
 						}
 					}

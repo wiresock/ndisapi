@@ -2,55 +2,6 @@
 
 namespace proxy
 {
-#pragma pack(push,1)
-	struct socks5_ident_req
-	{
-		unsigned char version;
-		unsigned char number_of_methods;
-		unsigned char methods[ANY_SIZE];
-	};
-
-	struct socks5_ident_resp
-	{
-		unsigned char version;
-		unsigned char method;
-	};
-
-	struct socks5_req
-	{
-		unsigned char version;
-		unsigned char cmd;
-		unsigned char reserved;
-		unsigned char address_type;
-		union {
-			in_addr ip_v4;
-			//	in6_addr ip_v6;
-			//	struct {
-			//		unsigned char domain_len;
-			//		char domain[256];
-			//	};
-		} dest_address;
-		unsigned short dest_port;
-	};
-
-	struct socks5_resp
-	{
-		unsigned char version;
-		unsigned char reply;
-		unsigned char reserved;
-		unsigned char address_type;
-		union {
-			in_addr ip_v4;
-			//in6_addr ip_v6;
-			//struct {
-			//	unsigned char domain_len;
-			//	char domain[256];
-			//};
-		} bind_address;
-		unsigned short bind_port;
-	};
-#pragma pack(pop)
-
 	template <typename T>
 	class socks5_tcp_proxy_socket final : public tcp_proxy_socket<T>
 	{
@@ -68,8 +19,9 @@ namespace proxy
 		using per_io_context_t = tcp_per_io_context<T>;
 
 		socks5_tcp_proxy_socket(const SOCKET local_socket, const SOCKET remote_socket,
-			std::unique_ptr<negotiate_context_t> negotiate_ctx)
-			: tcp_proxy_socket<T>(local_socket, remote_socket, std::move(negotiate_ctx))
+			std::unique_ptr<negotiate_context_t> negotiate_ctx,
+			std::function<void(const char*)> log_printer, const netlib::log::log_level log_level)
+			: tcp_proxy_socket<T>(local_socket, remote_socket, std::move(negotiate_ctx), std::move(log_printer), log_level)
 		{
 		}
 

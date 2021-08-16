@@ -9,7 +9,7 @@
 
 // Set network filter for the interface
 inline unsigned long network_adapter::get_hw_filter() const
-{ 
+{
 	unsigned long result = 0;
 
 	api_.GetHwPacketFilter(current_mode_.hAdapterHandle, &result);
@@ -42,20 +42,18 @@ void network_adapter::set_mode(const unsigned flags)
 	api_.SetAdapterMode(&current_mode_);
 }
 
-void network_adapter::set_mac_for_ip(net::ip_address_v4 const& ip, unsigned char* mac)
+void network_adapter::set_mac_for_ip(const net::ip_address_v4& ip, unsigned char* mac)
 {
 	std::lock_guard<std::mutex> guard(ip_to_mac_mutex_);
-	
+
 	ip_to_mac_[ip] = net::mac_address(mac);
 }
 
-net::mac_address network_adapter::get_mac_by_ip(net::ip_address_v4 const & ip)
+net::mac_address network_adapter::get_mac_by_ip(const net::ip_address_v4& ip)
 {
 	std::lock_guard<std::mutex> guard(ip_to_mac_mutex_);
 
-	const auto search = ip_to_mac_.find(ip);
-
-	if (search != ip_to_mac_.end())
+	if (const auto search = ip_to_mac_.find(ip); search != ip_to_mac_.end())
 	{
 		return search->second;
 	}
@@ -73,7 +71,8 @@ void network_adapter::initialize_interface() noexcept
 	//
 	// Query physical media for the network interface to check is this is WLAN network adapter
 	//
-	const auto phys_medium_request = reinterpret_cast<PPACKET_OID_DATA>(new char[sizeof(PACKET_OID_DATA) + sizeof(DWORD) - 1]);
+	const auto phys_medium_request = reinterpret_cast<PPACKET_OID_DATA>(new char[sizeof(PACKET_OID_DATA) + sizeof(DWORD)
+		- 1]);
 	phys_medium_request->Length = sizeof(DWORD);
 	phys_medium_request->Oid = OID_GEN_PHYSICAL_MEDIUM;
 

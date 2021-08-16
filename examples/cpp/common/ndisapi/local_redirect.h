@@ -8,7 +8,7 @@ namespace ndisapi
 
 		local_redirect_key(const net::ip_address_v4& original_dest_ip, const u_short original_src_port)
 			: original_dest_ip(original_dest_ip),
-			original_src_port(original_src_port)
+			  original_src_port(original_src_port)
 		{
 		}
 
@@ -23,20 +23,22 @@ namespace ndisapi
 			return !(lhs == rhs);
 		}
 
-		net::ip_address_v4	original_dest_ip{};
-		u_short				original_src_port = 0;
+		net::ip_address_v4 original_dest_ip{};
+		u_short original_src_port = 0;
 	};
 }
 
 namespace std
 {
-	template<> struct hash<ndisapi::local_redirect_key>
+	template <>
+	struct hash<ndisapi::local_redirect_key>
 	{
 		using argument_type = ndisapi::local_redirect_key;
 		using result_type = size_t;
-		result_type operator()(argument_type const& key) const noexcept
+
+		result_type operator()(const argument_type& key) const noexcept
 		{
-			auto const h1(std::hash<net::ip_address_v4>{}(key.original_dest_ip) ^ key.original_src_port);
+			const auto h1(std::hash<net::ip_address_v4>{}(key.original_dest_ip) ^ key.original_src_port);
 
 			return h1;
 		}
@@ -53,19 +55,18 @@ namespace ndisapi
 		{
 		}
 
-		u_short get_proxy_port() const
+		[[nodiscard]] u_short get_proxy_port() const
 		{
 			return ntohs(proxy_port_);
 		}
 
 		bool process_client_to_server_packet(INTERMEDIATE_BUFFER& packet)
 		{
-			ether_header_ptr	eth_header = nullptr;
-			iphdr_ptr			ip_header = nullptr;
-			tcphdr_ptr			tcp_header = nullptr;
+			iphdr_ptr ip_header;
+			tcphdr_ptr tcp_header;
 
-			eth_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
-			
+			auto eth_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
+
 			if (ntohs(eth_header->h_proto) == ETH_P_IP)
 			{
 				ip_header = reinterpret_cast<iphdr_ptr>(packet.m_IBuffer + ETHER_HEADER_LENGTH);
@@ -73,7 +74,8 @@ namespace ndisapi
 				if (ip_header->ip_p == IPPROTO_TCP)
 				{
 					// This is TCP packet, get TCP header pointer
-					tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
+					tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) *
+						ip_header->ip_hl);
 				}
 				else
 				{
@@ -85,19 +87,18 @@ namespace ndisapi
 				return false;
 			}
 
-			if(tcp_header->th_flags == TH_SYN)
+			if (tcp_header->th_flags == TH_SYN)
 			{
-				// new connection
-				const auto[it, result] = redirected_connections_.emplace(local_redirect_key{ net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_sport }, tcp_header->th_dport);
-				
-				if (!result)
+				if (const auto [it, result] = redirected_connections_.emplace(
+					local_redirect_key{net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_sport},
+					tcp_header->th_dport); !result)
 					return false;
 			}
 			else
 			{
-				// existing connection
-				const auto it = redirected_connections_.find(local_redirect_key{ net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_sport });
-				if (it == redirected_connections_.cend())
+				if (const auto it = redirected_connections_.find(local_redirect_key{
+					net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_sport
+				}); it == redirected_connections_.cend())
 					return false;
 			}
 
@@ -114,11 +115,10 @@ namespace ndisapi
 
 		bool process_server_to_client_packet(INTERMEDIATE_BUFFER& packet)
 		{
-			ether_header_ptr	eth_header = nullptr;
-			iphdr_ptr			ip_header = nullptr;
-			tcphdr_ptr			tcp_header = nullptr;
+			iphdr_ptr ip_header;
+			tcphdr_ptr tcp_header;
 
-			eth_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
+			auto eth_header = reinterpret_cast<ether_header_ptr>(packet.m_IBuffer);
 
 			if (ntohs(eth_header->h_proto) == ETH_P_IP)
 			{
@@ -127,7 +127,8 @@ namespace ndisapi
 				if (ip_header->ip_p == IPPROTO_TCP)
 				{
 					// This is TCP packet, get TCP header pointer
-					tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD)*ip_header->ip_hl);
+					tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) + sizeof(DWORD) *
+						ip_header->ip_hl);
 				}
 				else
 				{
@@ -139,7 +140,9 @@ namespace ndisapi
 				return false;
 			}
 
-			const auto it = redirected_connections_.find(local_redirect_key{ net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_dport });
+			const auto it = redirected_connections_.find(local_redirect_key{
+				net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_dport
+			});
 			if (it == redirected_connections_.cend())
 				return false;
 
@@ -160,5 +163,3 @@ namespace ndisapi
 		u_short proxy_port_;
 	};
 }
-
-

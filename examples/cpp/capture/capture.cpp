@@ -6,22 +6,23 @@
 
 int main()
 {
-	try {
+	try
+	{
 		std::string file_name;
 		pcap::pcap_file_storage file_stream;
 
 		auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
-			[&file_stream](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
+			[&file_stream](HANDLE, INTERMEDIATE_BUFFER& buffer)
 			{
 				file_stream << buffer;
 
-				return ndisapi::packet_action::pass;
+				return ndisapi::fastio_packet_filter::packet_action::pass;
 			},
-			[&file_stream](HANDLE adapter_handle, INTERMEDIATE_BUFFER& buffer)
+			[&file_stream](HANDLE, INTERMEDIATE_BUFFER& buffer)
 			{
 				file_stream << buffer;
 
-				return ndisapi::packet_action::pass;
+				return ndisapi::fastio_packet_filter::packet_action::pass;
 			}, true);
 
 		if (ndis_api->IsDriverLoaded())
@@ -69,11 +70,10 @@ int main()
 
 		std::cout << "Exiting..." << std::endl;
 	}
-	catch(const std::exception& ex)
+	catch (const std::exception& ex)
 	{
 		std::cout << "Exception occurred: " << ex.what() << std::endl;
 	}
 
 	return 0;
 }
-

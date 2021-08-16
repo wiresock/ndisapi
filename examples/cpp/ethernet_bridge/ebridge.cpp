@@ -15,14 +15,15 @@ int main(int argc, char* argv[])
 	// Check if driver was loaded properly
 	if (!ether_bridge.IsDriverLoaded())
 	{
-		cout << "Driver not installed on this system of failed to load. Please install WinpkFilter drivers first." << endl;
+		cout << "Driver not installed on this system of failed to load. Please install WinpkFilter drivers first." <<
+			endl;
 		return 0;
 	}
 
 	cout << "Available network interfaces:" << endl << endl;
-	for (auto& e : ether_bridge.get_interface_list())
+	for (auto& [friendly, native] : ether_bridge.get_interface_list())
 	{
-		cout << ++index <<") " << e.first << endl;
+		cout << ++index << ") " << friendly << endl;
 	}
 
 	cout << endl;
@@ -40,7 +41,8 @@ int main(int argc, char* argv[])
 		interfaces.push_back(index - 1);
 	}
 
-	try {
+	try
+	{
 		if (ether_bridge.start_bridge(interfaces))
 			cout << "Ethernet Bridge has started successfully!" << endl;
 		else
@@ -55,11 +57,10 @@ int main(int argc, char* argv[])
 	}
 
 	cout << "Press any key to stop bridging" << endl;
- 
+
 	std::ignore = _getch();
 
 	printf("Exiting... \n");
- 
+
 	return 0;
 }
-

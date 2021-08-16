@@ -1,7 +1,7 @@
 #pragma once
 
-namespace winsys {
-
+namespace winsys
+{
 	// --------------------------------------------------------------------------------
 	/// <summary>
 	/// represents a thread pool for the derived CRTP classes
@@ -13,15 +13,14 @@ namespace winsys {
 	{
 		/// <summary>working threads container</summary>
 		std::vector<std::thread> threads_;
-	
+
 	protected:
 		/// <summary>thread pool termination flag</summary>
-		std::atomic_bool active_{ false };				
+		std::atomic_bool active_{false};
 		/// <summary>number of concurrent threads in the pool</summary>
 		uint32_t concurrent_threads_;
 
 	public:
-
 		thread_pool(const thread_pool& other) = delete;
 
 		thread_pool(thread_pool&& other) noexcept
@@ -51,7 +50,9 @@ namespace winsys {
 		/// <returns></returns>
 		// ********************************************************************************
 		explicit thread_pool(const uint32_t concurrent_threads = 0):
-			concurrent_threads_{ (concurrent_threads == 0)? std::thread::hardware_concurrency(): concurrent_threads }{}
+			concurrent_threads_{(concurrent_threads == 0) ? std::thread::hardware_concurrency() : concurrent_threads}
+		{
+		}
 
 		// ********************************************************************************
 		/// <summary>
@@ -103,7 +104,7 @@ namespace winsys {
 	/// </summary>
 	// --------------------------------------------------------------------------------
 	class io_completion_port final : public safe_object_handle, public thread_pool<io_completion_port>
-	{	
+	{
 		friend thread_pool;
 
 	public:
@@ -135,7 +136,8 @@ namespace winsys {
 			if (this == &other)
 				return *this;
 			safe_object_handle::operator =(std::move(static_cast<safe_object_handle&>(other)));
-			thread_pool<io_completion_port>::operator =(std::move(static_cast<thread_pool<io_completion_port>&>(other)));
+			thread_pool<io_completion_port>::operator
+				=(std::move(static_cast<thread_pool<io_completion_port>&>(other)));
 			handlers_lock_ = std::move(other.handlers_lock_);
 			handlers_ = std::move(other.handlers_);
 			handlers_keys_ = std::move(other.handlers_keys_);
@@ -146,9 +148,9 @@ namespace winsys {
 		/// <summary>synchronization lock for handlers below (accessed concurrently)</summary>
 		std::unique_ptr<std::shared_mutex> handlers_lock_;
 		/// <summary>callback handlers storage</summary>
-		std::vector<std::unique_ptr<std::function<callback_t>>>	handlers_;
+		std::vector<std::unique_ptr<std::function<callback_t>>> handlers_;
 		/// <summary>callback keys (convertible to pointers in the storage above)</summary>
-		std::set<ULONG_PTR>	handlers_keys_;
+		std::set<ULONG_PTR> handlers_keys_;
 
 		// ********************************************************************************
 		/// <summary>
@@ -157,13 +159,14 @@ namespace winsys {
 		// ********************************************************************************
 		void start_thread() const
 		{
-			DWORD		num_bytes;
-			ULONG_PTR	completion_key;
+			DWORD num_bytes;
+			ULONG_PTR completion_key;
 			OVERLAPPED* overlapped_ptr;
 
 			do
 			{
-				const auto ok = ::GetQueuedCompletionStatus(get(), &num_bytes, &completion_key, &overlapped_ptr, INFINITE);
+				const auto ok =
+					GetQueuedCompletionStatus(get(), &num_bytes, &completion_key, &overlapped_ptr, INFINITE);
 
 				if (!active_)
 					return;
@@ -179,33 +182,35 @@ namespace winsys {
 				}
 
 #ifdef _DEBUG
-				if (!ok)
-				{
-					const auto error = ::GetLastError();
+				//if (!ok)
+				//{
+				//	const auto error = ::GetLastError();
 
-					if (overlapped_ptr != nullptr)
-					{
-						// log a failed completed I/O request, error contains the reason for failure
-						std::cout << "io_completion_port::Failed completed I/O request: " << std::to_string(error) << std::endl;
-					}
-					else
-					{
-						if (error == WAIT_TIMEOUT)
-						{
-							// Time out while watching for the new entry
-							std::cout << "io_completion_port::Time out while watching for the new entry: " << std::to_string(error) << std::endl;
-							
-						}
-						else
-						{
-							// Log bad call to GetQueuedCompletionStatus, error contain the reason for the bad call
-							std::cout << "io_completion_port::Bad call to GetQueuedCompletionStatus: " << std::to_string(error) << std::endl;
-						}
-					}
-				}
+				//	if (overlapped_ptr != nullptr)
+				//	{
+				//		// log a failed completed I/O request, error contains the reason for failure
+				//		std::cout << "io_completion_port::Failed completed I/O request: " << std::to_string(error) << std::endl;
+				//	}
+				//	else
+				//	{
+				//		if (error == WAIT_TIMEOUT)
+				//		{
+				//			// Time out while watching for the new entry
+				//			std::cout << "io_completion_port::Time out while watching for the new entry: " << std::to_string(error) << std::endl;
+				//			
+				//		}
+				//		else
+				//		{
+				//			// Log bad call to GetQueuedCompletionStatus, error contain the reason for the bad call
+				//			std::cout << "io_completion_port::Bad call to GetQueuedCompletionStatus: " << std::to_string(error) << std::endl;
+				//		}
+				//	}
+				//}
 #endif
-			} while (active_);
+			}
+			while (active_);
 		}
+
 		// ********************************************************************************
 		/// <summary>
 		/// signals threads in the thread pool to check for exit
@@ -213,12 +218,11 @@ namespace winsys {
 		// ********************************************************************************
 		void stop_thread() const
 		{
-			OVERLAPPED overlapped{0, 0, 0, 0,nullptr };
-			::PostQueuedCompletionStatus(get(), 0, 0, &overlapped);
+			OVERLAPPED overlapped{0, 0, {0, 0}, nullptr};
+			PostQueuedCompletionStatus(get(), 0, 0, &overlapped);
 		}
 
 	public:
-
 		// ********************************************************************************
 		/// <summary>
 		/// constructs io_completion_port object from the existing HANDLE
@@ -227,10 +231,10 @@ namespace winsys {
 		/// <param name="concurrent_threads">number of concurrent threads for I/O completion port (zero means as many threads as cores)</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		explicit io_completion_port(HANDLE handle, const uint32_t concurrent_threads = 0) : 
+		explicit io_completion_port(HANDLE handle, const uint32_t concurrent_threads = 0) :
 			safe_object_handle(handle),
 			thread_pool<io_completion_port>(concurrent_threads),
-			handlers_lock_{ std::make_unique<std::shared_mutex>() }
+			handlers_lock_{std::make_unique<std::shared_mutex>()}
 		{
 		}
 
@@ -243,12 +247,12 @@ namespace winsys {
 		// ********************************************************************************
 		explicit io_completion_port(const uint32_t concurrent_threads = 0) :
 			io_completion_port(
-				::CreateIoCompletionPort(
+				CreateIoCompletionPort(
 					INVALID_HANDLE_VALUE,
 					nullptr,
 					0,
 					static_cast<DWORD>(concurrent_threads)),
-					concurrent_threads
+				concurrent_threads
 			)
 		{
 		}
@@ -294,15 +298,15 @@ namespace winsys {
 		std::pair<bool, ULONG_PTR> associate_device(HANDLE file_object, const std::function<callback_t>& io_handler)
 		{
 			// handler can't be null
-			if(!io_handler)
+			if (!io_handler)
 				return std::make_pair(false, 0);
 
 			// Create storage for the callback and use pointer to that storage as an I/O completion port key
 			auto handler_ptr = std::make_unique<std::function<callback_t>>(io_handler);
 			auto handler_key = reinterpret_cast<ULONG_PTR>(handler_ptr.get());
 
-			const auto h = ::CreateIoCompletionPort(file_object, get(), handler_key, 0);
-			
+			const auto h = CreateIoCompletionPort(file_object, get(), handler_key, 0);
+
 			if (h == get())
 			{
 				{
@@ -314,10 +318,7 @@ namespace winsys {
 
 				return std::make_pair(true, handler_key);
 			}
-			else
-			{
-				return std::make_pair(false, 0);
-			}
+			return std::make_pair(false, 0);
 		}
 
 		// ********************************************************************************
@@ -337,7 +338,7 @@ namespace winsys {
 
 			if (it != handlers_keys_.end())
 			{
-				const auto h = ::CreateIoCompletionPort(file_object, get(), key, 0);
+				const auto h = CreateIoCompletionPort(file_object, get(), key, 0);
 
 				if (h == get())
 				{

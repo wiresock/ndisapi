@@ -1,7 +1,7 @@
 #pragma once
 
-namespace winsys {
-
+namespace winsys
+{
 	// --------------------------------------------------------------------------------
 	/// <summary>
 	/// simple wrapper class for Windows handle
@@ -10,25 +10,39 @@ namespace winsys {
 	class safe_object_handle : public std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>
 	{
 	public:
-		// ********************************************************************************
 		/// <summary>
-		/// constructs the object from the existing handle value
+		/// Constructs the object from the existing handle value
 		/// </summary>
 		/// <param name="handle"></param>
-		// ********************************************************************************
+		// ReSharper disable once CppParameterMayBeConst
 		explicit safe_object_handle(HANDLE handle) : unique_ptr(handle, &safe_object_handle::close)
 		{
 		}
 
+		/// <summary>
+		/// Deleted copy constructor
+		/// </summary>
 		safe_object_handle(const safe_object_handle& other) = delete;
 
+		/// <summary>
+		/// Move constructor
+		/// </summary>
+		/// <param name="other">Object instance to move from</param>
 		safe_object_handle(safe_object_handle&& other) noexcept
 			: std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>{std::move(other)}
 		{
 		}
 
+		/// <summary>
+		/// Deleted copy assignment
+		/// </summary>
 		safe_object_handle& operator=(const safe_object_handle& other) = delete;
 
+		/// <summary>
+		/// Move assignment
+		/// </summary>
+		/// <param name="other">Object instance to move from</param>
+		/// <returns>this object reference</returns>
 		safe_object_handle& operator=(safe_object_handle&& other) noexcept
 		{
 			if (this == &other)
@@ -37,38 +51,39 @@ namespace winsys {
 			return *this;
 		}
 
-		// ********************************************************************************
 		/// <summary>
-		/// returns the stored handle value
+		/// Default destructor
 		/// </summary>
-		// ********************************************************************************
+		/// <returns></returns>
+		~safe_object_handle() = default;
+
+		/// <summary>
+		/// Returns the stored handle value
+		/// </summary>
 		explicit operator HANDLE() const
 		{
 			return get();
 		}
 
-		// ********************************************************************************
 		/// <summary>
-		/// checks the stored handle value for validity
+		/// Checks the stored handle value for validity
 		/// </summary>
 		/// <returns>true if valid, false otherwise</returns>
-		// ********************************************************************************
-		bool valid() const
+		[[nodiscard]] bool valid() const
 		{
 			return ((get() != INVALID_HANDLE_VALUE) && (get() != nullptr));
 		}
 
 	private:
-		// ********************************************************************************
 		/// <summary>
 		/// deleter for the stored windows handle (calls CloseHandle for the handle)
 		/// </summary>
 		/// <param name="handle">windows handle to close</param>
-		// ********************************************************************************
+		// ReSharper disable once CppParameterMayBeConst
 		static void close(HANDLE handle)
 		{
 			if ((handle != INVALID_HANDLE_VALUE) && (handle != nullptr))
-				::CloseHandle(handle);
+				CloseHandle(handle);
 		}
 	};
 }
