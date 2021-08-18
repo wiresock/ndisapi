@@ -20,9 +20,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x021D3000
+#define NDISRD_VERSION			0x021F3000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x021D
+#define NDISRD_MINOR_VERSION	0x021F
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"
