@@ -42,6 +42,8 @@ namespace winsys
 			return *this;
 		}
 
+		~thread_pool() = default;
+
 		// ********************************************************************************
 		/// <summary>
 		/// initializes thread_pool with specified number of concurrent threads
@@ -49,7 +51,7 @@ namespace winsys
 		/// <param name="concurrent_threads">number of concurrent threads in the pool</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		explicit thread_pool(const uint32_t concurrent_threads = 0):
+		explicit thread_pool(const uint32_t concurrent_threads = 0) noexcept:
 			concurrent_threads_{(concurrent_threads == 0) ? std::thread::hardware_concurrency() : concurrent_threads}
 		{
 		}
@@ -90,10 +92,10 @@ namespace winsys
 				static_cast<T&>(*this).stop_thread();
 			}
 
-			for (size_t i = 0; i < threads_.size(); ++i)
+			for (auto&& thread: threads_)
 			{
-				if (threads_[i].joinable())
-					threads_[i].join();
+				if (thread.joinable())
+					thread.join();
 			}
 		}
 	};
@@ -107,6 +109,9 @@ namespace winsys
 	{
 		friend thread_pool;
 
+		using mutex_type = std::shared_mutex;
+		using read_lock = std::shared_lock<mutex_type>;
+		using write_lock = std::unique_lock<mutex_type>;
 	public:
 		// ********************************************************************************
 		/// <summary>
@@ -120,25 +125,30 @@ namespace winsys
 
 		io_completion_port(const io_completion_port& other) = delete;
 
-		io_completion_port(io_completion_port&& other) noexcept
+		io_completion_port(io_completion_port&& other) noexcept // NOLINT(bugprone-exception-escape)
 			: safe_object_handle(std::move(static_cast<safe_object_handle&>(other))),
-			  thread_pool<io_completion_port>(std::move(static_cast<thread_pool<io_completion_port>&>(other))),
-			  handlers_lock_(std::move(other.handlers_lock_)),
-			  handlers_(std::move(other.handlers_)),
-			  handlers_keys_(std::move(other.handlers_keys_))
+			  thread_pool<io_completion_port>(std::move(static_cast<thread_pool<io_completion_port>&>(other)))
+			  
 		{
+			write_lock rhs_lk(other.handlers_lock_);
+			handlers_ = std::move(other.handlers_);
+			handlers_keys_ = std::move(other.handlers_keys_);
 		}
 
 		io_completion_port& operator=(const io_completion_port& other) = delete;
 
-		io_completion_port& operator=(io_completion_port&& other) noexcept
+		io_completion_port& operator=(io_completion_port&& other) noexcept  // NOLINT(bugprone-exception-escape)
 		{
 			if (this == &other)
 				return *this;
+
+			write_lock lhs_lk(handlers_lock_, std::defer_lock);
+			write_lock rhs_lk(other.handlers_lock_, std::defer_lock);
+			std::lock(lhs_lk, rhs_lk);
+
 			safe_object_handle::operator =(std::move(static_cast<safe_object_handle&>(other)));
 			thread_pool<io_completion_port>::operator
 				=(std::move(static_cast<thread_pool<io_completion_port>&>(other)));
-			handlers_lock_ = std::move(other.handlers_lock_);
 			handlers_ = std::move(other.handlers_);
 			handlers_keys_ = std::move(other.handlers_keys_);
 			return *this;
@@ -146,7 +156,7 @@ namespace winsys
 
 	private:
 		/// <summary>synchronization lock for handlers below (accessed concurrently)</summary>
-		std::unique_ptr<std::shared_mutex> handlers_lock_;
+		mutex_type handlers_lock_;
 		/// <summary>callback handlers storage</summary>
 		std::vector<std::unique_ptr<std::function<callback_t>>> handlers_;
 		/// <summary>callback keys (convertible to pointers in the storage above)</summary>
@@ -173,40 +183,11 @@ namespace winsys
 
 				if (completion_key)
 				{
-					const auto handler = reinterpret_cast<std::function<callback_t>*>(completion_key);
-
-					if (*handler)
+					if (const auto* const handler = reinterpret_cast<std::function<callback_t>*>(completion_key); *handler)  // NOLINT(performance-no-int-to-ptr)
 					{
 						(*handler)(num_bytes, overlapped_ptr, ok);
 					}
 				}
-
-#ifdef _DEBUG
-				//if (!ok)
-				//{
-				//	const auto error = ::GetLastError();
-
-				//	if (overlapped_ptr != nullptr)
-				//	{
-				//		// log a failed completed I/O request, error contains the reason for failure
-				//		std::cout << "io_completion_port::Failed completed I/O request: " << std::to_string(error) << std::endl;
-				//	}
-				//	else
-				//	{
-				//		if (error == WAIT_TIMEOUT)
-				//		{
-				//			// Time out while watching for the new entry
-				//			std::cout << "io_completion_port::Time out while watching for the new entry: " << std::to_string(error) << std::endl;
-				//			
-				//		}
-				//		else
-				//		{
-				//			// Log bad call to GetQueuedCompletionStatus, error contain the reason for the bad call
-				//			std::cout << "io_completion_port::Bad call to GetQueuedCompletionStatus: " << std::to_string(error) << std::endl;
-				//		}
-				//	}
-				//}
-#endif
 			}
 			while (active_);
 		}
@@ -216,9 +197,9 @@ namespace winsys
 		/// signals threads in the thread pool to check for exit
 		/// </summary>
 		// ********************************************************************************
-		void stop_thread() const
+		void stop_thread() const noexcept
 		{
-			OVERLAPPED overlapped{0, 0, {0, 0}, nullptr};
+			OVERLAPPED overlapped{};
 			PostQueuedCompletionStatus(get(), 0, 0, &overlapped);
 		}
 
@@ -233,8 +214,7 @@ namespace winsys
 		// ********************************************************************************
 		explicit io_completion_port(HANDLE handle, const uint32_t concurrent_threads = 0) :
 			safe_object_handle(handle),
-			thread_pool<io_completion_port>(concurrent_threads),
-			handlers_lock_{std::make_unique<std::shared_mutex>()}
+			thread_pool<io_completion_port>(concurrent_threads)
 		{
 		}
 
@@ -245,7 +225,7 @@ namespace winsys
 		/// <param name="concurrent_threads">number of concurrent threads for I/O completion port</param>
 		/// <returns></returns>
 		// ********************************************************************************
-		explicit io_completion_port(const uint32_t concurrent_threads = 0) :
+		explicit io_completion_port(const uint32_t concurrent_threads = 0):
 			io_completion_port(
 				CreateIoCompletionPort(
 					INVALID_HANDLE_VALUE,
@@ -268,7 +248,12 @@ namespace winsys
 			if (active_ == false)
 				return;
 
-			stop_thread_pool();
+			try {
+				stop_thread_pool();
+			}
+			catch(...)
+			{
+			}
 		}
 
 		// ********************************************************************************
@@ -311,7 +296,7 @@ namespace winsys
 			{
 				{
 					// Store the key and pointer for the handler
-					std::lock_guard<std::shared_mutex> lock(*handlers_lock_);
+					std::lock_guard lock(handlers_lock_);
 					handlers_keys_.insert(handler_key);
 					handlers_.push_back(std::move(handler_ptr));
 				}
@@ -331,16 +316,11 @@ namespace winsys
 		// ********************************************************************************
 		bool associate_device(HANDLE file_object, const ULONG_PTR key)
 		{
-			std::shared_lock<std::shared_mutex> lock(*handlers_lock_);
+			std::shared_lock lock(handlers_lock_);
 
-			// Check if key already exists and thus we already have a stored callable object
-			const auto it = handlers_keys_.find(key);
-
-			if (it != handlers_keys_.end())
+			if (const auto it = handlers_keys_.find(key); it != handlers_keys_.end())
 			{
-				const auto h = CreateIoCompletionPort(file_object, get(), key, 0);
-
-				if (h == get())
+				if (const auto h = CreateIoCompletionPort(file_object, get(), key, 0); h == get())
 				{
 					return true;
 				}
@@ -359,7 +339,7 @@ namespace winsys
 		// ********************************************************************************
 		std::pair<bool, ULONG_PTR> associate_socket(const SOCKET socket, const std::function<callback_t>& io_handler)
 		{
-			return associate_device(reinterpret_cast<HANDLE>(socket), io_handler);
+			return associate_device(reinterpret_cast<HANDLE>(socket), io_handler);  // NOLINT(performance-no-int-to-ptr)
 		}
 
 		// ********************************************************************************
@@ -372,7 +352,7 @@ namespace winsys
 		// ********************************************************************************
 		bool associate_socket(const SOCKET socket, const ULONG_PTR key)
 		{
-			return associate_device(reinterpret_cast<HANDLE>(socket), key);
+			return associate_device(reinterpret_cast<HANDLE>(socket), key);  // NOLINT(performance-no-int-to-ptr)
 		}
 	};
 }

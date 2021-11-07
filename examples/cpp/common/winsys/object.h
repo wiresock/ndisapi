@@ -15,7 +15,7 @@ namespace winsys
 		/// </summary>
 		/// <param name="handle"></param>
 		// ReSharper disable once CppParameterMayBeConst
-		explicit safe_object_handle(HANDLE handle) : unique_ptr(handle, &safe_object_handle::close)
+		explicit safe_object_handle(HANDLE handle) noexcept: unique_ptr(handle, &safe_object_handle::close) 
 		{
 		}
 
@@ -60,7 +60,7 @@ namespace winsys
 		/// <summary>
 		/// Returns the stored handle value
 		/// </summary>
-		explicit operator HANDLE() const
+		explicit operator HANDLE() const noexcept
 		{
 			return get();
 		}
@@ -69,7 +69,7 @@ namespace winsys
 		/// Checks the stored handle value for validity
 		/// </summary>
 		/// <returns>true if valid, false otherwise</returns>
-		[[nodiscard]] bool valid() const
+		[[nodiscard]] bool valid() const noexcept
 		{
 			return ((get() != INVALID_HANDLE_VALUE) && (get() != nullptr));
 		}
@@ -80,7 +80,7 @@ namespace winsys
 		/// </summary>
 		/// <param name="handle">windows handle to close</param>
 		// ReSharper disable once CppParameterMayBeConst
-		static void close(HANDLE handle)
+		static void close(HANDLE handle) noexcept
 		{
 			if ((handle != INVALID_HANDLE_VALUE) && (handle != nullptr))
 				CloseHandle(handle);

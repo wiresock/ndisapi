@@ -14,7 +14,7 @@ namespace winsys
 		/// Constructs safe_event from the even object handle
 		/// </summary>
 		// ReSharper disable once CppParameterMayBeConst
-		explicit safe_event(HANDLE handle = nullptr) : safe_object_handle(handle)
+		explicit safe_event(HANDLE handle = nullptr) noexcept: safe_object_handle(handle)
 		{
 		}
 
@@ -60,7 +60,7 @@ namespace winsys
 		/// </summary>
 		/// <param name="dw_milliseconds">Wait timeout in milliseconds</param>
 		/// <returns>value returned by WaitForSingleObject</returns>
-		[[nodiscard]] unsigned wait(const unsigned dw_milliseconds) const
+		[[nodiscard]] unsigned wait(const unsigned dw_milliseconds) const noexcept
 		{
 			return WaitForSingleObject(get(), dw_milliseconds);
 		}
@@ -69,7 +69,7 @@ namespace winsys
 		/// Signals the event object
 		/// </summary>
 		/// <returns>true if the function succeeds, false otherwise</returns>
-		[[nodiscard]] bool signal() const
+		[[nodiscard]] bool signal() const noexcept
 		{
 			return SetEvent(get()) ? true : false;
 		}
@@ -78,7 +78,7 @@ namespace winsys
 		/// Resets event
 		/// </summary>
 		/// <returns>true if the function succeeds, false otherwise</returns>
-		[[nodiscard]] bool reset_event() const
+		[[nodiscard]] bool reset_event() const noexcept
 		{
 			return ResetEvent(get()) ? true : false;
 		}
