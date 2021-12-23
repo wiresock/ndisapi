@@ -20,9 +20,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x021F3000
+#define NDISRD_VERSION			0x02203000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x021F
+#define NDISRD_MINOR_VERSION	0x0220
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"
@@ -300,7 +300,7 @@ struct _ETH_802_3_FILTER
 #define ETH_802_3_SRC_ADDRESS	0x00000001
 #define ETH_802_3_DEST_ADDRESS	0x00000002
 #define ETH_802_3_PROTOCOL		0x00000004
-	unsigned long	m_ValidFields;						// Specifies which of the fileds below contain valid values and should be matched against the packet
+	unsigned long	m_ValidFields;						// Specifies which of the fields below contain valid values and should be matched against the packet
 	unsigned char	m_SrcAddress[ETHER_ADDR_LENGTH];	// Source MAC address
 	unsigned char	m_DestAddress[ETHER_ADDR_LENGTH];	// Destination MAC address
 	unsigned short	m_Protocol;							// EtherType
@@ -343,7 +343,7 @@ struct _IP_V4_FILTER
 #define IP_V4_FILTER_SRC_ADDRESS	0x00000001
 #define IP_V4_FILTER_DEST_ADDRESS	0x00000002
 #define IP_V4_FILTER_PROTOCOL		0x00000004
-	unsigned long	m_ValidFields;	// Specifies which of the fileds below contain valid values and should be matched against the packet
+	unsigned long	m_ValidFields;	// Specifies which of the fields below contain valid values and should be matched against the packet
 	IP_ADDRESS_V4	m_SrcAddress;	// IP v4 source address
 	IP_ADDRESS_V4	m_DestAddress;	// IP v4 destination address
 	unsigned char	m_Protocol;		// Specifies next protocol
@@ -386,7 +386,7 @@ struct _IP_V6_FILTER
 #define IP_V6_FILTER_SRC_ADDRESS	0x00000001
 #define IP_V6_FILTER_DEST_ADDRESS	0x00000002
 #define IP_V6_FILTER_PROTOCOL		0x00000004
-	unsigned long	m_ValidFields;	// Specifies which of the fileds below contain valid values and should be matched against the packet
+	unsigned long	m_ValidFields;	// Specifies which of the fields below contain valid values and should be matched against the packet
 	IP_ADDRESS_V6	m_SrcAddress;	// IP v4 source address
 	IP_ADDRESS_V6	m_DestAddress;	// IP v4 destination address
 	unsigned char	m_Protocol;		// Specifies next protocol
@@ -409,11 +409,30 @@ struct _TCPUDP_FILTER
 #define TCPUDP_SRC_PORT		0x00000001
 #define TCPUDP_DEST_PORT	0x00000002
 #define TCPUDP_TCP_FLAGS	0x00000004
-	unsigned long		m_ValidFields;	// Specifies which of the fileds below contain valid values and should be matched against the packet
+	unsigned long		m_ValidFields;	// Specifies which of the fields below contain valid values and should be matched against the packet
 	PORT_RANGE			m_SourcePort;	// Source port
 	PORT_RANGE			m_DestPort;		// Destination port
 	unsigned char		m_TCPFlags;		// TCP flags combination
 } TCPUDP_FILTER, *PTCPUDP_FILTER;
+
+typedef
+struct _BYTE_RANGE
+{
+	unsigned char m_StartRange;
+	unsigned char m_EndRange;
+} BYTE_RANGE, * PBYTE_RANGE;
+
+//
+// ICMP filter
+//
+typedef struct _ICMP_FILTER
+{
+#define ICMP_TYPE		0x00000001
+#define ICMP_CODE		0x00000002
+	unsigned long		m_ValidFields;	// Specifies which of the fields below contain valid values and should be matched against the packet
+	BYTE_RANGE			m_TypeRange;	// ICMP Type
+	BYTE_RANGE			m_CodeRange;	// ICMP Code
+} ICMP_FILTER, *PICMP_FILTER;
 
 //
 // Represents data link layer (OSI-7) filter level
@@ -450,10 +469,12 @@ typedef
 struct _TRANSPORT_LAYER_FILTER
 {
 #define TCPUDP	0x00000001
+#define ICMP	0x00000002
 	unsigned long m_dwUnionSelector;
 	union
 	{
-		TCPUDP_FILTER m_TcpUdp;
+		TCPUDP_FILTER	m_TcpUdp;
+		ICMP_FILTER		m_Icmp;
 	};
 } TRANSPORT_LAYER_FILTER, *PTRANSPORT_LAYER_FILTER;
 
@@ -476,7 +497,7 @@ struct _STATIC_FILTER
 	ULARGE_INTEGER		m_Adapter; // Adapter handle extended to 64 bit size for structure compatibility across x64 and x86
 	unsigned long		m_dwDirectionFlags;	// PACKET_FLAG_ON_SEND or/and PACKET_FLAG_ON_RECEIVE
 	unsigned long		m_FilterAction;		// FILTER_PACKET_XXX
-	unsigned long		m_ValidFields;		// Specifies which of the fileds below contain valid values and should be matched against the packet
+	unsigned long		m_ValidFields;		// Specifies which of the fields below contain valid values and should be matched against the packet
 
 	// Statistics for the filter
 	unsigned long		m_LastReset;		// Time of the last counters reset (in seconds passed since 1 Jan 1980)

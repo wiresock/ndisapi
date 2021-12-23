@@ -198,6 +198,7 @@ int main(int argc, char* argv[])
 		printf ("3 - Drop all IPv4 ICMP packets. Redirect all other packets to user mode (default behaviour).\n");
 		printf ("4 - Block IPv4 access to https://www.ntkernel.com. Pass all other packets without processing in user mode. \n");
 		printf ("5 - Redirect only ARP/RARP packets to user mode. Pass all others. \n");
+		printf ("6 - Redirect only outgoing ICMP ping request packets to user mode. Pass all others. \n");
 		return 0;
 	}
 
@@ -470,7 +471,7 @@ int main(int argc, char* argv[])
 
 
 		//**************************************************************************************
-		// 1. Redirects all RARP packets to be processes by user mode application
+		// 2. Redirects all RARP packets to be processes by user mode application
 		// Common values
 		pFilters->m_StaticFilters[1].m_Adapter.QuadPart = 0; // applied to all adapters
 		pFilters->m_StaticFilters[1].m_ValidFields = DATA_LINK_LAYER_VALID;
@@ -482,12 +483,45 @@ int main(int argc, char* argv[])
 
 
 		//***************************************************************************************
-		// 2. Pass all packets (skipped by previous filters) without processing in user mode
+		// 3. Pass all packets (skipped by previous filters) without processing in user mode
 		// Common values
 		pFilters->m_StaticFilters[2].m_Adapter.QuadPart = 0; // applied to all adapters
 		pFilters->m_StaticFilters[2].m_ValidFields = 0;
 		pFilters->m_StaticFilters[2].m_FilterAction = FILTER_PACKET_PASS;
 		pFilters->m_StaticFilters[2].m_dwDirectionFlags = PACKET_FLAG_ON_RECEIVE | PACKET_FLAG_ON_SEND;
+
+		break;
+
+		case 6:
+
+		pFilters->m_TableSize = 3;
+
+		//**************************************************************************************
+		// 1. Redirects all ARP packets to be processes by user mode application
+		// Common values
+		pFilters->m_StaticFilters[0].m_Adapter.QuadPart = 0; // applied to all adapters
+		pFilters->m_StaticFilters[0].m_ValidFields = NETWORK_LAYER_VALID | TRANSPORT_LAYER_VALID;
+		pFilters->m_StaticFilters[0].m_FilterAction = FILTER_PACKET_REDIRECT;
+		pFilters->m_StaticFilters[0].m_dwDirectionFlags = PACKET_FLAG_ON_SEND;
+
+		pFilters->m_StaticFilters[0].m_NetworkFilter.m_dwUnionSelector = IPV4; 
+		pFilters->m_StaticFilters[0].m_NetworkFilter.m_IPv4.m_ValidFields = IP_V4_FILTER_PROTOCOL;
+		pFilters->m_StaticFilters[0].m_NetworkFilter.m_IPv4.m_DestAddress.m_AddressType = IP_SUBNET_V4_TYPE;
+		pFilters->m_StaticFilters[0].m_NetworkFilter.m_IPv4.m_Protocol = IPPROTO_ICMP;
+
+		// Transport layer filter 
+		pFilters->m_StaticFilters[0].m_TransportFilter.m_dwUnionSelector = ICMP;
+		pFilters->m_StaticFilters[0].m_TransportFilter.m_Icmp.m_ValidFields = ICMP_TYPE;
+		pFilters->m_StaticFilters[0].m_TransportFilter.m_Icmp.m_TypeRange.m_StartRange = 8; // ICMP PING REQUEST
+		pFilters->m_StaticFilters[0].m_TransportFilter.m_Icmp.m_TypeRange.m_EndRange = 8;
+
+		//***************************************************************************************
+		// 2. Pass all packets (skipped by previous filters) without processing in user mode
+		// Common values
+		pFilters->m_StaticFilters[1].m_Adapter.QuadPart = 0; // applied to all adapters
+		pFilters->m_StaticFilters[1].m_ValidFields = 0;
+		pFilters->m_StaticFilters[1].m_FilterAction = FILTER_PACKET_PASS;
+		pFilters->m_StaticFilters[1].m_dwDirectionFlags = PACKET_FLAG_ON_RECEIVE | PACKET_FLAG_ON_SEND;
 
 		break;
 		
