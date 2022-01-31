@@ -39,8 +39,6 @@
 #include <bitset>
 #include <optional>
 
-#define FAST_IO_MEASURE_STATS
-
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"
 #include "../common/iphlp.h"
@@ -54,7 +52,7 @@
 #include "../common/log/log.h"
 #include "../common/iphelper/network_adapter_info.h"
 #include "../common/ndisapi/network_adapter.h"
-#include "../common/ndisapi/fastio_packet_filter.h"
+#include "../common/ndisapi/simple_packet_filter.h"
 #include "../common/ndisapi/local_redirect.h"
 #include "../common/proxy/proxy_common.h"
 #include "../common/proxy/tcp_proxy_socket.h"

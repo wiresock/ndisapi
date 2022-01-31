@@ -3,66 +3,110 @@
 namespace proxy
 {
 #pragma pack(push,1)
+	static constexpr uint8_t socks5_protocol_version = 5;
+	static constexpr uint8_t socks5_username_auth_version = 1;
+	static constexpr uint8_t socks5_username_max_length = 255;
+
+	template <uint8_t NumberOfMethods = 1>
 	struct socks5_ident_req
 	{
-		unsigned char version;
-		unsigned char number_of_methods;
-		unsigned char methods[ANY_SIZE];
+		unsigned char version = socks5_protocol_version;
+		unsigned char number_of_methods = NumberOfMethods;
+		unsigned char methods[NumberOfMethods]{};
 	};
 
 	struct socks5_ident_resp
 	{
-		unsigned char version;
+		unsigned char version = socks5_protocol_version;
 		unsigned char method;
 	};
 
+	struct socks5_username_auth
+	{
+		socks5_username_auth() = default;
+
+		socks5_username_auth(const std::string& username, const std::string& password)
+		{
+			if (0 == init(username, password))
+				throw std::runtime_error("SOCKS5: username or password length exceeds the limits");
+		}
+
+		[[nodiscard]] uint32_t init(const std::string& username, const std::string& password)
+		{
+			if (username.length() > 255 || password.length() > 255)
+				return 0;
+
+			username_length = static_cast<unsigned char>(username.length());
+
+			unsigned char* password_length_ptr = reinterpret_cast<unsigned char*>(username_reserved) + username_length;
+			char* password_ptr = reinterpret_cast<char*>(password_length_ptr) + 1;
+
+			strcpy_s(username_reserved, 255, username.c_str());
+
+			*password_length_ptr = static_cast<unsigned char>(password.length());
+			strcpy_s(password_ptr, 255, password.c_str());
+
+			return (3 + static_cast<int>(username.length()) + static_cast<int>(password.length()));
+		}
+
+		unsigned char version = socks5_username_auth_version;
+		unsigned char username_length{};
+		char username_reserved[socks5_username_max_length + 1 + socks5_username_max_length]{}; // RFC 1929
+	};
+
+	template <typename T>
 	struct socks5_req
 	{
-		unsigned char version;
-		unsigned char cmd;
-		unsigned char reserved;
-		unsigned char address_type;
-		union {
+		unsigned char version = socks5_protocol_version;
+		unsigned char cmd{};
+		unsigned char reserved{};
+		unsigned char address_type{};
+		/*union {
 			in_addr ip_v4;
-			//	in6_addr ip_v6;
-			//	struct {
-			//		unsigned char domain_len;
-			//		char domain[256];
-			//	};
-		} dest_address;
-		unsigned short dest_port;
+				in6_addr ip_v6;
+				struct {
+					unsigned char domain_len;
+					char domain[256];
+				};
+		} dest_address;*/
+		T dest_address;
+		unsigned short dest_port{};
 	};
 
+	template <typename T>
 	struct socks5_resp
 	{
-		unsigned char version;
-		unsigned char reply;
-		unsigned char reserved;
-		unsigned char address_type;
-		union {
+		unsigned char version = socks5_protocol_version;
+		unsigned char reply{};
+		unsigned char reserved{};
+		unsigned char address_type{};
+		/*union {
 			in_addr ip_v4;
-			//in6_addr ip_v6;
-			//struct {
-			//	unsigned char domain_len;
-			//	char domain[256];
-			//};
-		} bind_address;
-		unsigned short bind_port;
+			in6_addr ip_v6;
+			struct {
+				unsigned char domain_len;
+				char domain[256];
+			};
+		} bind_address;*/
+		T bind_address;
+		unsigned short bind_port{};
 	};
 
+	template <typename T>
 	struct socks5_udp_header
 	{
 		unsigned short reserved;
 		unsigned char fragment;
 		unsigned char address_type;
-		union {
+		/*union {
 			in_addr ip_v4;
-			//in6_addr ip_v6;
-			//struct {
-			//	unsigned char domain_len;
-			//	char domain[256];
-			//};
-		} dest_address;
+			in6_addr ip_v6;
+			struct {
+				unsigned char domain_len;
+				char domain[256];
+			};
+		} dest_address;*/
+		T dest_address;
 		unsigned short dest_port;
 	};
 #pragma pack(pop)

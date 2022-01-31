@@ -30,9 +30,6 @@
     <ClInclude Include="pch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\common\ndisapi\fastio_packet_filter.h">
-      <Filter>Header Files\common\ndisapi</Filter>
-    </ClInclude>
     <ClInclude Include="..\common\proxy\proxy_common.h">
       <Filter>Header Files\common\proxy</Filter>
     </ClInclude>
@@ -49,6 +46,12 @@
       <Filter>Header Files\common\iphelper</Filter>
     </ClInclude>
     <ClInclude Include="..\common\ndisapi\local_redirect.h">
+      <Filter>Header Files\common\ndisapi</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\proxy\socks5_common.h">
+      <Filter>Header Files\common\proxy</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
   </ItemGroup>
