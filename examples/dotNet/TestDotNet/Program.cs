@@ -391,7 +391,7 @@ namespace TestDotNet
                     IpAddressFilter.IP_FILTER_FIELDS.IP_FILTER_PROTOCOL,
                     null,
                     null,
-                    (byte)PacketDotNet.ProtocolType.Udp
+                    (byte)ProtocolType.Udp
                 ),
                 new TcpUdpFilter(
                     TcpUdpFilter.TCPUDP_FILTER_FIELDS.TCPUDP_SRC_PORT,
