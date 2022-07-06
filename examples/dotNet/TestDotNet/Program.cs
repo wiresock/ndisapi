@@ -21,6 +21,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using NdisApi;
 using PacketDotNet;
+using ProtocolType = PacketDotNet.ProtocolType;
 
 namespace TestDotNet
 {
@@ -368,7 +369,7 @@ namespace TestDotNet
                     IpAddressFilter.IP_FILTER_FIELDS.IP_FILTER_PROTOCOL,
                     null,
                     null,
-                    (byte)IPProtocolType.UDP
+                    (byte)ProtocolType.Udp
                 ),
                 new TcpUdpFilter(
                     TcpUdpFilter.TCPUDP_FILTER_FIELDS.TCPUDP_DEST_PORT,
@@ -390,7 +391,7 @@ namespace TestDotNet
                     IpAddressFilter.IP_FILTER_FIELDS.IP_FILTER_PROTOCOL,
                     null,
                     null,
-                    (byte)IPProtocolType.UDP
+                    (byte)PacketDotNet.ProtocolType.Udp
                 ),
                 new TcpUdpFilter(
                     TcpUdpFilter.TCPUDP_FILTER_FIELDS.TCPUDP_SRC_PORT,
@@ -436,7 +437,7 @@ namespace TestDotNet
                     IpAddressFilter.IP_FILTER_FIELDS.IP_FILTER_PROTOCOL,
                     null,
                     null,
-                    (byte)IPProtocolType.TCP
+                    (byte)ProtocolType.Tcp
                 ),
                 new TcpUdpFilter(
                     TcpUdpFilter.TCPUDP_FILTER_FIELDS.TCPUDP_DEST_PORT,
@@ -458,7 +459,7 @@ namespace TestDotNet
                     IpAddressFilter.IP_FILTER_FIELDS.IP_FILTER_PROTOCOL,
                     null,
                     null,
-                    (byte)IPProtocolType.TCP
+                    (byte)ProtocolType.Tcp
                 ),
                 new TcpUdpFilter(
                     TcpUdpFilter.TCPUDP_FILTER_FIELDS.TCPUDP_SRC_PORT,
