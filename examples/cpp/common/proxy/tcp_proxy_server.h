@@ -98,7 +98,7 @@ namespace proxy
 
 			if (std::get<1>(sock_array_events_[0]) != INVALID_SOCKET)
 			{
-				auto [status, io_key] = completion_port_.associate_socket(
+				auto [success, io_key] = completion_port_.associate_socket(
 					std::get<1>(sock_array_events_[0]),
 					[this](const DWORD num_bytes, OVERLAPPED* povlp, const BOOL status)
 					{
@@ -112,13 +112,13 @@ namespace proxy
 							if ((io_context->io_operation == proxy_io_operation::relay_io_read) ||
 								(io_context->io_operation == proxy_io_operation::negotiate_io_read))
 							{
-								io_context->proxy_socket_ptr->close_client < false > (true, io_context->is_local);
+								io_context->proxy_socket_ptr->close_client(true, io_context->is_local);
 								return false;
 							}
 
 							if (!status)
 							{
-								io_context->proxy_socket_ptr->close_client < false > (false, io_context->is_local);
+								io_context->proxy_socket_ptr->close_client(false, io_context->is_local);
 								return false;
 							}
 						}
@@ -150,7 +150,7 @@ namespace proxy
 						return true;
 					});
 
-				if (status == true)
+				if (success == true)
 				{
 					completion_key_ = io_key;
 				}
@@ -225,7 +225,7 @@ namespace proxy
 
 		std::vector<negotiate_context_t> query_current_sessions_ctx()
 		{
-			std::shared_lock<std::shared_mutex> lock(lock_);
+			std::shared_lock lock(lock_);
 			std::vector<negotiate_context_t> result;
 			result.reserve(proxy_sockets_.size());
 
@@ -301,9 +301,8 @@ namespace proxy
 				service.sin_addr.s_addr = INADDR_ANY;
 				service.sin_port = htons(proxy_port_);
 
-				const auto status = bind(server_socket_, reinterpret_cast<SOCKADDR*>(&service), sizeof(service));
-
-				if (status == SOCKET_ERROR)
+				if (const auto status = bind(server_socket_, reinterpret_cast<SOCKADDR*>(&service), sizeof(service));
+					status == SOCKET_ERROR)
 				{
 					closesocket(server_socket_);
 					server_socket_ = INVALID_SOCKET;
@@ -332,9 +331,8 @@ namespace proxy
 				service.sin6_addr = in6addr_any;
 				service.sin6_port = htons(proxy_port_);
 
-				const auto status = bind(server_socket_, reinterpret_cast<SOCKADDR*>(&service), sizeof(service));
-
-				if (status == SOCKET_ERROR)
+				if (const auto status = bind(server_socket_, reinterpret_cast<SOCKADDR*>(&service), sizeof(service));
+					status == SOCKET_ERROR)
 				{
 					closesocket(server_socket_);
 					server_socket_ = INVALID_SOCKET;
@@ -357,9 +355,7 @@ namespace proxy
 				}
 			}
 
-			const auto status = listen(server_socket_, SOMAXCONN);
-
-			if (status == SOCKET_ERROR)
+			if (const auto status = listen(server_socket_, SOMAXCONN); status == SOCKET_ERROR)
 			{
 				closesocket(server_socket_);
 				server_socket_ = INVALID_SOCKET;
@@ -432,7 +428,7 @@ namespace proxy
 			// The client_service structure specifies the address family,
 			// IP address, and port of the server to be connected to.
 			{
-				std::lock_guard<std::shared_mutex> lock(lock_);
+				std::lock_guard lock(lock_);
 
 				sock_array_events_.push_back(
 					std::make_tuple(WSACreateEvent(), accepted, remote_socket, std::move(negotiate_ctx)));
@@ -517,7 +513,7 @@ namespace proxy
 				wait_events.clear();
 
 				{
-					std::shared_lock<std::shared_mutex> lock(lock_);
+					std::shared_lock lock(lock_);
 
 					std::transform(sock_array_events_.cbegin(), sock_array_events_.cend(),
 					               std::back_inserter(wait_events), [](auto&& e)
@@ -527,7 +523,7 @@ namespace proxy
 				}
 
 				const auto event_index = WSAWaitForMultipleEvents(static_cast<DWORD>(wait_events.size()),
-				                                                  &wait_events[0], FALSE, INFINITE, FALSE);
+				                                                  wait_events.data(), FALSE, INFINITE, FALSE);
 
 				if (end_server_ == true)
 					break;
@@ -556,7 +552,7 @@ namespace proxy
 			}
 
 			// cleanup on exit
-			std::shared_lock<std::shared_mutex> lock(lock_);
+			std::shared_lock lock(lock_);
 
 			for (auto&& a : sock_array_events_)
 			{
@@ -586,7 +582,7 @@ namespace proxy
 			while (end_server_ == false)
 			{
 				{
-					std::lock_guard<std::shared_mutex> lock(lock_);
+					std::lock_guard lock(lock_);
 
 					proxy_sockets_.erase(std::remove_if(proxy_sockets_.begin(), proxy_sockets_.end(), [](auto&& a)
 					{

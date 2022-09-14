@@ -45,7 +45,7 @@ namespace proxy
 		using per_io_context_t = tcp_per_io_context<T>;
 
 	protected:
-		constexpr static size_t send_receive_buffer_size = 256 * 256;
+		constexpr static size_t send_receive_buffer_size = 65536;
 
 		/// <summary>local connection socket</summary>
 		SOCKET local_socket_;
@@ -77,6 +77,8 @@ namespace proxy
 		};
 		WSABUF remote_send_buf_{0, nullptr};
 
+		std::chrono::steady_clock::time_point timestamp_{ std::chrono::steady_clock::now() };
+
 		per_io_context_t io_context_recv_from_local_{proxy_io_operation::relay_io_read, this, true};
 		per_io_context_t io_context_recv_from_remote_{proxy_io_operation::relay_io_read, this, false};
 		per_io_context_t io_context_send_to_local_{proxy_io_operation::relay_io_write, this, true};
@@ -93,12 +95,11 @@ namespace proxy
 			  log_printer_(std::move(log_printer)),
 			  log_level_(log_level),
 			  is_disable_nagle_(disable_nagle)
-		{
-		}
+		{}
 
 		virtual ~tcp_proxy_socket()
 		{
-			std::lock_guard<std::mutex> lock(lock_);
+			std::lock_guard lock(lock_);
 
 			if (local_socket_ != INVALID_SOCKET)
 			{
@@ -126,11 +127,8 @@ namespace proxy
 		// ReSharper disable once CppSpecialFunctionWithoutNoexceptSpecification
 		tcp_proxy_socket(tcp_proxy_socket&& other)
 		{
-			std::unique_lock<std::mutex> th_lock(lock_, std::defer_lock);
-			std::unique_lock<std::mutex> ot_lock(other.lock_, std::defer_lock);
-
-			std::lock(th_lock, ot_lock);
-
+			std::scoped_lock lock(lock_, other.lock_);
+			
 			local_socket_ = other.local_socket_;
 			other.local_socket_ = INVALID_SOCKET;
 			remote_socket_ = other.remote_socket_;
@@ -146,6 +144,7 @@ namespace proxy
 			local_send_buf_ = std::move(other.local_send_buf_);
 			remote_recv_buf_ = std::move(other.remote_recv_buf_);
 			remote_send_buf_ = std::move(other.remote_send_buf_);
+			timestamp_ = std::move(other.timestamp_);
 			io_context_recv_from_local_ = std::move(other.io_context_recv_from_local_);
 			io_context_recv_from_remote_ = std::move(other.io_context_recv_from_remote_);
 			io_context_send_to_local_ = std::move(other.io_context_send_to_local_);
@@ -170,12 +169,12 @@ namespace proxy
 			return false;
 		}
 
-		template <bool IsLocked = true>
+		template <bool AlreadyLocked = false>
 		void close_client(const bool is_receive, const bool is_local)
 		{
-			std::unique_lock<std::mutex> lock(lock_, std::defer_lock);
+			std::unique_lock lock(lock_, std::defer_lock);
 
-			if constexpr (!IsLocked)
+			if constexpr (!AlreadyLocked)
 			{
 				lock.lock();
 			}
@@ -192,22 +191,18 @@ namespace proxy
 
 				if (is_receive)
 				{
-					if (remote_send_buf_.len == 0)
-					{
-						if (remote_socket_ != INVALID_SOCKET)
-						{
-							shutdown(remote_socket_, SD_BOTH);
-							closesocket(remote_socket_);
-							remote_socket_ = INVALID_SOCKET;
-							connection_status_ = connection_status::client_completed;
-						}
-					}
-
 					local_recv_buf_.len = 0;
 				}
 				else
 				{
 					local_send_buf_.len = 0;
+				}
+
+				if (remote_socket_ != INVALID_SOCKET)
+				{
+					shutdown(remote_socket_, SD_BOTH);
+					closesocket(remote_socket_);
+					remote_socket_ = INVALID_SOCKET;
 				}
 			}
 			else
@@ -223,41 +218,52 @@ namespace proxy
 				if (is_receive)
 				{
 					remote_recv_buf_.len = 0;
-
-					if (local_send_buf_.len == 0)
-					{
-						if (local_socket_ != INVALID_SOCKET)
-						{
-							connection_status_ = connection_status::client_completed;
-						}
-					}
 				}
 				else
 				{
 					remote_send_buf_.len = 0;
 				}
-			}
-		}
 
-		bool is_ready_for_removal()
-		{
-			std::lock_guard<std::mutex> lock(lock_);
-
-			if ((remote_socket_ == INVALID_SOCKET) &&
-				(remote_send_buf_.len == 0) &&
-				(local_send_buf_.len == 0) &&
-				(remote_recv_buf_.len == 0))
-			{
 				if (local_socket_ != INVALID_SOCKET)
 				{
 					shutdown(local_socket_, SD_BOTH);
 					closesocket(local_socket_);
 					local_socket_ = INVALID_SOCKET;
 				}
+			}
+		}
 
-				if (local_recv_buf_.len == 0)
+		bool is_ready_for_removal()
+		{
+			using namespace std::chrono_literals;
+
+			std::lock_guard lock(lock_);
+
+			if ((remote_socket_ == INVALID_SOCKET) && 
+				(local_socket_ == INVALID_SOCKET))
+			{
+				if ((remote_send_buf_.len == 0 &&
+					local_send_buf_.len == 0 &&
+					remote_recv_buf_.len == 0 &&
+					local_recv_buf_.len == 0))
 				{
 					return true;
+				}
+			}
+
+			if (std::chrono::steady_clock::now() - timestamp_ > 120s)
+			{
+				if ((remote_socket_ == INVALID_SOCKET) &&
+					(local_socket_ == INVALID_SOCKET))
+				{
+					close_client<true>(true, true);
+					close_client<true>(true, false);
+				}
+				else
+				{
+					close_client<true>(false, true);
+					close_client<true>(false, false);
+					timestamp_ += 10s;
 				}
 			}
 
@@ -292,15 +298,21 @@ namespace proxy
 
 		virtual void process_receive_negotiate_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
+			std::lock_guard lock(lock_);
+			timestamp_ = std::chrono::steady_clock::now();
 		}
 
 		virtual void process_send_negotiate_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
+			std::lock_guard lock(lock_);
+			timestamp_ = std::chrono::steady_clock::now();
 		}
 
 		virtual void process_receive_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
-			std::lock_guard<std::mutex> lock(lock_);
+			std::lock_guard lock(lock_);
+
+			timestamp_ = std::chrono::steady_clock::now();
 
 			switch (connection_status_)
 			{
@@ -351,7 +363,7 @@ namespace proxy
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
 								// Close connection to remote peer in case of error
-								close_client(false, false);
+								close_client<true>(false, false);
 							}
 						}
 
@@ -395,7 +407,7 @@ namespace proxy
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
 								// Close connection to local peer in case of error
-								close_client(true, true);
+								close_client<true>(true, true);
 							}
 						}
 					}
@@ -431,7 +443,7 @@ namespace proxy
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
 								// Close connection to local peer in case of error
-								close_client(false, true);
+								close_client<true>(false, true);
 							}
 						}
 
@@ -476,7 +488,7 @@ namespace proxy
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
 								// Close connection to remote peer in case of error
-								close_client(true, false);
+								close_client<true>(true, false);
 							}
 						}
 					}
@@ -491,7 +503,9 @@ namespace proxy
 
 		virtual void process_send_buffer_complete(const uint32_t io_size, per_io_context_t* io_context)
 		{
-			std::lock_guard<std::mutex> lock(lock_);
+			std::lock_guard lock(lock_);
+
+			timestamp_ = std::chrono::steady_clock::now();
 
 			if (io_context->is_local)
 			{
@@ -519,7 +533,7 @@ namespace proxy
 								&io_context_recv_from_remote_,
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
-								close_client(true, false);
+								close_client<true>(true, false);
 							}
 						}
 					}
@@ -536,7 +550,7 @@ namespace proxy
 				{
 					if (connection_status_ == connection_status::client_completed)
 					{
-						close_client(false, false);
+						close_client<true>(false, false);
 					}
 
 					local_send_buf_.len = 0;
@@ -569,7 +583,7 @@ namespace proxy
 							&io_context_send_to_local_,
 							nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 						{
-							close_client(false, true);
+							close_client<true>(false, true);
 						}
 					}
 				}
@@ -601,7 +615,7 @@ namespace proxy
 								&io_context_recv_from_local_,
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
-								close_client(true, true);
+								close_client<true>(true, true);
 							}
 						}
 					}
@@ -618,7 +632,7 @@ namespace proxy
 				{
 					if (connection_status_ == connection_status::client_completed)
 					{
-						close_client(false, false);
+						close_client<true>(false, false);
 					}
 
 					remote_send_buf_.len = 0;
@@ -651,7 +665,7 @@ namespace proxy
 							&io_context_send_to_remote_,
 							nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 						{
-							close_client(false, false);
+							close_client<true>(false, false);
 						}
 					}
 				}
@@ -675,7 +689,7 @@ namespace proxy
 		/// <param name="type">type of operation</param>
 		/// <returns>pre-status of the operation</returns>
 		// ********************************************************************************
-		bool inject_to_local(char* data, const uint32_t length,
+		bool inject_to_local(const char* data, const uint32_t length,
 		                     proxy_io_operation type = proxy_io_operation::inject_io_write)
 		{
 			auto context = new(std::nothrow) per_io_context_t{type, this, true};
@@ -704,7 +718,7 @@ namespace proxy
 				context,
 				nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 			{
-				close_client<false>(false, true);
+				close_client(false, true);
 				return false;
 			}
 
@@ -720,7 +734,7 @@ namespace proxy
 		/// <param name="type">type of operation</param>
 		/// <returns>pre-status of the operation</returns>
 		// ********************************************************************************
-		bool inject_to_remote(char* data, const uint32_t length,
+		bool inject_to_remote(const char* data, const uint32_t length,
 		                      proxy_io_operation type = proxy_io_operation::inject_io_write)
 		{
 			auto context = new(std::nothrow) per_io_context_t{type, this, false};
@@ -749,7 +763,7 @@ namespace proxy
 				context,
 				nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 			{
-				close_client<false>(false, false);
+				close_client(false, false);
 				return false;
 			}
 
@@ -763,7 +777,7 @@ namespace proxy
 		/// </summary>
 		/// <returns> raw pointer to the negotiate_context</returns>
 		// ********************************************************************************
-		negotiate_context_t* get_negotiate_ctx() const
+		[[nodiscard]] negotiate_context_t* get_negotiate_ctx() const
 		{
 			return negotiate_ctx_.get();
 		}
@@ -787,7 +801,7 @@ namespace proxy
 
 			if (const auto wsa_error = WSAGetLastError(); ret == SOCKET_ERROR && (ERROR_IO_PENDING != wsa_error))
 			{
-				close_client<false>(true, true);
+				close_client(true, true);
 
 				remote_recv_buf_.len = 0;
 
@@ -801,7 +815,7 @@ namespace proxy
 			{
 				closesocket(local_socket_);
 
-				close_client<false>(true, false);
+				close_client(true, false);
 
 				return false;
 			}

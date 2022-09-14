@@ -70,7 +70,7 @@ namespace proxy
 						(ident_resp_.method == 0xFF))
 					{
 						// SOCKS v5 identification or authentication failed
-						tcp_proxy_socket<T>::close_client < false > (true, false);
+						tcp_proxy_socket<T>::close_client(true, false);
 					}
 					else
 					{
@@ -90,7 +90,7 @@ namespace proxy
 								// [SOCKS5]: associate_to_socks5_proxy: RFC 1928: X'02' USERNAME/PASSWORD is chosen but USERNAME exceeds maximum possible length
 							)
 							{
-								tcp_proxy_socket<T>::close_client < false > (true, false);
+								tcp_proxy_socket<T>::close_client(true, false);
 							}
 							else
 							{
@@ -114,7 +114,7 @@ namespace proxy
 										&io_context_send_negotiate_,
 										nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 									{
-										tcp_proxy_socket<T>::close_client < false > (false, false);
+										tcp_proxy_socket<T>::close_client(false, false);
 									}
 
 									current_state_ = socks5_state::password_sent;
@@ -128,7 +128,7 @@ namespace proxy
 										&io_context_recv_negotiate_,
 										nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 									{
-										tcp_proxy_socket<T>::close_client < false > (true, false);
+										tcp_proxy_socket<T>::close_client(true, false);
 									}
 								}
 							}
@@ -157,7 +157,7 @@ namespace proxy
 								&io_context_send_negotiate_,
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
-								tcp_proxy_socket<T>::close_client < false > (false, false);
+								tcp_proxy_socket<T>::close_client(false, false);
 							}
 
 							current_state_ = socks5_state::connect_sent;
@@ -171,7 +171,7 @@ namespace proxy
 								&io_context_recv_negotiate_,
 								nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 							{
-								tcp_proxy_socket<T>::close_client < false > (true, false);
+								tcp_proxy_socket<T>::close_client(true, false);
 							}
 						}
 					}
@@ -183,7 +183,7 @@ namespace proxy
 					if (ident_resp_.method != 0)
 					{
 						// SOCKS v5 identification or authentication failed
-						tcp_proxy_socket<T>::close_client < false > (true, false);
+						tcp_proxy_socket<T>::close_client(true, false);
 					}
 					else
 					{
@@ -209,7 +209,7 @@ namespace proxy
 							&io_context_send_negotiate_,
 							nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 						{
-							tcp_proxy_socket<T>::close_client < false > (false, false);
+							tcp_proxy_socket<T>::close_client(false, false);
 						}
 
 						current_state_ = socks5_state::connect_sent;
@@ -223,7 +223,7 @@ namespace proxy
 							&io_context_recv_negotiate_,
 							nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 						{
-							tcp_proxy_socket<T>::close_client < false > (true, false);
+							tcp_proxy_socket<T>::close_client(true, false);
 						}
 					}
 				}
@@ -232,7 +232,7 @@ namespace proxy
 					if (connect_response_.reply != 0)
 					{
 						// SOCKS v5 connect failed
-						tcp_proxy_socket<T>::close_client < false > (true, false);
+						tcp_proxy_socket<T>::close_client(true, false);
 					}
 					else
 					{
@@ -284,7 +284,7 @@ namespace proxy
 						&io_context_send_negotiate_,
 						nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 					{
-						tcp_proxy_socket<T>::close_client < false > (false, false);
+						tcp_proxy_socket<T>::close_client(false, false);
 					}
 
 					current_state_ = socks5_state::login_sent;
@@ -298,7 +298,7 @@ namespace proxy
 						&io_context_recv_negotiate_,
 						nullptr) == SOCKET_ERROR) && (ERROR_IO_PENDING != WSAGetLastError()))
 					{
-						tcp_proxy_socket<T>::close_client < false > (true, false);
+						tcp_proxy_socket<T>::close_client(true, false);
 					}
 				}
 
