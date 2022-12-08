@@ -134,14 +134,36 @@ namespace NdisApi {
 		NdisMediumMax
 	};
 
+	/**
+	 * \brief Represents basic information for the network interface.
+	 */
 	public ref class NetworkAdapter
 	{
-		String^				_adapterName;
-		String^				_adapterFriendlyName;
-		IntPtr				_adapterHandle;
-		NDIS_MEDIUM			_adapterMedium;
-		PhysicalAddress^	_adapterCurrentAddress;
-		UInt16				_adapterMtu;
+		/// <summary>
+		/// Network adapter system (internal) name.
+		/// </summary>
+		String^ _adapterName;
+		/// <summary>
+		/// Network adapter user-friendly name.
+		/// </summary>
+		String^ _adapterFriendlyName;
+		/// <summary>
+		/// Network adapter handle value.
+		/// </summary>
+		IntPtr _adapterHandle;
+		/// <summary>
+		/// Network adapter NDIS medium (NdisMedium802_3, NdisMediumWirelessWan etc…).
+		/// </summary>
+		NDIS_MEDIUM _adapterMedium;
+		/// <summary>
+		/// Network adapter current physical address.
+		/// </summary>
+		PhysicalAddress^ _adapterCurrentAddress;
+		/// <summary>
+		/// A maximum transmission unit (MTU). MTU – the largest frame size, specified in octets (eight-bit bytes)
+		/// that can be sent through the network interface. 
+		/// </summary>
+		UInt16 _adapterMtu;
 
 	public:
 		NetworkAdapter(
@@ -158,14 +180,36 @@ namespace NdisApi {
 				_adapterCurrentAddress(adapterCurrentAddress),
 				_adapterMtu(adapterMtu) {}
 
-		property String^			Name { String^ get() { return _adapterName; } }
-		property String^			FriendlyName { String^ get() { return _adapterFriendlyName; } }
-		property IntPtr				Handle { IntPtr get() { return _adapterHandle; } }
-		property NDIS_MEDIUM		Medium { NDIS_MEDIUM get() { return _adapterMedium; } }
-		property PhysicalAddress^	CurrentAddress { PhysicalAddress^ get() { return _adapterCurrentAddress; } }
-		property UInt16				Mtu { UInt16 get() { return _adapterMtu; } }
+		/// <summary>
+		/// Network adapter system (internal) name.
+		/// </summary>
+		property String^ Name { String^ get() { return _adapterName; } }
+		/// <summary>
+		/// Network adapter user-friendly name.
+		/// </summary>
+		property String^ FriendlyName { String^ get() { return _adapterFriendlyName; } }
+		/// <summary>
+		/// Network adapter handle value.
+		/// </summary>
+		property IntPtr Handle { IntPtr get() { return _adapterHandle; } }
+		/// <summary>
+		/// Network adapter NDIS medium (NdisMedium802_3, NdisMediumWirelessWan etc…).
+		/// </summary>
+		property NDIS_MEDIUM Medium { NDIS_MEDIUM get() { return _adapterMedium; } }
+		/// <summary>
+		/// Network adapter current physical address.
+		/// </summary>
+		property PhysicalAddress^ CurrentAddress { PhysicalAddress^ get() { return _adapterCurrentAddress; } }
+		/// <summary>
+		/// A maximum transmission unit (MTU). MTU – the largest frame size, specified in octets (eight-bit bytes)
+		/// that can be sent through the network interface. 
+		/// </summary>
+		property UInt16 Mtu { UInt16 get() { return _adapterMtu; } }
 	};
 
+	/**
+	 * \brief Represents raw network packet.
+	 */
 	public ref class RawPacket
 	{
 	public:
@@ -190,45 +234,84 @@ namespace NdisApi {
 			RECALCULATE_UDP_V4 = 0x00000008
 		};
 	private:
-		PACKET_FLAG		_deviceFlags;
-		UInt32			_flags; // NDIS_PACKET flags
-		UInt32			_dot1q; // 802.1q info
-		UInt32			_filterId;
-		CHECKSUM_FLAG	_checksums;
-		array<Byte>^ 	_buffer;
+		/// <summary>
+		/// Packet direction flags(PACKET_FLAG_ON_SEND, PACKET_FLAG_ON_RECEIVE).
+		/// </summary>
+		PACKET_FLAG _deviceFlags;
+		/// <summary>
+		/// NDIS level flags of the network packet. This field can be a combination of the NDIS_FLAGS_XXX (defined in ndis.h).
+		/// </summary>
+		UInt32 _flags;
+		/// <summary>
+		/// 802.1q VLAN Tag.
+		/// </summary>
+		UInt32 _dot1q;
+		/// <summary>
+		/// Filter ID value for incoming packets specifies the filter index which redirected the packet for processing.
+		/// </summary>
+		UInt32 _filterId;
+		/// <summary>
+		/// Combination of checksum recalculate flags (RECALCULATE_IP_V4, RECALCULATE_ICMP_V4, RECALCULATE_TCP_V4, RECALCULATE_UDP_V4).
+		/// </summary>
+		CHECKSUM_FLAG _checksums;
+		/// <summary>
+		/// Raw packet data buffer.
+		/// </summary>
+		array<Byte>^ _buffer;
 
 	public:
+		/// <summary>
+		/// Packet direction flags(PACKET_FLAG_ON_SEND, PACKET_FLAG_ON_RECEIVE).
+		/// </summary>
 		property PACKET_FLAG DeviceFlags {
 			PACKET_FLAG get() { return _deviceFlags; }
 			void set(PACKET_FLAG deviceFlags) { _deviceFlags = deviceFlags; }
 		}
 
+		/// <summary>
+		/// NDIS level flags of the network packet. This field can be a combination of the NDIS_FLAGS_XXX (defined in ndis.h).
+		/// </summary>
 		property UInt32	NdisFlags {
 			UInt32 get() { return _flags; } 
 			void set(UInt32 flags) { _flags = flags; }
 		}
 
+		/// <summary>
+		/// 802.1q VLAN Tag.
+		/// </summary>
 		property UInt32	Dot1q {
 			UInt32 get() { return _dot1q; }
 			void set(UInt32 dot1q) { _dot1q = dot1q;	}
 		}
 
+		/// <summary>
+		/// Filter ID value for incoming packets specifies the filter index which redirected the packet for processing.
+		/// </summary>
 		property UInt32	FilterId {
 			UInt32 get() { return _filterId; } 
 			void set(UInt32 filterId) { _filterId = filterId; }
 		}
 
+		/// <summary>
+		/// Combination of checksum recalculate flags (RECALCULATE_IP_V4, RECALCULATE_ICMP_V4, RECALCULATE_TCP_V4, RECALCULATE_UDP_V4).
+		/// </summary>
 		property CHECKSUM_FLAG Checksums {
 			CHECKSUM_FLAG get() { return _checksums; }
 			void set(CHECKSUM_FLAG checksums) { _checksums = checksums; }
 		}
 
+		/// <summary>
+		/// Raw packet data buffer.
+		/// </summary>
 		property array<Byte>^ Data { 
 			array<Byte>^ get() { return _buffer; } 
 			void set(array<Byte>^ buffer) { _buffer = buffer; }
 		}
 	};
 
+	/**
+	 * \brief Wrapper for an array of _INTERMEDIATE_BUFFER and associated _ETH_M_REQUEST
+	 */
 	public ref class NdisBufferResource
 	{
 		static const Int32 defaultBufferSize = 32;
@@ -246,26 +329,45 @@ namespace NdisApi {
 		Int32	_size;
 	};
 
-	//
-	// PACKET_OID_DATA used for passing NDIS_REQUEST to driver
-	//
+	/**
+	 * \brief Wrapper class for the PACKET_OID_DATA used to set/query information via NDIS_REQUEST.
+	 */
 	public ref class PacketOidData
 	{
-	private:
+		/// <summary>
+		/// The adapter’s handle value for set/query operation.
+		/// </summary>
 		IntPtr			_hAdapter;
+		/// <summary>
+		/// his is a numeric identifier that indicates the type of query/set function to perform on
+		/// the adapter through the PacketRequest function.
+		/// </summary>
 		UInt32			_oid;
+		/// <summary>
+		/// Data buffer to pass or receive information from the network interface.
+		/// </summary>
 		array<Byte>^ 	_buffer;
 	public:
+		/// <summary>
+		/// The adapter’s handle value for set/query operation.
+		/// </summary>
 		property IntPtr Adapter {
 			IntPtr get() { return _hAdapter; }
 			void set(IntPtr value) { _hAdapter = value; }
 		}
 
+		/// <summary>
+		/// his is a numeric identifier that indicates the type of query/set function to perform on
+		/// the adapter through the PacketRequest function.
+		/// </summary>
 		property UInt32 Oid {
 			UInt32 get() { return _oid; }
 			void set(UInt32 value) { _oid = value; }
 		}
 
+		/// <summary>
+		/// Data buffer to pass or receive information from the network interface.
+		/// </summary>
 		property array<Byte>^ Data {
 			array<Byte>^ get() { return _buffer; }
 			void set(array<Byte>^ buffer) { _buffer = buffer; }
@@ -273,7 +375,7 @@ namespace NdisApi {
 	};
 
 	public ref class RasLinkInfo{
-	private:
+
 		UInt32				_linkSpeed;
 		UInt32				_maximumTotalSize;
 		PhysicalAddress^	_remoteAddress;
@@ -348,10 +450,10 @@ namespace NdisApi {
 			return "Eth802dot3Filter [ " + ((_sourceAddress != nullptr) ? ("SourceAddress = " + _sourceAddress->ToString()):"") +
 				((_destinationAddress != nullptr) ? (" DestinationAddress = " + _destinationAddress->ToString()):"") +
 				(((_validFields & ETH_802_3_FLAGS::ETH_802_3_PROTOCOL) == ETH_802_3_FLAGS::ETH_802_3_PROTOCOL) ? 
-				(" Protocol = " + _sourceAddress->ToString()):"") + " ]";
+				(" Protocol = " + _networkProtocol.ToString()):"") + " ]";
 		}
 
-		// Specifies which of the fileds below contain valid values and should be matched against the packet
+		// Specifies which of the fields below contain valid values and should be matched against the packet
 		property ETH_802_3_FLAGS ValidFields {
 			ETH_802_3_FLAGS get() { return _validFields; }
 			void set(ETH_802_3_FLAGS value) { _validFields = value; }
@@ -485,7 +587,7 @@ namespace NdisApi {
 			void set(AddressFamily value) { _addressFamily = value; }
 		}
 
-		// Specifies which of the fileds below contain valid values and should be matched against the packet
+		// Specifies which of the fields below contain valid values and should be matched against the packet
 		property IP_FILTER_FIELDS	ValidFields {
 			IP_FILTER_FIELDS get() { return _validFields; }
 			void set(IP_FILTER_FIELDS value) { _validFields = value; }
@@ -572,7 +674,7 @@ namespace NdisApi {
 				(" Protocol = " + _tcpFlags.ToString()) : "") + " ]";
 		}
 
-		// Specifies which of the fileds below contain valid values and should be matched against the packet
+		// Specifies which of the fields below contain valid values and should be matched against the packet
 		property TCPUDP_FILTER_FIELDS ValidFields {
 			TCPUDP_FILTER_FIELDS get() { return _validFields; }
 			void set(TCPUDP_FILTER_FIELDS value) { _validFields = value; }
@@ -717,7 +819,7 @@ namespace NdisApi {
 			void set(FILTER_PACKET_ACTION value) { _filterAction = value; }
 		}
 
-		// Specifies which of the fileds below contain valid values and should be matched against the packet
+		// Specifies which of the fields below contain valid values and should be matched against the packet
 		property STATIC_FILTER_FIELDS ValidFields {
 			STATIC_FILTER_FIELDS get() { return _validFields; }
 			void set(STATIC_FILTER_FIELDS value) { _validFields = value; }
