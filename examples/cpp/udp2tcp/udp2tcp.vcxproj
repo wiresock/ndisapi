@@ -173,7 +173,18 @@
     <ClCompile Include="udp2tcp.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\common\iphelper\network_adapter_info.h" />
+    <ClInclude Include="..\common\iphlp.h" />
+    <ClInclude Include="..\common\ndisapi\network_adapter.h" />
+    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h" />
     <ClInclude Include="..\common\ndisapi\udp2tcp.h" />
+    <ClInclude Include="..\common\net\ip_address.h" />
+    <ClInclude Include="..\common\net\ip_subnet.h" />
+    <ClInclude Include="..\common\net\mac_address.h" />
+    <ClInclude Include="..\common\pcap\pcap.h" />
+    <ClInclude Include="..\common\pcap\pcap_file_storage.h" />
+    <ClInclude Include="..\common\winsys\event.h" />
+    <ClInclude Include="..\common\winsys\object.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
