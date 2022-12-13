@@ -27,4 +27,5 @@ https://www.ntkernel.com/docs/windows-packet-filter-documentation/
 * **ipv6_parser** - native C++ sample, intercepts IPv6 packets, matches to originated process (using IP Helper API) parses protocol headers.
 * **sni_inspector** - native C++ sample, intercepts network packets and extracts SNI from HTTPS packets and Host from HTTP packets.
 * **socksify** - native C++ sample, redirects selected TCP connections through a SOCKS5 proxy. 
+* **rebind** - native C++ sample, rebinds outgoing TCP/UDP connections for the specified application from the default network interface to a different one.
 * **TestDotNet** - C# sample demonstrates the NDISAPI usage in several filtering scenarios. Available ion x86 and x64 configurations. AnyCPU configuration is not available due to the C++/CLI nature of ndisapi.net wrapper (see https://github.com/kevin-marshall/Managed.AnyCPU for the workaround). Projects references PacketDotNet (https://github.com/chmorgan/packetnet) for dumping network packets headers.
