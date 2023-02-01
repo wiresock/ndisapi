@@ -346,8 +346,8 @@ int main(int argc, char* argv[])
 
 		// Network layer filter
 		pFilters->m_StaticFilters[2].m_NetworkFilter.m_dwUnionSelector = IPV6; 
-		pFilters->m_StaticFilters[2].m_NetworkFilter.m_IPv4.m_ValidFields = IP_V6_FILTER_PROTOCOL;
-		pFilters->m_StaticFilters[2].m_NetworkFilter.m_IPv4.m_Protocol = IPPROTO_TCP;
+		pFilters->m_StaticFilters[2].m_NetworkFilter.m_IPv6.m_ValidFields = IP_V6_FILTER_PROTOCOL;
+		pFilters->m_StaticFilters[2].m_NetworkFilter.m_IPv6.m_Protocol = IPPROTO_TCP;
 
 		// Transport layer filter 
 		pFilters->m_StaticFilters[2].m_TransportFilter.m_dwUnionSelector = TCPUDP;
@@ -365,8 +365,8 @@ int main(int argc, char* argv[])
 
 		// Network layer filter
 		pFilters->m_StaticFilters[3].m_NetworkFilter.m_dwUnionSelector = IPV6; 
-		pFilters->m_StaticFilters[3].m_NetworkFilter.m_IPv4.m_ValidFields = IP_V6_FILTER_PROTOCOL;
-		pFilters->m_StaticFilters[3].m_NetworkFilter.m_IPv4.m_Protocol = IPPROTO_TCP;
+		pFilters->m_StaticFilters[3].m_NetworkFilter.m_IPv6.m_ValidFields = IP_V6_FILTER_PROTOCOL;
+		pFilters->m_StaticFilters[3].m_NetworkFilter.m_IPv6.m_Protocol = IPPROTO_TCP;
 
 		// Transport layer filter 
 		pFilters->m_StaticFilters[3].m_TransportFilter.m_dwUnionSelector = TCPUDP;
@@ -408,7 +408,7 @@ int main(int argc, char* argv[])
 		pFilters->m_TableSize = 2;
 
 		//**************************************************************************************
-		// 1. Outgoing HTTP requests filter: DROP OUT TCP packets with destination IP 104.196.49.47 PORT 443 (https://www.ntkernel.com)
+		// 1. Outgoing HTTP requests filter: DROP OUT TCP packets with destination IP 95.179.146.125 PORT 443 (https://www.ntkernel.com)
 		// Common values
 		pFilters->m_StaticFilters[0].m_Adapter.QuadPart = 0; // applied to all adapters
 		pFilters->m_StaticFilters[0].m_ValidFields = NETWORK_LAYER_VALID | TRANSPORT_LAYER_VALID;
@@ -420,10 +420,10 @@ int main(int argc, char* argv[])
 		in_addr mask;
 
 		// IP address 52.87.248.141
-		address.S_un.S_un_b.s_b1 = 104;
-		address.S_un.S_un_b.s_b2 = 196;
-		address.S_un.S_un_b.s_b3 = 49;
-		address.S_un.S_un_b.s_b4 = 47;
+		address.S_un.S_un_b.s_b1 = 95;
+		address.S_un.S_un_b.s_b2 = 179;
+		address.S_un.S_un_b.s_b3 = 146;
+		address.S_un.S_un_b.s_b4 = 125;
 
 		// Network mask 255.255.255.255
 		mask.S_un.S_un_b.s_b1 = 255;

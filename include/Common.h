@@ -1,5 +1,5 @@
 /*************************************************************************/
-/*                Copyright (c) 2000-2021 NT Kernel Resources.           */
+/*                Copyright (c) 2000-2023 NT Kernel Resources.           */
 /*                           All Rights Reserved.                        */
 /*                          http://www.ntkernel.com                      */
 /*                           ndisrd@ntkernel.com                         */
@@ -20,9 +20,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x02203000
+#define NDISRD_VERSION			0x04003000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x0220
+#define NDISRD_MINOR_VERSION	0x0400
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"
@@ -413,6 +413,7 @@ struct _TCPUDP_FILTER
 	PORT_RANGE			m_SourcePort;	// Source port
 	PORT_RANGE			m_DestPort;		// Destination port
 	unsigned char		m_TCPFlags;		// TCP flags combination
+	unsigned char		Padding[3];
 } TCPUDP_FILTER, *PTCPUDP_FILTER;
 
 typedef
@@ -518,6 +519,7 @@ typedef
 struct _STATIC_FILTER_TABLE
 {
 	unsigned long	m_TableSize; // number of STATIC_FILTER entries
+	unsigned long	Padding;
 	STATIC_FILTER	m_StaticFilters[ANY_SIZE];
 }STATIC_FILTER_TABLE, *PSTATIC_FILTER_TABLE;
 
