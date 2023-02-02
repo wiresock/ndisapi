@@ -494,7 +494,7 @@ int main(int argc, char* argv[])
 
 		case 6:
 
-		pFilters->m_TableSize = 3;
+		pFilters->m_TableSize = 2;
 
 		//**************************************************************************************
 		// 1. Redirects all ARP packets to be processes by user mode application
