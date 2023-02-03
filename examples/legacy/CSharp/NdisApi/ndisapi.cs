@@ -641,6 +641,9 @@ namespace NdisApiWrapper
         public PORT_RANGE m_SourcePort;	// Source port
         public PORT_RANGE m_DestPort;	// Destination port
 	    public byte m_TCPFlags;	// TCP flags combination
+        internal byte m_Padding1;
+        internal byte m_Padding2;
+        internal byte m_Padding3;
     }
 
     //
@@ -742,6 +745,7 @@ namespace NdisApiWrapper
     public struct STATIC_FILTER_TABLE
     {
         public uint m_TableSize; // number of STATIC_FILTER entries
+        internal uint m_Padding;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] // For convinience (easier marshalling to unmanaged memory) the size of the array is fixed to 256 entries
         public STATIC_FILTER[] m_StaticFilters;            // Feel free to change this value if you need more filter entries
     }

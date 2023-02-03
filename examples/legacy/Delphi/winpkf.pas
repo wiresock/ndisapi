@@ -1,5 +1,5 @@
-{                 Windows Packet Filter Kit 3.0 interface             }
-{                 Copyright(C) 2000-2013 NT Kernel Resources          }
+{                 Windows Packet Filter Kit 3.4 interface             }
+{                 Copyright(C) 2000-2023 NT Kernel Resources          }
 {                         mailto: ndisrd@ntkernel.com                 }
 {                                                                     }
 {                 Delphi import unit fixed on 2003-02-21 by           }
@@ -253,7 +253,8 @@ type
 	  m_ValidFields: Cardinal; // Specifies which of the fileds below contain valid values and should be matched against the packet
 	  m_SrcPort: TPORT_RANGE;	 // Source port
 	  m_DstPort: TPORT_RANGE;	 // Destination port
-          m_TcpFalgs: byte;              // TCP flags combination
+    m_TcpFalgs: byte;        // TCP flags combination
+    Padding: array[1..3] of byte;
   end;
 
   TRANSPORT_LAYER_FILTER = packed record
@@ -279,8 +280,9 @@ type
 
   PSTATIC_FILTER_TABLE =^TSTATIC_FILTER_TABLE;
   TSTATIC_FILTER_TABLE = packed record
- 	m_TableSize: Cardinal; // number of STATIC_FILTER entries
-	m_StaticFilters: array[0..0] of TSTATIC_FILTER;
+ 	  m_TableSize: Cardinal; // number of STATIC_FILTER entries
+    Padding: Cardinal;
+	  m_StaticFilters: array[0..0] of TSTATIC_FILTER;
   end;
 
 procedure InitNDISAPI;
