@@ -61,7 +61,7 @@ int main()
 
 						if (process->name.find(app_name_w) != std::wstring::npos)
 						{
-							if (tcp_header->th_flags == TH_SYN)
+							if ((tcp_header->th_flags & (TH_SYN | TH_ACK)) == TH_SYN)
 							{
 								std::lock_guard<std::mutex> lock(mapper_lock);
 								mapper[ntohs(tcp_header->th_sport)] = std::make_pair(
