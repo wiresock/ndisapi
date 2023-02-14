@@ -14,9 +14,9 @@ using namespace System::Security::Permissions;
 [assembly:AssemblyTitleAttribute(L"ndisapicl")];
 [assembly:AssemblyDescriptionAttribute(L"")];
 [assembly:AssemblyConfigurationAttribute(L"")];
-[assembly:AssemblyCompanyAttribute(L"NT Kernel Resources")];
+[assembly:AssemblyCompanyAttribute(L"NTKERNEL")];
 [assembly:AssemblyProductAttribute(L"ndisapicl")];
-[assembly:AssemblyCopyrightAttribute(L"Copyright (c) NT Kernel Resources 2018-2022")];
+[assembly:AssemblyCopyrightAttribute(L"Copyright (c) NTKERNEL 2000-2023")];
 [assembly:AssemblyTrademarkAttribute(L"")];
 [assembly:AssemblyCultureAttribute(L"")];
 
@@ -31,7 +31,7 @@ using namespace System::Security::Permissions;
 // You can specify all the value or you can default the Revision and Build Numbers
 // by using the '*' as shown below:
 
-[assembly:AssemblyVersionAttribute("3.2.32.1")];
+[assembly:AssemblyVersionAttribute("3.4.0.1")];
 
 [assembly:ComVisible(false)];
 

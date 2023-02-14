@@ -1,3 +1,3 @@
-# common
+# netlib
 
-Utility C++ classes used across native C++ samples.
+Utility C++ classes used for the network development.

@@ -5,34 +5,6 @@
 namespace proxy
 {
 	template <typename T>
-	struct socks5_negotiate_context final : negotiate_context<T>
-	{
-		socks5_negotiate_context(const T& remote_address, uint16_t remote_port)
-			: negotiate_context<T>(remote_address, remote_port)
-		{
-		}
-
-		socks5_negotiate_context(const T& remote_srv_address, uint16_t remote_srv_port,
-		                         std::optional<std::string> socks5_username, std::optional<std::string> socks5_password)
-			: negotiate_context<T>(remote_srv_address, remote_srv_port),
-			  socks5_username(std::move(socks5_username)),
-			  socks5_password(std::move(socks5_password))
-		{
-		}
-
-		socks5_negotiate_context(const T& remote_address, uint16_t remote_port,
-		                         std::string socks5_username, std::string socks5_password)
-			: negotiate_context<T>(remote_address, remote_port),
-			  socks5_username(std::move(socks5_username)),
-			  socks5_password(std::move(socks5_password))
-		{
-		}
-
-		std::optional<std::string> socks5_username{std::nullopt};
-		std::optional<std::string> socks5_password{std::nullopt};
-	};
-
-	template <typename T>
 	class socks5_tcp_proxy_socket final : public tcp_proxy_socket<T>
 	{
 		enum class socks5_state

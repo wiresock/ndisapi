@@ -186,7 +186,7 @@ int main()
 				}
 
 				return std::make_tuple(net::ip_address_v4{}, 0, nullptr);
-			}, nullptr, netlib::log::log_level::none);
+			}, nullptr, netlib::log::log_level::error);
 
 		ndis_api->start_filter(index - 1);
 

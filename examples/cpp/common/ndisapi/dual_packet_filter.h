@@ -413,7 +413,7 @@ namespace ndisapi
 			read_request->EthPacket[i].Buffer = &packet_buffer_[index][i];
 		}
 
-		if (auto adapter_idx = get_adapter_by_handle(adapter_[index]); adapter_idx.has_value())
+		if (const auto adapter_idx = get_adapter_by_handle(adapter_[index]); adapter_idx.has_value())
 		{
 			//
 			// Set events for helper driver
@@ -433,7 +433,7 @@ namespace ndisapi
 
 	inline void dual_packet_filter::release_filter(const size_t index)
 	{
-		if (auto adapter_idx = get_adapter_by_handle(adapter_[index]); adapter_idx.has_value())
+		if (const auto adapter_idx = get_adapter_by_handle(adapter_[index]); adapter_idx.has_value())
 		{
 			network_interfaces_[adapter_idx.value()]->release();
 		}
@@ -476,7 +476,7 @@ namespace ndisapi
 		if (init_filter(index))
 		{
 			std::shared_ptr<network_adapter> adapter;
-			if (auto adapter_idx = get_adapter_by_handle(adapter_[index]); !adapter_idx.has_value())
+			if (const auto adapter_idx = get_adapter_by_handle(adapter_[index]); !adapter_idx.has_value())
 				return false;
 			else
 				adapter = network_interfaces_[adapter_idx.value()];

@@ -32,15 +32,16 @@
 #include <array>
 #include <map>
 #include <cctype>
-#include <mutex>
-#include <shared_mutex>
 #include <variant>
 #include <bitset>
 #include <optional>
 #include <algorithm>
-#include <fstream>
+#include <mutex>
 #include <charconv>
+#include <shared_mutex>
 #include <gsl/gsl>
+#include <hs/hs.h>
+#include <llhttp.h>
 
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"
@@ -49,9 +50,8 @@
 #include "../common/winsys/event.h"
 #include "../common/net/mac_address.h"
 #include "../common/net/ip_address.h"
-#include "../common/pcap/pcap.h"
-#include "../common/pcap/pcap_file_storage.h"
 #include "../common/net/ip_subnet.h"
+#include "../common/net/ip_endpoint.h"
 #include "../common/iphelper/network_adapter_info.h"
 #include "../common/ndisapi/network_adapter.h"
 #include "../common/ndisapi/simple_packet_filter.h"

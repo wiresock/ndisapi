@@ -45,6 +45,7 @@ typedef struct in_addr IN_ADDR, *PIN_ADDR;
 #define IPPROTO_PUP             12              /* pup */
 #define IPPROTO_UDP             17              /* user datagram protocol */
 #define IPPROTO_IDP             22              /* xns idp */
+#define IPPROTO_ICMPV6			58				/* control message protocol v6*/
 #define IPPROTO_ND              77              /* UNOFFICIAL net disk proto */
 
 #define IPPROTO_RAW             255             /* raw IP packet */

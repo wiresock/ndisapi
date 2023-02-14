@@ -1,6 +1,4 @@
 #pragma once
-#include <codecvt>
-#include <locale>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -9,18 +7,42 @@ namespace tools::strings
 {
 	inline std::wstring to_wstring(const std::string& str)
 	{
-		using convert_type_x = std::codecvt_utf8<wchar_t>;
-		std::wstring_convert<convert_type_x, wchar_t> converter_x;
+		int requiredSize = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, NULL, 0);
+		if (requiredSize == 0)
+		{
+			// Handle error
+			return L"";
+		}
 
-		return converter_x.from_bytes(str);
+		std::wstring wstr(requiredSize - 1, '\0');
+		int result = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], requiredSize);
+		if (result == 0)
+		{
+			// Handle error
+			return L"";
+		}
+
+		return wstr;
 	}
 
-	inline std::string to_string(const std::wstring& str)
+	inline std::string to_string(const std::wstring& wstr)
 	{
-		using convert_type_x = std::codecvt_utf8<wchar_t>;
-		std::wstring_convert<convert_type_x, wchar_t> converter_x;
+		int requiredSize = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+		if (requiredSize == 0)
+		{
+			// Handle error
+			return "";
+		}
 
-		return converter_x.to_bytes(str);
+		std::string str(requiredSize - 1, '\0');
+		int result = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], requiredSize, NULL, NULL);
+		if (result == 0)
+		{
+			// Handle error
+			return "";
+		}
+
+		return str;
 	}
 
 	inline std::vector<std::string> split_string(const std::string& input, const char sep)

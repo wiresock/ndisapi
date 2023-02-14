@@ -109,7 +109,7 @@ namespace net
 		/// <returns></returns>
 		[[nodiscard]] uint8_t get_prefix() const
 		{
-			if constexpr (std::is_same<std::decay_t<T>, ip_address_v6>::value)
+			if constexpr (std::is_same_v<std::decay_t<T>, ip_address_v6>)
 			{
 				auto ip_subnet_mask_ptr = reinterpret_cast<const ip6_addr*>(&mask);
 				return static_cast<uint8_t>(std::bitset<32>(ip_subnet_mask_ptr->u.dword[0]).count() + std::bitset<
@@ -117,7 +117,7 @@ namespace net
 					std::bitset<32>(ip_subnet_mask_ptr->u.dword[2]).count() + std::bitset<32>(ip_subnet_mask_ptr
 						->u.dword[3]).count());
 			}
-			else if constexpr (std::is_same<std::decay_t<T>, ip_address_v4>::value)
+			else if constexpr (std::is_same_v<std::decay_t<T>, ip_address_v4>)
 			{
 				const auto ip_subnet_mask_ptr = reinterpret_cast<const in_addr*>(&mask);
 				return static_cast<uint8_t>(std::bitset<32>(ip_subnet_mask_ptr->S_un.S_addr).count());
@@ -155,7 +155,7 @@ namespace net
 		/// <returns>true if specified IP address belongs to this subnet</returns>
 		[[nodiscard]] bool address_in_subnet(T ip) const
 		{
-			if constexpr (std::is_same<std::decay_t<T>, ip_address_v6>::value)
+			if constexpr (std::is_same_v<std::decay_t<T>, ip_address_v6>)
 			{
 				auto ip_ptr = reinterpret_cast<ip6_addr*>(&ip);
 				auto ip_subnet_ptr = reinterpret_cast<const ip6_addr*>(this);
@@ -167,7 +167,7 @@ namespace net
 						ip_subnet_mask_ptr->u.qword[1])))
 					return true;
 			}
-			else if constexpr (std::is_same<std::decay_t<T>, ip_address_v4>::value)
+			else if constexpr (std::is_same_v<std::decay_t<T>, ip_address_v4>)
 			{
 				const auto ip_ptr = reinterpret_cast<in_addr*>(&ip);
 				const auto ip_subnet_ptr = reinterpret_cast<const in_addr*>(this);
@@ -179,6 +179,100 @@ namespace net
 			}
 
 			return false;
+		}
+
+		static std::optional<ip_subnet<T>> from_cidr(const std::string& subnet)
+		{
+			if (const auto pos = subnet.find('/'); pos != std::string::npos)
+			{
+				if constexpr (std::is_same_v<T, net::ip_address_v4>)
+				{
+					if (const auto [result_v4, address_v4] = ip_address_v4::from_string(subnet.substr(0, pos));
+						result_v4)
+					{
+						uint8_t mask = 0;
+
+						if (auto [p, ec] = std::from_chars(subnet.data() + pos + 1, subnet.data() + subnet.size(), mask); ec ==
+							std::errc())
+						{
+							if (mask <= 32)
+							{
+								uint32_t net_mask = 0;
+								while (mask--)
+								{
+									net_mask >>= 1;
+									net_mask = net_mask | 0x80000000;
+								}
+
+								return { net::ip_subnet{
+									address_v4, ip_address_v4(htonl(net_mask))
+								} };
+							}
+						}
+					}
+				}
+				else
+				{
+					if (const auto [result_v6, address_v6] = net::ip_address_v6::from_string(subnet.substr(0, pos));
+						result_v6)
+					{
+						uint8_t mask = 0;
+
+						if (auto [p, ec] = std::from_chars(subnet.data() + pos + 1, subnet.data() + subnet.size(), mask); ec ==
+							std::errc())
+						{
+							if (mask <= 128)
+							{
+								uint8_t address_mask[ip_address_v6::ipv6_address_max_length] = { 0 };
+
+								const auto maxed_bytes = mask / 8;
+								auto last_byte_bits = mask % 8;
+
+								uint8_t net_mask = 0;
+								while (last_byte_bits--)
+								{
+									net_mask >>= 1;
+									net_mask = net_mask | 0x80;
+								}
+
+								memset(&address_mask[0], 0xFF, maxed_bytes);
+
+								if (maxed_bytes < 16)
+									gsl::at(address_mask, maxed_bytes) = net_mask;
+
+								return { net::ip_subnet{
+									address_v6, ip_address_v6(address_mask)
+								} };
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				if constexpr (std::is_same_v<T, net::ip_address_v4>)
+				{
+					if (const auto [result_v4, address_v4] = ip_address_v4::from_string(subnet);
+						result_v4)
+					{
+						return { net::ip_subnet{
+							address_v4, ip_address_v4("255.255.255.255") } };
+					}
+				}
+				else
+				{
+					if (const auto [result_v6, address_v6] = net::ip_address_v6::from_string(subnet);
+						result_v6)
+					{
+						constexpr uint8_t address_mask[net::ip_address_v6::ipv6_address_max_length] =
+						{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+						return { net::ip_subnet{
+							address_v6, ip_address_v6(address_mask) } };
+					}
+				}
+			}
+			return {};
 		}
 	};
 }

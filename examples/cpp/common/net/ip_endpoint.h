@@ -48,7 +48,7 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">endpoint to compare to</param>
 		/// <returns>true if endpoints are equal</returns>
-		bool operator ==(const ip_endpoint& rhs) const { return (ip == rhs.ip) && (port == rhs.port); }
+		bool operator ==(const ip_endpoint& rhs) const noexcept{ return (ip == rhs.ip) && (port == rhs.port); }
 
 		/// <summary>
 		/// Non-equality operator
@@ -112,7 +112,7 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">ip_session to compare to</param>
 		/// <returns>true if endpoints are equal</returns>
-		bool operator ==(const ip_session& rhs) const { return (local == rhs.local) && (remote == rhs.remote); }
+		bool operator ==(const ip_session& rhs) const noexcept { return (local == rhs.local) && (remote == rhs.remote); }
 
 		/// <summary>
 		/// Non-equality operator for ip_session

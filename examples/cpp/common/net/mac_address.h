@@ -17,22 +17,27 @@ namespace net
 		static constexpr int eth_address_length = 6;
 
 		/// <summary>
+		/// MAC address storage
+		/// </summary>
+		std::array<unsigned char, eth_address_length> data{0};
+		using size_type = std::array<unsigned char, eth_address_length>::size_type;
+
+		/// <summary>
 		/// Default constructor creates zero MAC address
 		/// </summary>
-		mac_address() { data.fill(0); } // NOLINT(cppcoreguidelines-pro-type-member-init)
+		mac_address() = default;
 
 		/// <summary>
 		/// Constructs MAC address object from the provided bytes
 		/// </summary>
 		/// <param name="ptr">pointer to data buffer with MAC address</param>
-		explicit mac_address(const unsigned char* ptr) { memmove(&data[0], ptr, eth_address_length); }
-		// NOLINT(cppcoreguidelines-pro-type-member-init)
+		explicit mac_address(const unsigned char* ptr) noexcept { memmove(&data.at(0), ptr, eth_address_length); }
 
 		/// <summary>
 		/// Constructs MAC address by parsing its string representation
 		/// </summary>
 		/// <param name="address">MAC address represented as string, e.g. '01:02:03:04:05:06'</param>
-		explicit mac_address(const std::string& address) // NOLINT(cppcoreguidelines-pro-type-member-init)
+		explicit mac_address(const std::string& address)
 		{
 			std::stringstream mss(address);
 			std::string hex;
@@ -56,14 +61,14 @@ namespace net
 		/// </summary>
 		/// <param name="index">index of MAC address array</param>
 		/// <returns>modifiable MAC address byte reference by its index</returns>
-		unsigned char& operator[](const size_t index) { return data[index]; }
+		unsigned char& operator[](const size_type index) noexcept { return data.at(index); }
 
 		/// <summary>
 		/// Index operator to retrieve MAC address byte reference by specifying its index
 		/// </summary>
 		/// <param name="index">index of MAC address array</param>
 		/// <returns>constant MAC address byte reference by its index</returns>
-		const unsigned char& operator[](const size_t index) const { return data[index]; }
+		const unsigned char& operator[](const size_type index) const noexcept { return data.at(index); }
 
 		/// <summary>
 		/// Equality operator
@@ -90,20 +95,20 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">MAC address to compare to</param>
 		/// <returns>true is MAC addresses is lexicographically less than specified</returns>
-		bool operator <(const mac_address& rhs) const
+		bool operator <(const mac_address& rhs) const noexcept
 		{
-			return (memcmp(&data[0], &rhs.data[0], eth_address_length) < 0);
+			return (memcmp(&data.at(0), &rhs.data.at(0), eth_address_length) < 0);
 		}
 
 		/// <summary>
 		/// Checks if MAC address is zero initialized
 		/// </summary>
-		explicit operator bool() const { return *this != mac_address{}; };
+		explicit operator bool() const { return *this != mac_address{}; }
 
 		/// <summary>
 		/// Returns MAC address as std::array
 		/// </summary>
-		explicit operator std::array<unsigned char, eth_address_length>() const { return data; }
+		explicit operator std::array<unsigned char, eth_address_length>() const noexcept { return data; }
 
 		/// <summary>
 		/// Template to_string conversion operator for MAC address
@@ -114,18 +119,18 @@ namespace net
 			std::basic_ostringstream<T> oss;
 			oss << std::hex
 				<< std::uppercase
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[0]) //<< ":"
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[1]) //<< ":"
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[2]) //<< ":"
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[3]) //<< ":"
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[4]) //<< ":"
-				<< std::setfill(T('0')) << std::setw(2)
-				<< static_cast<unsigned>(data[5]);
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(0))
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(1))
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(2))
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(3))
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(4))
+				<< std::setfill(T{'0'}) << std::setw(2)
+				<< static_cast<unsigned>(data.at(5));
 			return oss.str();
 		}
 
@@ -153,20 +158,33 @@ namespace net
 		}
 
 		/// <summary>
-		 /// Checks if MAC address is multicast
-		 /// </summary>
-		 /// <returns>true if multicast</returns>
-		[[nodiscard]] bool is_multicast() const
+		/// Checks if MAC address is multicast
+		/// </summary>
+		/// <returns>true if multicast</returns>
+		[[nodiscard]] bool is_multicast() const noexcept
 		{
-			if ((data[0] & 0x01) == 0x01)
+			if ((data.at(0) & 0x01) == 0x01)
 				return true;
 			return false;
 		}
 
 		/// <summary>
-		/// MAC address storage
+		/// Get underlying storage reference
 		/// </summary>
-		std::array<unsigned char, eth_address_length> data;
+		/// <returns>underlying storage reference</returns>
+		[[nodiscard]] std::array<unsigned char, eth_address_length>& get_data() noexcept
+		{
+			return data;
+		}
+
+		/// <summary>
+		/// Get underlying storage reference (const)
+		/// </summary>
+		/// <returns>underlying storage reference</returns>
+		[[nodiscard]] const std::array<unsigned char, eth_address_length>& get_data() const noexcept
+		{
+			return data;
+		}
 	};
 
 	/// <summary>
@@ -194,6 +212,7 @@ namespace net
 	}
 }
 
+// ReSharper disable once CppRedundantNamespaceDefinition
 namespace std
 {
 	/// <summary>
@@ -207,12 +226,12 @@ namespace std
 
 		result_type operator()(const argument_type& mac) const noexcept
 		{
-			const auto arg = (static_cast<uint64_t>(mac[0]) << 40) +
-				(static_cast<uint64_t>(mac[1]) << 32) +
-				(static_cast<uint64_t>(mac[2]) << 24) +
-				(static_cast<uint64_t>(mac[3]) << 16) +
-				(static_cast<uint64_t>(mac[4]) << 8) +
-				mac[5];
+			const auto arg = (static_cast<uint64_t>(mac.get_data().at(0)) << 40) +
+				(static_cast<uint64_t>(mac.get_data().at(1)) << 32) +
+				(static_cast<uint64_t>(mac.get_data().at(2)) << 24) +
+				(static_cast<uint64_t>(mac.get_data().at(3)) << 16) +
+				(static_cast<uint64_t>(mac.get_data().at(4)) << 8) +
+				(static_cast<uint64_t>(mac.get_data().at(5)));
 
 			const auto h1(
 				std::hash<uint64_t>{}(arg)

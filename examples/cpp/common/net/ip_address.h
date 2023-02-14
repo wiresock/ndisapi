@@ -13,6 +13,9 @@
 
 #pragma comment(lib, "ntdll.lib")
 
+#pragma warning( push )
+#pragma warning( disable : 26490 ) // disable reinterpret_cast warning
+
 namespace net
 {
 	// --------------------------------------------------------------------------------
@@ -36,39 +39,37 @@ namespace net
 		/// Constructs from 32 bit unsigned (by default initializes to 0.0.0.0).
 		/// </summary>
 		/// <param name="address">IPv4 address as unsigned 32 bit in network byte order</param>
-		explicit constexpr ip_address_v4(const uint32_t address = 0) : in_addr() { S_un.S_addr = address; }
+		explicit constexpr ip_address_v4(const uint32_t address = 0) noexcept: in_addr() { S_un.S_addr = address; }
 
 		/// <summary>
 		/// Constructs object from in_addr.
 		/// </summary>
 		/// <param name="ip">IPv4 address as in_addr</param>
 		// ReSharper disable once CppNonExplicitConvertingConstructor
-		ip_address_v4(const in_addr& ip) : in_addr() { *static_cast<in_addr*>(this) = ip; }
+		ip_address_v4(const in_addr& ip) noexcept: in_addr(ip)
+		{
+		}
 
 		/// <summary>
 		/// Constructs from std::string if possible to parse
 		/// </summary>
 		/// <param name="ip">IPv4 address represented as std::string</param>
-		explicit ip_address_v4(const std::string& ip) : in_addr()
+		explicit ip_address_v4(const std::string& ip) noexcept: in_addr()
 		{
 			PCSTR terminator = nullptr;
 
 			[[maybe_unused]] const auto result = RtlIpv4StringToAddressA(ip.c_str(), TRUE, &terminator, this);
-
-			assert(0 == result);
 		}
 
 		/// <summary>
 		/// Constructs from std::wstring if possible to parse
 		/// </summary>
 		/// <param name="ip">IPv4 address represented as std::wstring</param>
-		explicit ip_address_v4(const std::wstring& ip) : in_addr()
+		explicit ip_address_v4(const std::wstring& ip) noexcept: in_addr()
 		{
 			LPCWSTR terminator = nullptr;
 
 			[[maybe_unused]] const auto result = RtlIpv4StringToAddressW(ip.c_str(), TRUE, &terminator, this);
-
-			assert(0 == result);
 		}
 
 		/// <summary>
@@ -77,9 +78,9 @@ namespace net
 		explicit operator std::string() const
 		{
 			std::vector<char> ip_vec(ipv4_address_max_length, 0);
-			RtlIpv4AddressToStringA(this, &ip_vec[0]);
+			RtlIpv4AddressToStringA(this, &gsl::at(ip_vec, 0));
 
-			return std::string(&ip_vec[0]);
+			return {&gsl::at(ip_vec, 0)};
 		}
 
 		/// <summary>
@@ -88,9 +89,9 @@ namespace net
 		explicit operator std::wstring() const
 		{
 			std::vector<wchar_t> ip_vec(ipv4_address_max_length, 0);
-			RtlIpv4AddressToStringW(this, &ip_vec[0]);
+			RtlIpv4AddressToStringW(this, &gsl::at(ip_vec, 0));
 
-			return std::wstring(&ip_vec[0]);
+			return {&gsl::at(ip_vec, 0)};
 		}
 
 		/// <summary>
@@ -98,7 +99,7 @@ namespace net
 		/// </summary>
 		/// <param name="ip">IPv4 address represented as std::string</param>
 		/// <returns>pair of boolean and ip_address_v4, if boolean is true</returns>
-		static std::pair<bool, ip_address_v4> from_string(const std::string& ip)
+		static std::pair<bool, ip_address_v4> from_string(const std::string& ip) noexcept
 		{
 			PCSTR terminator = nullptr;
 			ip_address_v4 address{};
@@ -113,7 +114,7 @@ namespace net
 		/// </summary>
 		/// <param name="ip">IPv4 address represented as std::wstring</param>
 		/// <returns>pair of boolean and ip_address_v4, if boolean is true</returns>
-		static std::pair<bool, ip_address_v4> from_wstring(const std::wstring& ip)
+		static std::pair<bool, ip_address_v4> from_wstring(const std::wstring& ip) noexcept
 		{
 			LPCWSTR terminator = nullptr;
 			ip_address_v4 address{};
@@ -128,27 +129,27 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if equal</returns>
-		bool operator ==(const ip_address_v4& rhs) const { return (S_un.S_addr == rhs.S_un.S_addr); }
+		bool operator ==(const ip_address_v4& rhs) const noexcept { return (S_un.S_addr == rhs.S_un.S_addr); }
 
 		/// <summary>
 		/// Non-equality operator (compares as 32 bit unsigned in network byte order)
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if non-equal</returns>
-		bool operator !=(const ip_address_v4& rhs) const { return (S_un.S_addr != rhs.S_un.S_addr); }
+		bool operator !=(const ip_address_v4& rhs) const noexcept { return (S_un.S_addr != rhs.S_un.S_addr); }
 
 		/// <summary>
 		/// Less operator (compares as 32 bit unsigned in network byte order)
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if less</returns>
-		bool operator <(const ip_address_v4& rhs) const { return (S_un.S_addr < rhs.S_un.S_addr); }
+		bool operator <(const ip_address_v4& rhs) const noexcept { return (S_un.S_addr < rhs.S_un.S_addr); }
 
 		/// <summary>
 		/// Checks if contains an IPv4 auto-configuration address(169.254.xxx.xxx)
 		/// </summary>
 		/// <returns>true if assigned IPv4 is auto-configuration address</returns>
-		[[nodiscard]] bool is_auto_config() const
+		[[nodiscard]] bool is_auto_config() const noexcept
 		{
 			if (S_un.S_un_b.s_b1 == 169 && S_un.S_un_b.s_b2 == 254)
 				return true;
@@ -210,7 +211,7 @@ namespace net
 		/// <summary>
 		/// Constructs zero IPv6 address
 		/// </summary>
-		constexpr ip_address_v6() : in6_addr()
+		constexpr ip_address_v6() noexcept : in6_addr()
 		{
 			this->u.Word[0] = 0;
 			this->u.Word[1] = 0;
@@ -226,7 +227,7 @@ namespace net
 		/// Constructs IPv6 address from the provided byte array
 		/// </summary>
 		/// <param name="address">16 bytes array</param>
-		explicit ip_address_v6(const uint8_t address[ipv6_address_max_length]) : in6_addr()
+		explicit ip_address_v6(const uint8_t (&address)[ipv6_address_max_length]) noexcept: in6_addr()
 		{
 			memmove(this, address, sizeof(in_addr6));
 		}
@@ -236,13 +237,15 @@ namespace net
 		/// </summary>
 		/// <param name="ip">in_addr6 object reference</param>
 		// ReSharper disable once CppNonExplicitConvertingConstructor
-		ip_address_v6(const in_addr6& ip) : in6_addr() { memmove(this, &ip, sizeof(ip_address_v6)); }
+		ip_address_v6(const in_addr6& ip) noexcept : in6_addr(ip)
+		{
+		}
 
 		/// <summary>
 		/// Constructs IPv6 address from std::string representation
 		/// </summary>
 		/// <param name="ip">IPv6 address in string representation</param>
-		explicit ip_address_v6(const std::string& ip) : in6_addr()
+		explicit ip_address_v6(const std::string& ip) noexcept : in6_addr()
 		{
 			PCSTR terminator = nullptr;
 
@@ -255,7 +258,7 @@ namespace net
 		/// Constructs IPv6 address from std::wstring representation
 		/// </summary>
 		/// <param name="ip">IPv6 address in wide char string representation</param>
-		explicit ip_address_v6(const std::wstring& ip) : in6_addr()
+		explicit ip_address_v6(const std::wstring& ip) noexcept : in6_addr()
 		{
 			LPCWSTR terminator = nullptr;
 
@@ -270,9 +273,9 @@ namespace net
 		explicit operator std::string() const
 		{
 			std::vector<char> ip_vec(ipv6_address_max_string_length, 0);
-			RtlIpv6AddressToStringA(this, &ip_vec[0]);
+			RtlIpv6AddressToStringA(this, &gsl::at(ip_vec, 0));
 
-			return std::string(&ip_vec[0]);
+			return {&gsl::at(ip_vec, 0)};
 		}
 
 		/// <summary>
@@ -281,9 +284,9 @@ namespace net
 		explicit operator std::wstring() const
 		{
 			std::vector<wchar_t> ip_vec(ipv6_address_max_string_length, 0);
-			RtlIpv6AddressToStringW(this, &ip_vec[0]);
+			RtlIpv6AddressToStringW(this, &gsl::at(ip_vec, 0));
 
-			return std::wstring(&ip_vec[0]);
+			return {&gsl::at(ip_vec, 0)};
 		}
 
 		/// <summary>
@@ -291,7 +294,7 @@ namespace net
 		/// </summary>
 		/// <param name="ip">IPv6 address represented as std::string</param>
 		/// <returns>pair of boolean and ip_address_v6, if boolean is true</returns>
-		static std::pair<bool, ip_address_v6> from_string(const std::string& ip)
+		static std::pair<bool, ip_address_v6> from_string(const std::string& ip) noexcept
 		{
 			PCSTR terminator = nullptr;
 			ip_address_v6 address{};
@@ -306,7 +309,7 @@ namespace net
 		/// </summary>
 		/// <param name="ip">IPv6 address represented as std::wstring</param>
 		/// <returns>pair of boolean and ip_address_v6, if boolean is true</returns>
-		static std::pair<bool, ip_address_v6> from_wstring(const std::wstring& ip)
+		static std::pair<bool, ip_address_v6> from_wstring(const std::wstring& ip) noexcept
 		{
 			LPCWSTR terminator = nullptr;
 			ip_address_v6 address{};
@@ -321,7 +324,7 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if equal</returns>
-		bool operator ==(const ip_address_v6& rhs) const
+		bool operator ==(const ip_address_v6& rhs) const noexcept
 		{
 			return !memcmp(this, &rhs, sizeof(ip_address_v6));
 		}
@@ -331,7 +334,7 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if non-equal</returns>
-		bool operator !=(const ip_address_v6& rhs) const
+		bool operator !=(const ip_address_v6& rhs) const noexcept
 		{
 			return memcmp(this, &rhs, sizeof(ip_address_v6));
 		}
@@ -341,15 +344,15 @@ namespace net
 		/// </summary>
 		/// <param name="rhs">Value reference to compare to</param>
 		/// <returns>true if less</returns>
-		bool operator <(const ip_address_v6& rhs) const { return (memcmp(this, &rhs, sizeof(in_addr6)) < 0); }
+		bool operator <(const ip_address_v6& rhs) const noexcept { return (memcmp(this, &rhs, sizeof(in_addr6)) < 0); }
 
 		/// <summary>
 		/// Calculates 32 bit hash from IPv6 address
 		/// </summary>
-		explicit operator uint32_t() const
+		explicit operator uint32_t() const noexcept
 		{
-			const auto dword = reinterpret_cast<const uint32_t*>(this);
-			return dword[0] ^ dword[1] ^ dword[2] ^ dword[3];
+			const auto sp = gsl::span(reinterpret_cast<const uint32_t*>(this), 4);
+			return sp[0] ^ sp[1] ^ sp[2] ^ sp[3];
 		}
 
 		/// <summary>
@@ -437,3 +440,5 @@ namespace std
 		}
 	};
 }
+
+#pragma warning( pop )

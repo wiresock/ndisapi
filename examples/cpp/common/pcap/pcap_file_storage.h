@@ -96,23 +96,29 @@ namespace pcap
 		pcap_file_storage& operator<<(const INTERMEDIATE_BUFFER& buffer)
 		{
 			static std::mutex lock; // NOLINT(clang-diagnostic-exit-time-destructors)
+			static const auto start_time = std::chrono::high_resolution_clock::now();
+			static const auto seconds_since_epoch =
+				gsl::narrow_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(
+					std::chrono::system_clock::now().time_since_epoch()
+				).count());
 
 			std::lock_guard<std::mutex> write_lock(lock);
 
-			const auto now = std::chrono::high_resolution_clock::now();
-
 			const auto milliseconds =
 				std::chrono::duration_cast<std::chrono::milliseconds>(
-					now.time_since_epoch()
+					std::chrono::high_resolution_clock::now() - start_time
 				);
 
-			const auto seconds = static_cast<uint32_t>(milliseconds.count() / 1000);
-			const auto microseconds_remain = static_cast<uint32_t>((milliseconds.count() % 1000) * 1000);
+			const auto seconds = gsl::narrow_cast<uint32_t>(milliseconds.count() / 1000) + seconds_since_epoch;
+			const auto microseconds_remain = gsl::narrow_cast<uint32_t>((milliseconds.count() % 1000) * 1000);
 
 			const auto* const ethernet_header = reinterpret_cast<const char*>(buffer.m_IBuffer);
 
 			file_stream_ << pcap_record_header(seconds, microseconds_remain,
 			                                   buffer.m_Length, buffer.m_Length, ethernet_header);
+
+			file_stream_.flush();
+
 			return *this;
 		}
 

@@ -330,9 +330,7 @@ namespace iphelper
 								== NO_ERROR)
 							{
 								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid,
-									info->pModuleName ? std::wstring(info->pModuleName) : std::wstring(),
-									info->pModulePath ? std::wstring(info->pModulePath) : std::wstring());
+									table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
 							}
 						}
 
@@ -364,9 +362,8 @@ namespace iphelper
 								                            &size) == NO_ERROR)
 							{
 								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, 
-									info->pModuleName ? std::wstring(info->pModuleName) : std::wstring(),
-									info->pModulePath ? std::wstring(info->pModulePath) : std::wstring());
+									table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
 							}
 						}
 
@@ -441,9 +438,8 @@ namespace iphelper
 								== NO_ERROR)
 							{
 								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, 
-									info->pModuleName ? std::wstring(info->pModuleName) : std::wstring(),
-									info->pModulePath ? std::wstring(info->pModulePath) : std::wstring());
+									table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
 							}
 						}
 
@@ -473,9 +469,8 @@ namespace iphelper
 								                            &size) == NO_ERROR)
 							{
 								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, 
-									info->pModuleName ? std::wstring(info->pModuleName) : std::wstring(),
-									info->pModulePath ? std::wstring(info->pModulePath) : std::wstring());
+									table->table[i].dwOwningPid, info->pModuleName,
+									info->pModulePath);
 							}
 						}
 

@@ -37,6 +37,8 @@
 #include <variant>
 #include <bitset>
 #include <optional>
+#include <charconv>
+#include <gsl/gsl>
 
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"

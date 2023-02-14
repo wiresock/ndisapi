@@ -39,6 +39,8 @@
 #include <optional>
 #include <algorithm>
 #include <fstream>
+#include <charconv>
+#include <gsl/gsl>
 
 #include "../../../include/common.h"
 #include "../../../include/ndisapi.h"

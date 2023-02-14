@@ -1,5 +1,8 @@
 #pragma once
 
+#pragma warning( push )
+#pragma warning( disable : 26456 )
+
 namespace winsys
 {
 	// --------------------------------------------------------------------------------
@@ -84,3 +87,4 @@ namespace winsys
 		}
 	};
 }
+#pragma warning( pop )

@@ -327,7 +327,7 @@ namespace ndisapi
 		// ********************************************************************************
 		[[nodiscard]] ndis_wan_type get_ndis_wan_type() const { return ndis_wan_type_; }
 
-	private:
+	protected:
 		/// <summary>
 		/// Driver interface pointer
 		/// </summary>
@@ -390,7 +390,7 @@ namespace ndisapi
 			return {};
 
 		const auto ras_links_storage = std::make_unique<std::aligned_storage_t<sizeof(RAS_LINKS)>>();
-		auto ras_links = reinterpret_cast<PRAS_LINKS>(ras_links_storage.get());
+		const auto ras_links = reinterpret_cast<PRAS_LINKS>(ras_links_storage.get());
 
 		std::vector<ndis_wan_link_info> result;
 
@@ -402,12 +402,12 @@ namespace ndisapi
 				{
 				case ndis_wan_type::ndis_wan_ip:
 					{
-						result.emplace_back(ndis_wan_link_info(AF_INET, &ras_links->RasLinks[i]));
+						result.emplace_back(AF_INET, &ras_links->RasLinks[i]);
 						break;
 					}
 				case ndis_wan_type::ndis_wan_ipv6:
 					{
-						result.emplace_back(ndis_wan_link_info(AF_INET6, &ras_links->RasLinks[i]));
+						result.emplace_back(AF_INET6, &ras_links->RasLinks[i]);
 						break;
 					}
 				case ndis_wan_type::ndis_wan_none:

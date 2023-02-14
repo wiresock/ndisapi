@@ -82,7 +82,7 @@ namespace iphelper
 		/// Constructs ip_address_info from SOCKET_ADDRESS
 		/// </summary>
 		/// <param name="address"></param>
-		explicit ip_address_info(SOCKET_ADDRESS& address) : SOCKADDR_STORAGE()
+		explicit ip_address_info(const SOCKET_ADDRESS& address) : SOCKADDR_STORAGE()
 		{
 			memcpy(this, address.lpSockaddr, address.iSockaddrLength);
 		}
@@ -196,7 +196,7 @@ namespace iphelper
 		/// </summary>
 		/// <param name="address">IP address represented as SOCKET_ADDRESS</param>
 		/// <param name="hardware_address">Hardware (MAC) address</param>
-		explicit ip_gateway_info(SOCKET_ADDRESS& address,
+		explicit ip_gateway_info(const SOCKET_ADDRESS& address,
 		                         const net::mac_address& hardware_address = net::mac_address()) :
 			ip_address_info(address), hardware_address(hardware_address)
 		{
@@ -270,6 +270,9 @@ namespace iphelper
 	/// </summary>
 	class network_adapter_info
 	{
+		static constexpr std::string_view adapter_connection_name =
+			R"(SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\)";
+
 	public:
 		/// <summary>
 		/// Constructs object instance from IP HELPER API structures
@@ -411,6 +414,42 @@ namespace iphelper
 		/// </summary>
 		/// <returns>Network interface friendly name as std::wstring reference</returns>
 		[[nodiscard]] const std::wstring& get_friendly_name() const noexcept { return friendly_name_; }
+
+		/// <summary>
+		/// Sets network interface friendly name
+		/// </summary>
+		/// <returns>Network interface friendly name as std::wstring reference</returns>
+		[[nodiscard]] bool set_friendly_name(const std::string_view name) noexcept
+		{
+			const std::string key_name = std::string(adapter_connection_name) + adapter_name_ + "\\Connection";
+
+			HKEY h_key;
+
+			if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+				key_name.c_str(),
+				0,
+				KEY_WRITE,
+				&h_key) != ERROR_SUCCESS)
+				return false;
+
+			const auto status = RegSetValueExA(
+				h_key,
+				"Name",
+				0,
+				REG_SZ,
+				reinterpret_cast<const BYTE*>(name.data()),
+				static_cast<DWORD>(name.size() + 1));
+
+			RegCloseKey(h_key);
+
+			if (status == ERROR_SUCCESS)
+			{
+				friendly_name_ = std::wstring(name.cbegin(), name.cend());
+				return true;
+			}
+
+			return false;
+		}
 
 		/// <summary>
 		/// Gets network interface unicast addresses
@@ -602,6 +641,7 @@ namespace iphelper
 			address_row->PrefixOrigin = IpPrefixOriginManual;
 			address_row->SuffixOrigin = IpSuffixOriginManual;
 			address_row->OnLinkPrefixLength = prefix_length;
+			address_row->DadState = IpDadStatePreferred;
 
 			SetLastError(ERROR_SUCCESS);
 
@@ -638,6 +678,7 @@ namespace iphelper
 			address_row->PrefixOrigin = IpPrefixOriginManual;
 			address_row->SuffixOrigin = IpSuffixOriginManual;
 			address_row->OnLinkPrefixLength = prefix_length;
+			address_row->DadState = IpDadStatePreferred;
 
 			SetLastError(ERROR_SUCCESS);
 
@@ -656,7 +697,7 @@ namespace iphelper
 		/// </summary>
 		/// <param name="address">MIB_UNICASTIPADDRESS_ROW unique pointer</param>
 		/// <returns>true if no error occurs, false otherwise</returns>
-		[[nodiscard]] static bool delete_unicast_address(const std::unique_ptr<MIB_UNICASTIPADDRESS_ROW> address)
+		[[nodiscard]] static bool delete_unicast_address(const std::unique_ptr<MIB_UNICASTIPADDRESS_ROW> address) noexcept
 		{
 			SetLastError(ERROR_SUCCESS);
 
@@ -894,7 +935,7 @@ namespace iphelper
 		/// </summary>
 		/// <param name="address">MIB_IPFORWARD_ROW2 unique pointer</param>
 		/// <returns>true if successful, false otherwise</returns>
-		[[nodiscard]] static bool delete_routes(const std::unique_ptr<MIB_IPFORWARD_ROW2> address)
+		[[nodiscard]] static bool delete_routes(const std::unique_ptr<MIB_IPFORWARD_ROW2> address) noexcept
 		{
 			SetLastError(ERROR_SUCCESS);
 
@@ -919,7 +960,7 @@ namespace iphelper
 
 			SetLastError(ERROR_SUCCESS);
 
-			std::for_each(address.begin(), address.end(), [&status](auto&& a)
+			std::for_each(address.begin(), address.end(), [&status](auto&& a) noexcept
 			{
 				if (const auto error_code = ::DeleteIpForwardEntry2(a.get()); NOERROR != error_code)
 				{
@@ -1147,7 +1188,7 @@ namespace iphelper
 		/// </summary>
 		/// <param name="address">unique pointer to MIB_IPNET_ROW2</param>
 		/// <returns>true if successful, false otherwise</returns>
-		[[nodiscard]] static bool delete_ndp_entry(const std::unique_ptr<MIB_IPNET_ROW2> address)
+		[[nodiscard]] static bool delete_ndp_entry(const std::unique_ptr<MIB_IPNET_ROW2> address) noexcept
 		{
 			SetLastError(ERROR_SUCCESS);
 

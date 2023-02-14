@@ -1,5 +1,8 @@
 #pragma once
 
+#pragma warning( push )
+#pragma warning( disable : 26490 ) // disable reinterpret_cast warning
+
 namespace net
 {
 	/// <summary>
@@ -16,12 +19,11 @@ namespace net
 		/// <returns>pointer to IP packet payload (TCP, UDP, ICMPv6 and etc..) and protocol value</returns>
 		// ********************************************************************************
 		static std::pair<void*, unsigned char> find_transport_header(
-			ipv6hdr_ptr ip_header,
+			const ipv6hdr* ip_header,
 			const unsigned packet_size
-		)
+		) noexcept
 		{
 			unsigned char next_proto = 0;
-			ipv6ext_ptr next_header = nullptr;
 			void* the_header = nullptr;
 
 			//
@@ -36,13 +38,13 @@ namespace net
 
 			// Find the first header
 			next_proto = ip_header->ip6_next;
-			next_header = reinterpret_cast<ipv6ext_ptr>(ip_header + 1);
+			auto* next_header = reinterpret_cast<const ipv6ext*>(ip_header + 1);
 
 			// Loop until we find the last IP header
 			while (true)
 			{
 				// Ensure that current header is still within the packet
-				if (reinterpret_cast<char*>(next_header) > reinterpret_cast<char*>(ip_header) + packet_size - sizeof(
+				if (reinterpret_cast<const char*>(next_header) > reinterpret_cast<const char*>(ip_header) + packet_size - sizeof(
 					ipv6ext))
 				{
 					return {nullptr, next_proto};
@@ -53,7 +55,7 @@ namespace net
 					// Fragmentation
 				case IPPROTO_FRAGMENT:
 					{
-						const auto frag = reinterpret_cast<ipv6ext_frag_ptr>(next_header);
+						const auto frag = reinterpret_cast<const ipv6ext_frag*>(next_header);
 
 						// If this isn't the FIRST fragment, there won't be a TCP/UDP header anyway
 						if ((frag->ip6_offlg & 0xFC) != 0)
@@ -68,10 +70,10 @@ namespace net
 						next_proto = frag->ip6_next;
 
 						// Return next octet following the fragmentation header
-						next_header = reinterpret_cast<ipv6ext_ptr>(reinterpret_cast<char*>(next_header) + sizeof(
+						next_header = reinterpret_cast<const ipv6ext*>(reinterpret_cast<const char*>(next_header) + sizeof(
 							ipv6ext_frag));
 
-						return {next_header, next_proto};
+						return { const_cast<void*>(static_cast<const void*>(next_header)), next_proto };
 					}
 
 					// Headers we just skip over
@@ -84,13 +86,13 @@ namespace net
 					// header length, in units of 8 octets *not including* the
 					// first 8 octets.
 
-					next_header = reinterpret_cast<ipv6ext_ptr>(reinterpret_cast<char*>(next_header) + 8 + (next_header
+					next_header = reinterpret_cast<const ipv6ext*>(reinterpret_cast<const char*>(next_header) + 8 + static_cast<ULONG_PTR>(next_header
 						->ip6_len) * 8);
 					break;
 
 				default:
 					// No more IPv6 headers to skip
-					return {next_header, next_proto};
+					return { const_cast<void*>(static_cast<const void*>(next_header)), next_proto };
 				}
 			}
 		}
@@ -262,3 +264,5 @@ namespace net
 		}
 	};
 }
+
+#pragma warning( pop )

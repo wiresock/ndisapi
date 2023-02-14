@@ -87,7 +87,7 @@ namespace ndisapi
 				return false;
 			}
 
-			if (tcp_header->th_flags == TH_SYN)
+			if ((tcp_header->th_flags & (TH_SYN | TH_ACK)) == TH_SYN)
 			{
 				if (const auto [it, result] = redirected_connections_.emplace(
 					local_redirect_key{net::ip_address_v4{ip_header->ip_dst}, tcp_header->th_sport},
