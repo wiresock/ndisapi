@@ -20,12 +20,13 @@ https://www.ntkernel.com/docs/windows-packet-filter-documentation/
 
 ### Examples
 
-* **capture** - native C++ sample, intercepts packets for the specified network interface and saves those into the PCAP file which can be opened and analyzed with WireShark.
-* **dns_proxy** - native C++ sample, redirects DNS protocol through the transparent UDP proxy.
-* **dnstrace** - native C++ sample, intercepts DNS responses and decodes their content to the console. Has configurations to link NDISAPI statically and dynamically.
-* **ethernet_bridge** - native C++ sample, implements bridging wired and wireless networks. More information https://www.ntkernel.com/bridging-networks-with-windows-packet-filter/
-* **ipv6_parser** - native C++ sample, intercepts IPv6 packets, matches to originated process (using IP Helper API) parses protocol headers.
-* **sni_inspector** - native C++ sample, intercepts network packets and extracts SNI from HTTPS packets and Host from HTTP packets.
-* **socksify** - native C++ sample, redirects selected TCP connections through a SOCKS5 proxy. 
-* **rebind** - native C++ sample, rebinds outgoing TCP/UDP connections for the specified application from the default network interface to a different one.
-* **TestDotNet** - C# sample demonstrates the NDISAPI usage in several filtering scenarios. Available ion x86 and x64 configurations. AnyCPU configuration is not available due to the C++/CLI nature of ndisapi.net wrapper (see https://github.com/kevin-marshall/Managed.AnyCPU for the workaround). Projects references PacketDotNet (https://github.com/chmorgan/packetnet) for dumping network packets headers.
+* **capture** - native C++ sample that intercepts packets for the specified network interface and saves them into a PCAP file, which can be opened and analyzed with WireShark.
+* **dns_proxy** - native C++ sample that redirects DNS protocol through a transparent UDP proxy.
+* **dnstrace** - native C++ sample that intercepts DNS responses and decodes their content to the console. It can be configured to link NDISAPI statically or dynamically.
+* **ethernet_bridge** - native C++ sample that implements bridging between wired and wireless networks. For more information, visit https://www.ntkernel.com/bridging-networks-with-windows-packet-filter/
+* **ipv6_parser** - native C++ sample that intercepts IPv6 packets, matches them to the originating process (using IP Helper API), and parses protocol headers.
+* **sni_inspector** - native C++ sample that intercepts network packets and extracts SNI from HTTPS packets and Host from HTTP packets.
+* **socksify** - native C++ sample that redirects selected TCP connections through a SOCKS5 proxy. 
+* **rebind** - native C++ sample that rebinds outgoing TCP/UDP connections for the specified application from the default network interface to a different one.
+* **pcapplusplus** - native C++ sample that utilizes the [PcapPlusPlus](https://pcapplusplus.github.io/) library to parse intercepted network packets and extract the Server Name Indication (SNI) from HTTPS packets. Additionally, it performs Transport Layer Security (TLS) fingerprinting to identify the specific version of TLS being used.
+* **TestDotNet** - C# sample that demonstrates the NDISAPI usage in several filtering scenarios. It is available in x86, x64 and ARM64 configurations. The AnyCPU configuration is not available due to the C++/CLI nature of ndisapi.net wrapper (see https://github.com/kevin-marshall/Managed.AnyCPU for a workaround). The project references PacketDotNet (https://github.com/chmorgan/packetnet) for dumping network packet headers.
