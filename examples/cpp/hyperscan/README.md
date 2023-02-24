@@ -6,6 +6,9 @@
 
 This example application can be useful for network security and monitoring purposes, where it can help to identify and analyze HTTP traffic within a network. 
 
+### Limitations
+This example is not designed to handle TCP packet retransmissions or reordering, making it unsuitable for testing on unreliable connections. It is best suited for high-quality connections.
+
 ## Installation
 
 ### Prerequisites

@@ -14,9 +14,9 @@ using namespace System::Security::Permissions;
 [assembly:AssemblyTitleAttribute(L"ndisapicl")];
 [assembly:AssemblyDescriptionAttribute(L"")];
 [assembly:AssemblyConfigurationAttribute(L"")];
-[assembly:AssemblyCompanyAttribute(L"NTKERNEL")];
+[assembly:AssemblyCompanyAttribute(L"NT KERNEL")];
 [assembly:AssemblyProductAttribute(L"ndisapicl")];
-[assembly:AssemblyCopyrightAttribute(L"Copyright (c) NTKERNEL 2000-2023")];
+[assembly:AssemblyCopyrightAttribute(L"Copyright (c) NT KERNEL 2000-2023")];
 [assembly:AssemblyTrademarkAttribute(L"")];
 [assembly:AssemblyCultureAttribute(L"")];
 
