@@ -1,5 +1,5 @@
 /*************************************************************************/
-/*              Copyright (c) 2000-2023 NT Kernel Resources.             */
+/*                    Copyright (c) 2000-2023 NT KERNEL.                 */
 /*                           All Rights Reserved.                        */
 /*                          http://www.ntkernel.com                      */
 /*                           ndisrd@ntkernel.com                         */
@@ -12,6 +12,7 @@
 /*   User mode                                                           */
 /*                                                                       */
 /*************************************************************************/
+#pragma once
 
 #ifdef _LIB // must be defined when linking static library version of ndisapi.dll
 #define NDISAPI_API 
@@ -20,7 +21,7 @@
 // from a DLL simpler. All files within this DLL are compiled with the NDISAPI_EXPORTS
 // symbol defined on the command line. this symbol should not be defined on any project
 // that uses this DLL. This way any other project whose source files include this file see 
-// NDISAPI_API functions as being imported from a DLL, wheras this DLL sees symbols
+// NDISAPI_API functions as being imported from a DLL, whereas this DLL sees symbols
 // defined with this macro as being exported.
 #ifdef NDISAPI_EXPORTS
 #define NDISAPI_API __declspec(dllexport)
@@ -50,37 +51,109 @@ enum
 
 typedef BOOL (__stdcall *IsWow64ProcessPtr)(HANDLE hProcess, PBOOL Wow64Process);
 
-// Simple OSVERSIONINFO extension
+/**
+ * @struct CVersionInfo
+ * @brief An extension of the OSVERSIONINFO structure for retrieving and
+ *        comparing operating system version information.
+ *
+ * This structure provides a set of functions to check whether the current
+ * operating system version is equal to or greater than a specific version,
+ * such as Windows XP, Windows 7, or Windows 10.
+ *
+ * Usage:
+ * CVersionInfo versionInfo;
+ * if (versionInfo.IsWindows7OrGreater()) {
+ *     // Code for Windows 7 or later
+ * }
+ */
 struct NDISAPI_API CVersionInfo : private OSVERSIONINFO
 {
 #ifdef _USE_LEGACY_VERSION_INFO
-	CVersionInfo() {
+	/**
+	 * @brief Constructor that initializes the OSVERSIONINFO structure.
+	 */
+	CVersionInfo()
+	{
 		dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
 		::GetVersionEx(this);
 	}
 
+	/**
+	 * @brief Checks if the operating system is Windows Vista or greater.
+	 * @return TRUE if Windows Vista or greater, FALSE otherwise.
+	 */
 	BOOL IsWindowsVistaOrGreater() { return (dwMajorVersion >= 6); }
+
+	/**
+	 * @brief Checks if the operating system is Windows 7 or greater.
+	 * @return TRUE if Windows 7 or greater, FALSE otherwise.
+	 */
 	BOOL IsWindows7OrGreater() { return (dwMajorVersion > 6) || ((dwMajorVersion == 6) && (dwMinorVersion > 0)); }
-	BOOL IsWindowsXPOrGreater() { return ((dwMajorVersion == 5) && (dwMinorVersion >= 1))/*Windows XP/2003*/ || (dwMajorVersion > 5)/*Windows Vista or later*/; }
+
+	/**
+	 * @brief Checks if the operating system is Windows XP or greater.
+	 * @return TRUE if Windows XP or greater, FALSE otherwise.
+	 */
+	BOOL IsWindowsXPOrGreater() { return ((dwMajorVersion == 5) && (dwMinorVersion >= 1)) || (dwMajorVersion > 5); }
+
+	/**
+	 * @brief Checks if the operating system is Windows 10 or greater.
+	 * @return TRUE if Windows 10 or greater, FALSE otherwise.
+	 */
 	BOOL IsWindows10OrGreater() { return (dwMajorVersion >= 10); }
+
+	/**
+	 * @brief Checks if the operating system is of the Windows NT platform.
+	 * @return TRUE if Windows NT platform, FALSE otherwise.
+	 */
 	BOOL IsWindowsNTPlatform() { return (dwPlatformId == VER_PLATFORM_WIN32_NT); }
 #else
-	BOOL IsWindowsVistaOrGreater() { return ::IsWindowsVistaOrGreater(); }
-	BOOL IsWindowsXPOrGreater() { return ::IsWindowsXPOrGreater(); }
-	BOOL IsWindows7OrGreater() { return ::IsWindows7OrGreater(); }
-	BOOL IsWindows10OrGreater() { return ::IsWindowsVersionOrGreater(10, 0, 0); }
-	BOOL IsWindowsNTPlatform() { return IsWindowsXPOrGreater(); }
+	/**
+	 * @brief Static function to check if the operating system is Windows Vista or greater.
+	 * @return TRUE if Windows Vista or greater, FALSE otherwise.
+	 */
+	static BOOL IsWindowsVistaOrGreater() { return ::IsWindowsVistaOrGreater(); }
+
+	/**
+	 * @brief Static function to check if the operating system is Windows XP or greater.
+	 * @return TRUE if Windows XP or greater, FALSE otherwise.
+	 */
+	static BOOL IsWindowsXPOrGreater() { return ::IsWindowsXPOrGreater(); }
+
+	/**
+	 * @brief Static function to check if the operating system is Windows 7 or greater.
+	 * @return TRUE if Windows 7 or greater, FALSE otherwise.
+	 */
+	static BOOL IsWindows7OrGreater() { return ::IsWindows7OrGreater(); }
+
+	/**
+	 * @brief Static function to check if the operating system is Windows 10 or greater.
+	 * @return TRUE if Windows 10 or greater, FALSE otherwise.
+	 */
+	static BOOL IsWindows10OrGreater() { return ::IsWindowsVersionOrGreater(10, 0, 0); }
+
+	/**
+	 * @brief Static function to check if the operating system is of the Windows NT platform.
+	 * @return TRUE if Windows NT platform, FALSE otherwise.
+	 */
+	static BOOL IsWindowsNTPlatform() { return IsWindowsXPOrGreater(); }
 #endif //  _MSC_VER >= 1700
 };
 
 class NDISAPI_API CNdisApi 
 {
-
 	class CWow64Helper;
 
 public:
 	CNdisApi (const TCHAR* pszFileName = _T(DRIVER_NAME_A));
 	virtual ~CNdisApi ();
+
+#if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
+	CNdisApi(const CNdisApi& other) = delete;
+	CNdisApi(CNdisApi&& other) = delete;
+	CNdisApi& operator=(const CNdisApi& other) = delete;
+	CNdisApi& operator=(CNdisApi&& other) = delete;
+#endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
 
 private:
 	// Private member functions
@@ -122,6 +195,7 @@ public:
 	BOOL	ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const;
 	BOOL	SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
 	BOOL	SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
+	BOOL	GetIntermediateBufferPoolSize(PDWORD pdwSize) const;
 	DWORD	GetBytesReturned () const;
 	
 	// Static helper routines
@@ -131,6 +205,9 @@ public:
 
 	static BOOL		SetAdaptersStartupMode ( DWORD dwStartupMode );
 	static DWORD	GetAdaptersStartupMode ();
+
+	static BOOL		SetPoolSize(DWORD dwPoolSize);
+	static DWORD	GetPoolSize();
 
 	static BOOL		IsNdiswanIp ( LPCSTR adapterName );
 	static BOOL		IsNdiswanIpv6 ( LPCSTR adapterName );
@@ -235,12 +312,15 @@ extern "C"
 	DWORD	__stdcall		GetMTUDecrement();
 	BOOL	__stdcall		SetAdaptersStartupMode(DWORD dwStartupMode);
 	DWORD	__stdcall		GetAdaptersStartupMode();
+	BOOL	__stdcall		SetPoolSize(DWORD dwPoolSize);
+	DWORD	__stdcall		GetPoolSize();
 	BOOL	__stdcall		IsDriverLoaded(HANDLE hOpen);
 	BOOL	__stdcall		InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
 	BOOL	__stdcall		AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
 	BOOL	__stdcall		ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess);
 	BOOL	__stdcall		SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
 	BOOL	__stdcall		SendPacketsToMstcpUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
+	BOOL	__stdcall		GetIntermediateBufferPoolSize(HANDLE hOpen, PDWORD pdwSize);
 	DWORD	__stdcall		GetBytesReturned(HANDLE hOpen);
 
 	BOOL __stdcall			IsNdiswanIp ( LPCSTR adapterName );
