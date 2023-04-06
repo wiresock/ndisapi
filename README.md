@@ -23,23 +23,22 @@ https://www.ntkernel.com/docs/windows-packet-filter-documentation/
 #### Build prerequisites 
 
 * Install vcpkg https://vcpkg.io/en/getting-started.html  
-* Use vcpkg to Install Microsoft GSL library  
-    vcpkg install ms-gsl:x86-windows  
-    vcpkg install ms-gsl:x64-windows
-    vcpkg install ms-gsl:arm64-windows 
-    vcpkg install ms-gsl:x86-windows-static
-    vcpkg install ms-gsl:x64-windows-static
-    vcpkg install ms-gsl:arm64-windows-static
-* Use vcpkg to Install PcapPlusPlus library  
-    vcpkg install pcapplusplus:x86-windows-static
-    vcpkg install pcapplusplus:x64-windows-static
+* Use vcpkg to Install Microsoft GSL library
+```bash
+vcpkg install ms-gsl:x86-windows ms-gsl:x64-windows ms-gsl:arm64-windows ms-gsl:x86-windows-static ms-gsl:x64-windows-static ms-gsl:arm64-windows-static
+```
+* Use vcpkg to Install PcapPlusPlus library
+```bash
+vcpkg install pcapplusplus:x86-windows-static pcapplusplus:x64-windows-static
+```
 * Use vcpkg to Install Hyperscan library  
-    vcpkg install hyperscan:x86-windows-static
-    vcpkg install hyperscan:x64-windows-static
+```bash
+vcpkg install hyperscan:x86-windows-static hyperscan:x64-windows-static
+```
 * Use vcpkg to Install llhttp library  
-    vcpkg install llhttp:x86-windows-static
-    vcpkg install llhttp:x64-windows-static
-
+```bash
+vcpkg install llhttp:x86-windows-static llhttp:x64-windows-static
+```
 * **capture** - native C++ sample that intercepts packets for the specified network interface and saves them into a PCAP file, which can be opened and analyzed with WireShark.
 * **dns_proxy** - native C++ sample that redirects DNS protocol through a transparent UDP proxy.
 * **dnstrace** - native C++ sample that intercepts DNS responses and decodes their content to the console. It can be configured to link NDISAPI statically or dynamically.
