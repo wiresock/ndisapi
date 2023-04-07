@@ -30,12 +30,15 @@ SetMTUDecrement
 GetMTUDecrement
 SetAdaptersStartupMode
 GetAdaptersStartupMode
+SetPoolSize
+GetPoolSize
 IsDriverLoaded
 InitializeFastIo
 AddSecondaryFastIo
 ReadPacketsUnsorted
 SendPacketsToAdaptersUnsorted
 SendPacketsToMstcpUnsorted
+GetIntermediateBufferPoolSize
 GetBytesReturned
 IsNdiswanIp
 IsNdiswanIpv6
