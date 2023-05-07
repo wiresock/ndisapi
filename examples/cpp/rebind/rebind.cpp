@@ -3,6 +3,26 @@
 
 #include "pch.h"
 
+/// @class rebind_router
+/// @brief This class manages the rebind router functionality.
+///
+/// The rebind_router class is responsible for configuring and managing the routing
+/// of network traffic between the default network adapter and the rebind network adapter.
+/// It extends the iphelper::network_config_info class to gather information about the
+/// network interfaces and settings.
+///
+/// @note Inherits from iphelper::network_config_info<rebind_router>
+///
+/// @member filter_ A unique_ptr to a dual_packet_filter object that manages the packet filtering.
+/// @member default_adapter_handle_ A handle to the default network adapter (INVALID_HANDLE_VALUE if not initialized).
+/// @member rebind_adapter_handle_ A handle to the rebind network adapter (INVALID_HANDLE_VALUE if not initialized).
+/// @member app_name_ A string containing the name of the application.
+/// @member rebind_src_hw_address_ A mac_address object representing the source hardware address of the rebind network adapter.
+/// @member default_src_hw_address_ A mac_address object representing the source hardware address of the default network adapter.
+/// @member rebind_gw_hw_address_ A mac_address object representing the hardware address of the gateway for the rebind network adapter.
+/// @member rebind_src_ip_address_ An ip_address_v4 object representing the source IP address of the rebind network adapter.
+/// @member default_src_ip_address_ An ip_address_v4 object representing the source IP address of the default network adapter.
+/// @member file_stream_ A pcap_file_storage object for storing captured packets to a file named "capture.pcap".
 class rebind_router: public iphelper::network_config_info<rebind_router>
 {
 	std::unique_ptr<ndisapi::dual_packet_filter> filter_;
@@ -16,6 +36,18 @@ class rebind_router: public iphelper::network_config_info<rebind_router>
 	net::ip_address_v4 default_src_ip_address_{};
 	pcap::pcap_file_storage file_stream_{ "capture.pcap" };
 
+	/// @brief Searches for an NDIS interface that matches the given network adapter information.
+	///
+	/// This method tries to find an NDIS interface in the list of available interfaces that
+	/// corresponds to the provided network adapter information. If a matching interface is found,
+	/// the method returns the index of the interface in the list.
+	///
+	/// @param info An iphelper::network_adapter_info object representing the network adapter to search for.
+	///
+	/// @return An std::optional<size_t> containing the index of the NDIS interface in the list if found,
+	///         or an empty optional if not found.
+	///
+	/// @note This method is const and does not modify the rebind_router object.
 	std::optional<size_t> get_ndis_interface_by_adapter_info(const iphelper::network_adapter_info& info) const
 	{
 		auto& ndis_adapters = filter_->get_interface_list();
@@ -61,6 +93,18 @@ class rebind_router: public iphelper::network_config_info<rebind_router>
 		return {};
 	}
 
+	/// @brief Resolves the process associated with a TCP connection for IPv4 addresses.
+	///
+	/// This method attempts to find the process responsible for a TCP connection, given
+	/// the IP header and TCP header information. If the process is not found initially,
+	/// the method tries to update the process lookup table and search again.
+	///
+	/// @param ip_header A pointer to the IP header structure of the packet.
+	/// @param tcp_header A pointer to the TCP header structure of the packet.
+	///
+	/// @return A std::shared_ptr<iphelper::network_process> object representing the process
+	///         associated with the TCP connection. If the process is not found, the shared_ptr
+	///         will be empty (i.e., nullptr).
 	static std::shared_ptr<iphelper::network_process> resolve_process_for_tcp (const iphdr* ip_header, const tcphdr* tcp_header)
 	{
 		auto process = iphelper::process_lookup<net::ip_address_v4>::get_process_helper().
@@ -83,6 +127,18 @@ class rebind_router: public iphelper::network_config_info<rebind_router>
 		return process;
 	}
 
+	/// @brief Resolves the process associated with a UDP connection for IPv4 addresses.
+	///
+	/// This method attempts to find the process responsible for a UDP connection, given
+	/// the IP header and UDP header information. If the process is not found initially,
+	/// the method tries to update the process lookup table and search again.
+	///
+	/// @param ip_header A pointer to the IP header structure of the packet.
+	/// @param udp_header A pointer to the UDP header structure of the packet.
+	///
+	/// @return A std::shared_ptr<iphelper::network_process> object representing the process
+	///         associated with the UDP connection. If the process is not found, the shared_ptr
+	///         will be empty (i.e., nullptr).
 	static std::shared_ptr<iphelper::network_process> resolve_process_for_udp(const iphdr* ip_header, const udphdr* udp_header)
 	{
 		auto process = iphelper::process_lookup<net::ip_address_v4>::get_process_helper().
@@ -106,6 +162,17 @@ class rebind_router: public iphelper::network_config_info<rebind_router>
 	}
 
 public:
+	/// @brief Constructs an instance of the `rebind_router` class.
+	///
+	/// The constructor creates a `rebind_router` object, which sets up a packet filter
+	/// to intercept incoming and outgoing packets. The filter is configured to check if
+	/// the packet belongs to the specified application, and if so, modifies the packet's
+	/// source IP and MAC addresses before routing it. The filtered packets are also saved
+	/// to a file for further analysis.
+	///
+	/// This constructor initializes a `dual_packet_filter` object with custom lambdas
+	/// for handling inbound and outbound packets. The lambdas implement the required
+	/// logic for intercepting, modifying, and routing the packets as necessary.
 	rebind_router()
 	{
 		filter_ = std::make_unique<ndisapi::dual_packet_filter>(
@@ -207,21 +274,53 @@ public:
 			nullptr);
 	}
 
+	/// @brief Destructor for the `rebind_router` class.
+	///
+	/// Stops the router before the object is destroyed.
 	~rebind_router()
 	{
 		stop();
 	}
 
+	/// @brief Deleted copy constructor for the `rebind_router` class.
+	///
+	/// This constructor is explicitly deleted to prevent copying of `rebind_router` objects.
 	rebind_router(const rebind_router& other) = delete;
+
+	/// @brief Deleted move constructor for the `rebind_router` class.
+	///
+	/// This constructor is explicitly deleted to prevent moving of `rebind_router` objects.
 	rebind_router(rebind_router&& other) = delete;
+
+	/// @brief Deleted copy assignment operator for the `rebind_router` class.
+	///
+	/// This operator is explicitly deleted to prevent copying of `rebind_router` objects.
 	rebind_router& operator=(const rebind_router& other) = delete;
+
+	/// @brief Deleted move assignment operator for the `rebind_router` class.
+	///
+	/// This operator is explicitly deleted to prevent moving of `rebind_router` objects.
 	rebind_router& operator=(rebind_router&& other) = delete;
 
+	/// @brief Checks if the driver is loaded.
+	///
+	/// @return `true` if the driver is loaded, `false` otherwise.
+	///
+	/// This method is used to determine if the packet filtering driver is properly loaded.
 	[[nodiscard]] bool is_driver_loaded() const
 	{
 		return filter_->IsDriverLoaded();
 	}
 
+	/// @brief Sets the NDIS interfaces for the default and rebind network adapters based on adapter information.
+	///
+	/// @param default_adapter A reference to the `network_adapter_info` object for the default network adapter.
+	/// @param rebind_adapter A reference to the `network_adapter_info` object for the rebind network adapter.
+	/// @return `true` if the NDIS interfaces are successfully set, `false` otherwise.
+	///
+	/// This method sets the NDIS interfaces by finding the NDIS adapter corresponding to the provided
+	/// `network_adapter_info` objects. It configures the default and rebind adapters, source hardware addresses,
+	/// rebind gateway hardware address, rebind source IP address, and default source IP address.
 	[[nodiscard]] bool set_ndis_interfaces_by_adapter_info(
 		const iphelper::network_adapter_info& default_adapter, 
 		const iphelper::network_adapter_info& rebind_adapter)
@@ -280,11 +379,23 @@ public:
 		return true;
 	}
 
+	/// @brief Sets the application name to match for IP rebind.
+	///
+	/// @param name A reference to the `std::wstring` containing the application name.
+	///
+	/// This method sets the application name for the rebind_router class. Packets from processes
+	/// with a name that matches the given application name will be subject to IP rebind.
 	void set_application_name(const std::wstring& name)
 	{
 		app_name_ = name;
 	}
 
+	/// @brief Starts the IP rebind process on the network interfaces.
+	///
+	/// @return Returns true if the IP rebind process started successfully on both interfaces, false otherwise.
+	///
+	/// This method starts filtering packets on both the default and rebind network interfaces. If the filtering fails to start on either
+	/// interface, the method will print an error message and return false.
 	[[nodiscard]] bool start() const
 	{
 		if(!filter_->start_filter(default_adapter_handle_, 0))
@@ -301,12 +412,18 @@ public:
 		return true;
 	}
 
+	/// @brief Stops the IP rebind process on the network interfaces.
+	///
+	/// This method stops filtering packets on both the default and rebind network interfaces by calling the stop_filter() function for both interfaces.
 	void stop() const
 	{
 		filter_->stop_filter(0);
 		filter_->stop_filter(1);
 	}
 
+	/// @brief Prints the IP rebind parameters.
+	///
+	/// This method outputs the rebind parameters, including the application name, source MAC addresses of the rebind and default adapters, rebind adapter gateway MAC address, and source IP addresses of the rebind and default adapters.
 	void print_parameters() const
 	{
 		std::cout << "\nRebind parameters:\n\n";
@@ -319,6 +436,11 @@ public:
 		std::cout << "\n\n";
 	}
 
+	/**
+	@brief Convert network adapter info to a formatted wstring.
+	@param info The network adapter info to convert.
+	@return std::wstring The formatted wstring.
+	*/
 	static std::wstring to_wstring(const iphelper::network_adapter_info& info)
 	{
 		std::wstringstream stream;

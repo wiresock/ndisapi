@@ -90,4 +90,7 @@
       <Filter>Header Files\common\tools</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
 </Project>
