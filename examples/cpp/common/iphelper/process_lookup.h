@@ -102,13 +102,21 @@ namespace iphelper
 		/// </summary>
 		std::shared_ptr<network_process> default_process_;
 		/// <summary>
-		/// Memory buffer to query connection tables
+		/// Memory buffer to query TCP connection tables
 		/// </summary>
-		std::unique_ptr<char[]> table_buffer_{};
+		std::unique_ptr<char[]> table_buffer_tcp_{};
 		/// <summary>
-		/// Current size of the memory buffer to query connection tables
+		/// Memory buffer to query UDP connection tables
 		/// </summary>
-		DWORD table_buffer_size_{0};
+		std::unique_ptr<char[]> table_buffer_udp_{};
+		/// <summary>
+		/// Current size of the memory buffer to query TCP connection tables
+		/// </summary>
+		DWORD table_buffer_size_tcp_{0};
+		/// <summary>
+		/// Current size of the memory buffer to query UDP connection tables
+		/// </summary>
+		DWORD table_buffer_size_udp_{ 0 };
 
 	public:
 		/// <summary>
@@ -277,103 +285,98 @@ namespace iphelper
 			return result;
 		}
 
-		/// <summary>
-		/// Initializes/updates TCP hashtable
-		/// </summary>
-		/// <returns>true is successful, false otherwise</returns>
+		/// @brief Processes a TCP table entry for IPv4 and retrieves the owner module information.
+		/// @details This function takes a PMIB_TCPROW_OWNER_MODULE entry for IPv4, retrieves owner module information, 
+		///          and constructs a shared_ptr<network_process> object with the obtained information.
+		/// @param table_entry The PMIB_TCPROW_OWNER_MODULE entry to be processed.
+		/// @return A shared_ptr<network_process> object with the owner module information, or nullptr if the operation fails.
+		std::shared_ptr<network_process> process_tcp_entry_v4(const PMIB_TCPROW_OWNER_MODULE table_entry) const
+		{
+			DWORD size = 0;
+			std::shared_ptr<network_process> process_ptr(nullptr);
+
+			if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcpEntry(
+				table_entry, TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size)) {
+				const auto module_ptr = std::make_unique<char[]>(size);
+
+				if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+					GetOwnerModuleFromTcpEntry(table_entry, TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR &&
+					info->pModuleName && info->pModulePath) {
+					process_ptr = std::make_shared<network_process>(table_entry->dwOwningPid, info->pModuleName, info->pModulePath);
+				}
+			}
+
+			return process_ptr;
+		}
+
+		/// @brief Processes a TCP table entry for IPv6 and retrieves the owner module information.
+		/// @details This function takes a PMIB_TCP6ROW_OWNER_MODULE entry for IPv6, retrieves owner module information,
+		///          and constructs a shared_ptr<network_process> object with the obtained information.
+		/// @param table_entry The PMIB_TCP6ROW_OWNER_MODULE entry to be processed.
+		/// @return A shared_ptr<network_process> object with the owner module information, or nullptr if the operation fails.
+		std::shared_ptr<network_process> process_tcp_entry_v6(const PMIB_TCP6ROW_OWNER_MODULE table_entry) const
+		{
+			DWORD size = 0;
+			std::shared_ptr<network_process> process_ptr(nullptr);
+
+			if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcp6Entry(
+				table_entry, TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size)) {
+				const auto module_ptr = std::make_unique<char[]>(size);
+
+				if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+					GetOwnerModuleFromTcp6Entry(table_entry, TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR &&
+					info->pModuleName && info->pModulePath) {
+					process_ptr = std::make_shared<network_process>(table_entry->dwOwningPid, info->pModuleName, info->pModulePath);
+				}
+			}
+
+			return process_ptr;
+		}
+
+		/// @brief Initializes or updates the TCP hashtable by retrieving the extended TCP table for the selected IP address type.
+		/// @details This function retrieves the extended TCP table and processes each entry to obtain owner module information. 
+		///          It then updates the tcp_to_app_ map with the network_process information for each IP session.
+		/// @returns true if successful, false otherwise.
 		bool initialize_tcp_table()
 		{
 			try
 			{
-				auto table_size = table_buffer_size_;
-
+				auto table_size = table_buffer_size_tcp_;
 				tcp_to_app_.clear();
 
-				do
-				{
-					const uint32_t result = ::GetExtendedTcpTable(table_buffer_.get(), &table_size, FALSE, T::af_type,
-					                                              TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0);
-
-					if (result == ERROR_INSUFFICIENT_BUFFER)
-					{
+				while (true) {
+					if (const uint32_t result = ::GetExtendedTcpTable(table_buffer_tcp_.get(), &table_size, FALSE, T::af_type,
+					                                                  TCP_TABLE_OWNER_MODULE_CONNECTIONS, 0); result == ERROR_INSUFFICIENT_BUFFER) {
 						table_size *= 2;
-						table_buffer_ = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
-						table_buffer_size_ = table_size;
-						continue;
-					}
-
-					if (result == NO_ERROR)
-					{
+						table_buffer_tcp_ = std::make_unique<char[]>(table_size);
+						table_buffer_size_tcp_ = table_size;
+					} else if (result == NO_ERROR) {
 						break;
-					}
-
-					return false;
-				}
-				while (true);
-
-				if constexpr (std::is_same<T, net::ip_address_v4>::value)
-				{
-					auto* table = reinterpret_cast<PMIB_TCPTABLE_OWNER_MODULE>(table_buffer_.get());
-
-					for (size_t i = 0; i < table->dwNumEntries; i++)
-					{
-						DWORD size = 0;
-						std::shared_ptr<network_process> process_ptr(nullptr);
-
-						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcpEntry(
-							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-						{
-							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-							if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-								GetOwnerModuleFromTcpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size)
-								== NO_ERROR)
-							{
-								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, info->pModuleName, info->pModulePath);
-							}
-						}
-
-						if (process_ptr)
-							tcp_to_app_[net::ip_session<T>(
-								T{table->table[i].dwLocalAddr},
-								T{table->table[i].dwRemoteAddr},
-								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
-								ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(
-								process_ptr);
+					} else {
+						return false;
 					}
 				}
-				else
-				{
-					auto* table = reinterpret_cast<PMIB_TCP6TABLE_OWNER_MODULE>(table_buffer_.get());
+				if constexpr (std::is_same_v<T, net::ip_address_v4>) {
+					auto* table = reinterpret_cast<PMIB_TCPTABLE_OWNER_MODULE>(table_buffer_tcp_.get());
 
-					for (size_t i = 0; i < table->dwNumEntries; i++)
-					{
-						DWORD size = 0;
-						std::shared_ptr<network_process> process_ptr(nullptr);
-
-						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromTcp6Entry(
-							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-						{
-							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-							if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-								GetOwnerModuleFromTcp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info,
-								                            &size) == NO_ERROR)
-							{
-								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, info->pModuleName,
-									info->pModulePath);
-							}
+					for (size_t i = 0; i < table->dwNumEntries; i++) {
+						if (auto process_ptr = process_tcp_entry_v4(&table->table[i])) {
+							tcp_to_app_[net::ip_session<T>(T{table->table[i].dwLocalAddr},
+															T{table->table[i].dwRemoteAddr},
+															ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)),
+															ntohs(static_cast<uint16_t>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
 						}
+					}
+				} else {
+					auto* table = reinterpret_cast<PMIB_TCP6TABLE_OWNER_MODULE>(table_buffer_tcp_.get());
 
-						if (process_ptr)
-							tcp_to_app_[net::ip_session<T>(
-								T{table->table[i].ucLocalAddr},
-								T{table->table[i].ucRemoteAddr},
-								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)),
-								ntohs(static_cast<unsigned short>(table->table[i].dwRemotePort)))] = std::move(
-								process_ptr);
+					for (size_t i = 0; i < table->dwNumEntries; i++) {
+						if (auto process_ptr = process_tcp_entry_v6(&table->table[i])) {
+							tcp_to_app_[net::ip_session<T>(T{table->table[i].ucLocalAddr},
+															T{table->table[i].ucRemoteAddr},
+															ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)),
+															ntohs(static_cast<uint16_t>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
+						}
 					}
 				}
 			}
@@ -385,109 +388,106 @@ namespace iphelper
 			return true;
 		}
 
-		/// <summary>
-		/// Initializes/updates UDP hashtable
-		/// </summary>
-		/// <returns>true is successful, false otherwise</returns>
-		bool initialize_udp_table()
+		/// @brief Processes an IPv4 UDP table entry
+		/// @param entry An IPv4 UDP table entry
+		/// @return A shared_ptr to a network_process object if successful, nullptr otherwise
+		std::shared_ptr<network_process> process_udp_entry_v4(const PMIB_UDPROW_OWNER_MODULE entry) const
 		{
-			auto table_size = table_buffer_size_;
+			DWORD size = 0;
+			std::shared_ptr<network_process> process_ptr(nullptr);
 
+			if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdpEntry(
+				entry, TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size)) {
+				const auto module_ptr = std::make_unique<char[]>(size);
+
+				if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+					GetOwnerModuleFromUdpEntry(entry, TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR &&
+					info->pModuleName && info->pModulePath) {
+					process_ptr = std::make_shared<network_process>(entry->dwOwningPid, info->pModuleName, info->pModulePath);
+				}
+			}
+
+			return process_ptr;
+		}
+
+		/// @brief Processes an IPv6 UDP table entry
+		/// @param entry An IPv6 UDP table entry
+		/// @return A shared_ptr to a network_process object if successful, nullptr otherwise
+		std::shared_ptr<network_process> process_udp_entry_v6(const PMIB_UDP6ROW_OWNER_MODULE entry) const
+		{
+			DWORD size = 0;
+			std::shared_ptr<network_process> process_ptr(nullptr);
+
+			if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdp6Entry(
+				entry, TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size)) {
+				const auto module_ptr = std::make_unique<char[]>(size);
+
+				if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
+					GetOwnerModuleFromUdp6Entry(entry, TCPIP_OWNER_MODULE_INFO_BASIC, info, &size) == NO_ERROR &&
+					info->pModuleName && info->pModulePath) {
+					process_ptr = std::make_shared<network_process>(entry->dwOwningPid, info->pModuleName, info->pModulePath);
+				}
+			}
+
+			return process_ptr;
+		}
+
+		/// @brief Initializes/updates UDP hashtable
+		/// @details This function initializes or updates the UDP hashtable with network_process objects,
+		///          mapping IP endpoints to their owner processes.
+		/// @return true if successful, false otherwise
+		bool initialize_udp_table() {
+			auto table_size = table_buffer_size_udp_;
 			udp_to_app_.clear();
 
-			try
-			{
-				do
-				{
-					const uint32_t result = ::GetExtendedUdpTable(table_buffer_.get(), &table_size, FALSE, T::af_type,
-					                                              UDP_TABLE_OWNER_MODULE, 0);
+			try {
+				do {
+					const uint32_t result = ::GetExtendedUdpTable(table_buffer_udp_.get(), &table_size, FALSE, T::af_type,
+						UDP_TABLE_OWNER_MODULE, 0);
 
-					if (result == ERROR_INSUFFICIENT_BUFFER)
-					{
+					if (result == ERROR_INSUFFICIENT_BUFFER) {
 						table_size *= 2;
-						table_buffer_ = std::make_unique<char[]>(static_cast<std::size_t>(table_size));
-						table_buffer_size_ = table_size;
+						table_buffer_udp_ = std::make_unique<char[]>(table_size);
+						table_buffer_size_udp_ = table_size;
 						continue;
 					}
 
-					if (result == NO_ERROR)
-					{
+					if (result == NO_ERROR) {
 						break;
 					}
 
 					return false;
-				}
-				while (true);
+				} while (true);
 
-				if constexpr (std::is_same<T, net::ip_address_v4>::value)
-				{
-					auto* table = reinterpret_cast<PMIB_UDPTABLE_OWNER_MODULE>(table_buffer_.get());
+				if constexpr (std::is_same_v<T, net::ip_address_v4>) {
+					auto* table = reinterpret_cast<PMIB_UDPTABLE_OWNER_MODULE>(table_buffer_udp_.get());
 
-					for (size_t i = 0; i < table->dwNumEntries; i++)
-					{
-						DWORD size = 0;
-						std::shared_ptr<network_process> process_ptr(nullptr);
-
-						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdpEntry(
-							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-						{
-							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-							if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-								GetOwnerModuleFromUdpEntry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info, &size)
-								== NO_ERROR)
-							{
-								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, info->pModuleName,
-									info->pModulePath);
-							}
-						}
-
-						if (process_ptr)
+					for (size_t i = 0; i < table->dwNumEntries; i++) {
+						if (auto process_ptr = process_udp_entry_v4(&table->table[i])) {
 							udp_to_app_[net::ip_endpoint<T>(
-								T{table->table[i].dwLocalAddr},
-								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(
-								process_ptr);
+								T{ table->table[i].dwLocalAddr },
+								ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+						}
 					}
 				}
-				else
-				{
-					auto* table = reinterpret_cast<PMIB_UDP6TABLE_OWNER_MODULE>(table_buffer_.get());
+				else {
+					auto* table = reinterpret_cast<PMIB_UDP6TABLE_OWNER_MODULE>(table_buffer_udp_.get());
 
-					for (size_t i = 0; i < table->dwNumEntries; i++)
-					{
-						DWORD size = 0;
-						std::shared_ptr<network_process> process_ptr(nullptr);
-
-						if (ERROR_INSUFFICIENT_BUFFER == GetOwnerModuleFromUdp6Entry(
-							&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, nullptr, &size))
-						{
-							auto module_ptr = std::make_unique<char[]>(static_cast<size_t>(size));
-
-							if (auto* info = reinterpret_cast<PTCPIP_OWNER_MODULE_BASIC_INFO>(module_ptr.get());
-								GetOwnerModuleFromUdp6Entry(&table->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, info,
-								                            &size) == NO_ERROR)
-							{
-								process_ptr = std::make_shared<network_process>(
-									table->table[i].dwOwningPid, info->pModuleName,
-									info->pModulePath);
-							}
-						}
-
-						if (process_ptr)
+					for (size_t i = 0; i < table->dwNumEntries; i++) {
+						if (auto process_ptr = process_udp_entry_v6(&table->table[i])) {
 							udp_to_app_[net::ip_endpoint<T>(
-								T{table->table[i].ucLocalAddr},
-								ntohs(static_cast<unsigned short>(table->table[i].dwLocalPort)))] = std::move(
-								process_ptr);
+								T{ table->table[i].ucLocalAddr },
+								ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
+						}
 					}
 				}
 			}
-			catch (...)
-			{
+			catch (...) {
 				return false;
 			}
 
 			return true;
 		}
+
 	};
 }
