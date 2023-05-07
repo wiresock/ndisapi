@@ -3,7 +3,10 @@
 This is an example application that demonstrates how to use the [Windows Packet Filter](https://www.ntkernel.com/windows-packet-filter/) driver to rebind outgoing TCP/UDP connections for the specified application from the default network interface to a different one. 
 
 ## Description
-For example, we have a host on our home network connected to LAN (192.168.100.25/24) and Wi-Fi (192.168.100.165/24) at the same time. By default, Windows will use the LAN interface (192.168.100.25) to connect to the Internet, the Wi-Fi interface will be idle. Rebind allows you to redirect TCP/UDP connections for a selected application (e.g. Firefox) over Wi-Fi (instead of LAN) while other applications continue to use the LAN.
+
+For instance, consider a host on our home network connected to both LAN (192.168.100.25/24) and Wi-Fi (192.168.100.165/24) simultaneously. By default, Windows prioritizes the LAN interface (192.168.100.25) for internet connectivity, leaving the Wi-Fi interface idle. Rebind enables the redirection of TCP/UDP connections for a chosen application, such as Firefox, to utilize the Wi-Fi interface instead of the LAN, while allowing other applications to continue operating on the LAN.
+
+Another use case for Rebind can be bypassing a WireGuard VPN tunnel. Imagine you have a host running WireGuard, with all traffic being routed through the VPN tunnel. However, you want to use a specific application, like a video streaming service, without routing its traffic through the VPN for improved performance or to bypass geo-restrictions. In this scenario, you can use Rebind to redirect the traffic from that application to use the original, non-VPN network interface, bypassing the WireGuard tunnel, while all other applications remain connected through the VPN. This allows for more control over your network traffic and helps optimize connection performance for specific applications.
 
 ## Prerequisites
 
