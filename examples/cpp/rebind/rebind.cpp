@@ -445,7 +445,7 @@ public:
 	{
 		std::wstringstream stream;
 
-		stream << "\t" << tools::strings::to_wstring(info.get_adapter_name()) <<
+		stream << "\t" << info.get_friendly_name() <<
 			"\t:\t" << info.get_description() << std::endl;
 
 		for (auto& ip : info.get_unicast_address_list())

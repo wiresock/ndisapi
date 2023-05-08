@@ -74,14 +74,14 @@ WinpkFilter is loaded
 
 Default Internet connected network interface:
 
-        {C6EC8509-53E3-2F0E-EE73-4932DCF82ED8}  :       WireGuard Tunnel #2
+        hp-fruct-nuccel :       WireGuard Tunnel #2
                 fd42:42:42::3
                 10.66.66.3
         Gateway:
 
 Alternative Internet connected network interfaces:
 
-1.      {05F9267C-C548-4822-8535-9A57F1A99DB7}  :       Hyper-V Virtual Ethernet Adapter #2
+1.      vEthernet (WLAN Virtual Switch) :       Hyper-V Virtual Ethernet Adapter #2
                 fd42:42:42::5
                 fe80::2e91:54ce:3a6:2823
                 172.16.3.229
