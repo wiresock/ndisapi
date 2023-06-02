@@ -8,6 +8,7 @@ copy /Y .\bin\examples\native\x64\Release\*.exe tools\amd64\
 copy /Y .\bin\examples\native\arm64\Release\*.exe tools\arm64\
 copy /Y .\examples\legacy\MSVC\bin\dll.vs2012\i386\ndisapi.dll tools\i386\
 copy /Y .\examples\legacy\MSVC\bin\dll.vs2012\amd64\ndisapi.dll tools\amd64\
+copy /Y .\bin\dll\ARM64\Release\*.dll tools\arm64\
 copy /Y .\examples\legacy\MSVC\bin\i386\*.exe tools\i386\
 copy /Y .\examples\legacy\MSVC\bin\amd64\*.exe tools\amd64\
 copy /Y .\examples\legacy\MSVC\bin\vc6\*.exe tools\vc6\
