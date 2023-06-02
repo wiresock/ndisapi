@@ -59,6 +59,7 @@ vcpkg install llhttp:x86-windows-static llhttp:x64-windows-static
 * **ipv6_parser** - native C++ sample that intercepts IPv6 packets, matches them to the originating process (using IP Helper API), and parses protocol headers.
 * **sni_inspector** - native C++ sample that intercepts network packets and extracts SNI from HTTPS packets and Host from HTTP packets.
 * **socksify** - native C++ sample that redirects selected TCP connections through a SOCKS5 proxy. 
+* **udp2tcp** - native C++ sample that acts as a UDP to TCP (and vice versa) converter.
 * **rebind** - native C++ sample that rebinds outgoing TCP/UDP connections for the specified application from the default network interface to a different one.
 * **pcapplusplus** - native C++ sample that utilizes the [PcapPlusPlus](https://pcapplusplus.github.io/) library to parse intercepted network packets and extract the Server Name Indication (SNI) from HTTPS packets. Additionally, it performs Transport Layer Security (TLS) fingerprinting to identify the specific version of TLS being used.
 * **hyperscan** - native C++ sample that utilizes the [Hyperscan](https://github.com/intel/hyperscan) library to parse intercepted network packets to detect HTTP protocol sessions, and [llhttp](https://github.com/nodejs/llhttp) to parse the HTTP protocol of the detected sessions.
