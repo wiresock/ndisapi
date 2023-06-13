@@ -268,7 +268,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h" />
+    <ClInclude Include="..\common\ndisapi\queued_packet_filter.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>

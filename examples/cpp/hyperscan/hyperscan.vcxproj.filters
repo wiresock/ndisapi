@@ -24,7 +24,7 @@
     <ClInclude Include="pch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h">
+    <ClInclude Include="..\common\ndisapi\queued_packet_filter.h">
       <Filter>Header Files\common\ndisapi</Filter>
     </ClInclude>
   </ItemGroup>

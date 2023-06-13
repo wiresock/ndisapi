@@ -39,6 +39,7 @@
 #include <mutex>
 #include <charconv>
 #include <shared_mutex>
+#include <queue>
 #include <gsl/gsl>
 #include <hs/hs.h>
 #include <llhttp.h>
@@ -54,6 +55,6 @@
 #include "../common/net/ip_endpoint.h"
 #include "../common/iphelper/network_adapter_info.h"
 #include "../common/ndisapi/network_adapter.h"
-#include "../common/ndisapi/simple_packet_filter.h"
+#include "../common//ndisapi/queued_packet_filter.h"
 
 #endif //PCH_H

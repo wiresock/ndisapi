@@ -4,8 +4,8 @@
 #include "pch.h"
 #include <iostream>
 
-using packet_filter = ndisapi::simple_packet_filter;
-using packet_action = ndisapi::simple_packet_filter::packet_action;
+using packet_filter = ndisapi::queued_packet_filter;
+using packet_action = packet_filter::packet_action;
 
 /**
  * @brief The tcp_context class represents a context for a TCP connection.
@@ -162,7 +162,7 @@ public:
 	 *
 	 * @return true if the data was parsed successfully, false otherwise.
 	 */
-	bool execute_in(const char* data, size_t len)
+	bool execute_in(const char* data, const size_t len)
 	{
 		const auto result = llhttp_execute(&in_parser_.value(), data, len);
 		if (result == HPE_OK) {
@@ -183,7 +183,7 @@ public:
 	 *
 	 * @return true if the data was parsed successfully, false otherwise.
 	 */
-	bool execute_out(const char* data, size_t len)
+	bool execute_out(const char* data, const size_t len)
 	{
 		const auto result = llhttp_execute(&out_parser_.value(), data, len);
 		if (result == HPE_OK) {
@@ -219,7 +219,7 @@ class hs_state {
 	 *
 	 * @return 0
 	 */
-	static int handle_on_url (llhttp_t*, const char* at, size_t length)
+	static int handle_on_url (llhttp_t*, const char* at, const size_t length)
 	{
 		const std::string_view url(at, length);
 
@@ -236,7 +236,7 @@ class hs_state {
 	 *
 	 * @return 0
 	 */
-	static int handle_on_header_field(llhttp_t*, const char* at, size_t length)
+	static int handle_on_header_field(llhttp_t*, const char* at, const size_t length)
 	{
 		const std::string_view header(at, length);
 
@@ -513,13 +513,15 @@ int main()
 {
 	hs_state state{R"(^(GET|POST|PUT|DELETE|HEAD|OPTIONS|TRACE|CONNECT) \S+ HTTP/1\.[01]\r\n)"};
 
-	const auto ndis_api = std::make_unique<ndisapi::simple_packet_filter>(
+	const auto ndis_api = std::make_unique<ndisapi::queued_packet_filter>(
 		[&state](HANDLE, const INTERMEDIATE_BUFFER& buffer)
 		{
+			//return packet_action::pass;
 			return hs_process_incoming_packet(state, buffer);
 		},
 		[&state](HANDLE, const INTERMEDIATE_BUFFER& buffer)
 		{
+			//return packet_action::pass;
 			return hs_process_outgoing_packet(state, buffer);
 		});
 
