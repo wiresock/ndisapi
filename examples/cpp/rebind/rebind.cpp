@@ -516,7 +516,7 @@ int main()
 	std::wstring app_name_w;
 
 	std::cout << std::endl << "Application name to rebind: ";
-	std::wcin >> app_name_w;
+	std::getline(std::wcin, app_name_w);
 
 	rebind.set_application_name(app_name_w);
 
