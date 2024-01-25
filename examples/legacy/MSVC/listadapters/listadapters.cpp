@@ -1,7 +1,7 @@
 /*************************************************************************/
-/*				Copyright (c) 2000-2016 NT Kernel Resources.		     */
+/*                    Copyright (c) 2000-2024 NT KERNEL.                 */
 /*                           All Rights Reserved.                        */
-/*                          http://www.ntkernel.com                      */
+/*                          https://www.ntkernel.com                     */
 /*                           ndisrd@ntkernel.com                         */
 /*                                                                       */
 /* Module Name:  ListAdapters.cpp                                        */

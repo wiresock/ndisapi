@@ -39,15 +39,15 @@ vcpkg install ms-gsl:x86-windows ms-gsl:x64-windows ms-gsl:arm64-windows ms-gsl:
 ```
 * Use vcpkg to Install PcapPlusPlus library
 ```bash
-vcpkg install pcapplusplus:x86-windows-static pcapplusplus:x64-windows-static
+vcpkg install pcapplusplus:x86-windows pcapplusplus:x64-windows
 ```
 * Use vcpkg to Install Hyperscan library  
 ```bash
-vcpkg install hyperscan:x86-windows-static hyperscan:x64-windows-static
+vcpkg install hyperscan:x86-windows hyperscan:x64-windows
 ```
 * Use vcpkg to Install llhttp library  
 ```bash
-vcpkg install llhttp:x86-windows-static llhttp:x64-windows-static
+vcpkg install llhttp:x86-windows llhttp:x64-windows
 ```
 
 ### C++ examples 
