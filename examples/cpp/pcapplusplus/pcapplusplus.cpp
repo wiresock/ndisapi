@@ -8,12 +8,12 @@
 #undef ICMP
 #endif //ICMP
 
-#include "pcapplusplus/RawPacket.h"
-#include "pcapplusplus/Packet.h"
-#include "pcapplusplus/IPLayer.h"
-#include "pcapplusplus/TcpLayer.h"
-#include "pcapplusplus/SSLLayer.h"
-#include "pcapplusplus/SSLHandshake.h"
+#include "RawPacket.h"
+#include "Packet.h"
+#include "IPLayer.h"
+#include "TcpLayer.h"
+#include "SSLLayer.h"
+#include "SSLHandshake.h"
 
 using packet_filter = ndisapi::simple_packet_filter;
 using packet_action = ndisapi::simple_packet_filter::packet_action;

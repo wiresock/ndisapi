@@ -1,0 +1,7 @@
+{
+  "dependencies": [
+    "ms-gsl",
+    "hyperscan",
+    "llhttp"
+  ]
+}
