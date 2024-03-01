@@ -113,7 +113,7 @@
  */
 typedef struct _TCP_AdapterList
 {
-	unsigned long   m_nAdapterCount;
+	DWORD   		m_nAdapterCount;
 	unsigned char   m_szAdapterNameList[ADAPTER_LIST_SIZE][ADAPTER_NAME_SIZE];
 	HANDLE          m_nAdapterHandle[ADAPTER_LIST_SIZE];
 	unsigned int    m_nAdapterMediumList[ADAPTER_LIST_SIZE];
@@ -135,7 +135,7 @@ typedef struct _TCP_AdapterList
  */
 typedef struct _TCP_AdapterList_WOW64
 {
-	unsigned long   m_nAdapterCount;
+	DWORD   		m_nAdapterCount;
 	unsigned char   m_szAdapterNameList[ADAPTER_LIST_SIZE][ADAPTER_NAME_SIZE];
 	ULARGE_INTEGER  m_nAdapterHandle[ADAPTER_LIST_SIZE];
 	unsigned int    m_nAdapterMediumList[ADAPTER_LIST_SIZE];
@@ -161,12 +161,12 @@ typedef struct _INTERMEDIATE_BUFFER
 		HANDLE          m_hAdapter;
 		LIST_ENTRY      m_qLink;
 	};
-	ULONG               m_dwDeviceFlags;
-	ULONG               m_Length;
-	ULONG               m_Flags; // NDIS_PACKET flags
-	ULONG               m_8021q; // 802.1q info
-	ULONG               m_FilterID;
-	ULONG               m_Reserved[4];
+	DWORD               m_dwDeviceFlags;
+	DWORD               m_Length;
+	DWORD               m_Flags; // NDIS_PACKET flags
+	DWORD               m_8021q; // 802.1q info
+	DWORD               m_FilterID;
+	DWORD               m_Reserved[4];
 	UCHAR               m_IBuffer[MAX_ETHER_FRAME];
 } INTERMEDIATE_BUFFER, * PINTERMEDIATE_BUFFER;
 
@@ -190,12 +190,12 @@ typedef struct _INTERMEDIATE_BUFFER_WOW64
 		HANDLE          m_hAdapter[2];
 		LIST_ENTRY      m_qLink[2];
 	};
-	ULONG               m_dwDeviceFlags;
-	ULONG               m_Length;
-	ULONG               m_Flags; // NDIS_PACKET flags
-	ULONG               m_8021q; // 802.1q tag
-	ULONG               m_FilterID;
-	ULONG               m_Reserved[4];
+	DWORD               m_dwDeviceFlags;
+	DWORD               m_Length;
+	DWORD               m_Flags; // NDIS_PACKET flags
+	DWORD               m_8021q; // 802.1q tag
+	DWORD               m_FilterID;
+	DWORD               m_Reserved[4];
 	UCHAR               m_IBuffer[MAX_ETHER_FRAME];
 } INTERMEDIATE_BUFFER_WOW64, * PINTERMEDIATE_BUFFER_WOW64;
 
@@ -289,7 +289,7 @@ typedef struct _ETH_M_REQUEST_WOW64
 typedef struct _ADAPTER_MODE
 {
 	HANDLE          hAdapterHandle;
-	unsigned long   dwFlags;
+	DWORD   		dwFlags;
 } ADAPTER_MODE, * PADAPTER_MODE;
 
 /**
@@ -303,7 +303,7 @@ typedef struct _ADAPTER_MODE
 typedef struct _ADAPTER_MODE_WOW64
 {
 	ULARGE_INTEGER  hAdapterHandle;
-	unsigned long   dwFlags;
+	DWORD   		dwFlags;
 } ADAPTER_MODE_WOW64, * PADAPTER_MODE_WOW64;
 
 /**
@@ -343,8 +343,8 @@ typedef struct _ADAPTER_EVENT_WOW64
 typedef struct _PACKET_OID_DATA
 {
 	HANDLE      hAdapterHandle;
-	ULONG       Oid;
-	ULONG       Length;
+	DWORD       Oid;
+	DWORD       Length;
 	UCHAR       Data[ANY_SIZE];
 } PACKET_OID_DATA, * PPACKET_OID_DATA;
 
@@ -361,8 +361,8 @@ typedef struct _PACKET_OID_DATA
 typedef struct _PACKET_OID_DATA_WOW64
 {
 	ULARGE_INTEGER  hAdapterHandle;
-	ULONG           Oid;
-	ULONG           Length;
+	DWORD           Oid;
+	DWORD           Length;
 	UCHAR           Data[ANY_SIZE];
 } PACKET_OID_DATA_WOW64, * PPACKET_OID_DATA_WOW64;
 
@@ -380,11 +380,11 @@ typedef struct _PACKET_OID_DATA_WOW64
 typedef struct _RAS_LINK_INFO
 {
 #define RAS_LINK_BUFFER_LENGTH 2048
-	ULONG  LinkSpeed;
-	ULONG  MaximumTotalSize;
+	DWORD  LinkSpeed;
+	DWORD  MaximumTotalSize;
 	UCHAR  RemoteAddress[ETHER_ADDR_LENGTH];
 	UCHAR  LocalAddress[ETHER_ADDR_LENGTH];
-	ULONG  ProtocolBufferLength;
+	DWORD  ProtocolBufferLength;
 	UCHAR  ProtocolBuffer[RAS_LINK_BUFFER_LENGTH];
 } RAS_LINK_INFO, * PRAS_LINK_INFO;
 
@@ -397,7 +397,7 @@ typedef struct _RAS_LINK_INFO
 typedef struct _RAS_LINKS
 {
 #define RAS_LINKS_MAX	256
-	ULONG nNumberOfLinks;
+	DWORD nNumberOfLinks;
 	RAS_LINK_INFO RasLinks[RAS_LINKS_MAX];
 } RAS_LINKS, * PRAS_LINKS;
 
@@ -418,7 +418,7 @@ typedef struct _ETH_802_3_FILTER
 #define ETH_802_3_SRC_ADDRESS    0x00000001
 #define ETH_802_3_DEST_ADDRESS   0x00000002
 #define ETH_802_3_PROTOCOL       0x00000004
-	unsigned long   m_ValidFields;                        // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD   		m_ValidFields;                        // Specifies which of the fields below contain valid values and should be matched against the packet
 	unsigned char   m_SrcAddress[ETHER_ADDR_LENGTH];      // Source MAC address
 	unsigned char   m_DestAddress[ETHER_ADDR_LENGTH];     // Destination MAC address
 	unsigned short  m_Protocol;                           // EtherType
@@ -428,25 +428,25 @@ typedef struct _ETH_802_3_FILTER
 /**
  * @brief IP_SUBNET_V4 structure is used to represent an IPv4 subnet.
  *
- * @param m_Ip This field stores the IPv4 address expressed as an unsigned long.
- * @param m_IpMask This field stores the IPv4 subnet mask expressed as an unsigned long.
+ * @param m_Ip This field stores the IPv4 address expressed as an DWORD.
+ * @param m_IpMask This field stores the IPv4 subnet mask expressed as an DWORD.
  */
 typedef struct _IP_SUBNET_V4
 {
-	unsigned long   m_Ip;       // IPv4 address expressed as ULONG
-	unsigned long   m_IpMask;   // IPv4 mask expressed as ULONG
+	DWORD   m_Ip;       // IPv4 address expressed as DWORD
+	DWORD   m_IpMask;   // IPv4 mask expressed as DWORD
 } IP_SUBNET_V4, * PIP_SUBNET_V4;
 
 /**
  * @brief IP_RANGE_V4 structure is used to represent a range of IPv4 addresses.
  *
- * @param m_StartIp This field stores the starting IPv4 address of the range expressed as an unsigned long.
- * @param m_EndIp This field stores the ending IPv4 address of the range expressed as an unsigned long.
+ * @param m_StartIp This field stores the starting IPv4 address of the range expressed as an DWORD.
+ * @param m_EndIp This field stores the ending IPv4 address of the range expressed as an DWORD.
  */
 typedef struct _IP_RANGE_V4
 {
-	unsigned long   m_StartIp;  // Start of IPv4 address range expressed as ULONG
-	unsigned long   m_EndIp;    // End of IPv4 address range expressed as ULONG
+	DWORD   m_StartIp;  // Start of IPv4 address range expressed as DWORD
+	DWORD   m_EndIp;    // End of IPv4 address range expressed as DWORD
 } IP_RANGE_V4, * PIP_RANGE_V4;
 
 /**
@@ -460,7 +460,7 @@ typedef struct _IP_ADDRESS_V4
 {
 #define IP_SUBNET_V4_TYPE    0x00000001
 #define IP_RANGE_V4_TYPE     0x00000002
-	unsigned long m_AddressType; // Specifies which of the IP v4 address types is used below
+	DWORD m_AddressType; // Specifies which of the IP v4 address types is used below
 	union
 	{
 		IP_SUBNET_V4    m_IpSubnet;
@@ -481,7 +481,7 @@ typedef struct _IP_V4_FILTER
 #define IP_V4_FILTER_SRC_ADDRESS    0x00000001
 #define IP_V4_FILTER_DEST_ADDRESS   0x00000002
 #define IP_V4_FILTER_PROTOCOL       0x00000004
-	unsigned long   m_ValidFields;   // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD   		m_ValidFields;   // Specifies which of the fields below contain valid values and should be matched against the packet
 	IP_ADDRESS_V4   m_SrcAddress;    // IP v4 source address
 	IP_ADDRESS_V4   m_DestAddress;   // IP v4 destination address
 	unsigned char   m_Protocol;      // Specifies next protocol
@@ -523,7 +523,7 @@ typedef struct _IP_ADDRESS_V6
 {
 #define IP_SUBNET_V6_TYPE    0x00000001
 #define IP_RANGE_V6_TYPE     0x00000002
-	unsigned long   m_AddressType; // Specifies which of the IP v6 address types is used below
+	DWORD   m_AddressType; // Specifies which of the IP v6 address types is used below
 	union
 	{
 		IP_SUBNET_V6    m_IpSubnet;
@@ -544,7 +544,7 @@ typedef struct _IP_V6_FILTER
 #define IP_V6_FILTER_SRC_ADDRESS    0x00000001
 #define IP_V6_FILTER_DEST_ADDRESS   0x00000002
 #define IP_V6_FILTER_PROTOCOL       0x00000004
-	unsigned long   m_ValidFields;   // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD   		m_ValidFields;   // Specifies which of the fields below contain valid values and should be matched against the packet
 	IP_ADDRESS_V6   m_SrcAddress;    // IP v6 source address
 	IP_ADDRESS_V6   m_DestAddress;   // IP v6 destination address
 	unsigned char   m_Protocol;      // Specifies next protocol
@@ -576,7 +576,7 @@ typedef struct _TCPUDP_FILTER
 #define TCPUDP_SRC_PORT   0x00000001
 #define TCPUDP_DEST_PORT  0x00000002
 #define TCPUDP_TCP_FLAGS  0x00000004
-	unsigned long   m_ValidFields;  // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD   		m_ValidFields;  // Specifies which of the fields below contain valid values and should be matched against the packet
 	PORT_RANGE      m_SourcePort;   // Source port
 	PORT_RANGE      m_DestPort;     // Destination port
 	unsigned char   m_TCPFlags;     // TCP flags combination
@@ -606,7 +606,7 @@ typedef struct _ICMP_FILTER
 {
 #define ICMP_TYPE        0x00000001
 #define ICMP_CODE        0x00000002
-	unsigned long   m_ValidFields;  // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD   		m_ValidFields;  // Specifies which of the fields below contain valid values and should be matched against the packet
 	BYTE_RANGE      m_TypeRange;    // ICMP Type range
 	BYTE_RANGE      m_CodeRange;    // ICMP Code range
 } ICMP_FILTER, * PICMP_FILTER;
@@ -620,7 +620,7 @@ typedef struct _ICMP_FILTER
 typedef struct _DATA_LINK_LAYER_FILTER
 {
 #define ETH_802_3    0x00000001
-	unsigned long       m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD    m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
 	union
 	{
 		ETH_802_3_FILTER   m_Eth8023Filter; // Ethernet 802.3 filter
@@ -638,7 +638,7 @@ typedef struct _NETWORK_LAYER_FILTER
 {
 #define IPV4    0x00000001
 #define IPV6    0x00000002
-	unsigned long       m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD    m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
 	union
 	{
 		IP_V4_FILTER   m_IPv4; // IPv4 filter
@@ -657,7 +657,7 @@ typedef struct _TRANSPORT_LAYER_FILTER
 {
 #define TCPUDP  0x00000001
 #define ICMP    0x00000002
-	unsigned long       m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
+	DWORD    m_dwUnionSelector; // Specifies which of the fields below contain valid values and should be matched against the packet
 	union
 	{
 		TCPUDP_FILTER    m_TcpUdp; // TCP/UDP filter
@@ -693,17 +693,17 @@ typedef struct _STATIC_FILTER
 #define NETWORK_LAYER_VALID     0x00000002 // Match packet against network layer filter
 #define TRANSPORT_LAYER_VALID   0x00000004 // Match packet against transport layer filter
 
-	ULARGE_INTEGER           m_Adapter; // Adapter handle extended to 64 bit size for structure compatibility across x64 and x86
-	unsigned long            m_dwDirectionFlags; // PACKET_FLAG_ON_SEND or/and PACKET_FLAG_ON_RECEIVE
-	unsigned long            m_FilterAction; // FILTER_PACKET_XXX
-	unsigned long            m_ValidFields; // Specifies which of the fields below contain valid values and should be matched against the packet
+	ULARGE_INTEGER   m_Adapter; // Adapter handle extended to 64 bit size for structure compatibility across x64 and x86
+	DWORD            m_dwDirectionFlags; // PACKET_FLAG_ON_SEND or/and PACKET_FLAG_ON_RECEIVE
+	DWORD            m_FilterAction; // FILTER_PACKET_XXX
+	DWORD            m_ValidFields; // Specifies which of the fields below contain valid values and should be matched against the packet
 
 	// Statistics for the filter
-	unsigned long            m_LastReset; // Time of the last counters reset (in seconds passed since 1 Jan 1980)
-	ULARGE_INTEGER           m_PacketsIn; // Incoming packets passed through this filter
-	ULARGE_INTEGER           m_BytesIn; // Incoming bytes passed through this filter
-	ULARGE_INTEGER           m_PacketsOut; // Outgoing packets passed through this filter
-	ULARGE_INTEGER           m_BytesOut; // Outgoing bytes passed through this filter
+	DWORD            m_LastReset; // Time of the last counters reset (in seconds passed since 1 Jan 1980)
+	ULARGE_INTEGER   m_PacketsIn; // Incoming packets passed through this filter
+	ULARGE_INTEGER   m_BytesIn; // Incoming bytes passed through this filter
+	ULARGE_INTEGER   m_PacketsOut; // Outgoing packets passed through this filter
+	ULARGE_INTEGER   m_BytesOut; // Outgoing bytes passed through this filter
 
 	DATA_LINK_LAYER_FILTER   m_DataLinkFilter;
 	NETWORK_LAYER_FILTER     m_NetworkFilter;
@@ -718,8 +718,8 @@ typedef struct _STATIC_FILTER
  */
 typedef struct _STATIC_FILTER_TABLE
 {
-	unsigned long    m_TableSize; // number of STATIC_FILTER entries
-	unsigned long    Padding;
+	DWORD    m_TableSize; // number of STATIC_FILTER entries
+	DWORD    Padding;
 	STATIC_FILTER    m_StaticFilters[ANY_SIZE];
 } STATIC_FILTER_TABLE, * PSTATIC_FILTER_TABLE;
 
@@ -730,7 +730,7 @@ typedef struct _STATIC_FILTER_TABLE
 /**
  * @brief FAST_IO_WRITE_UNION structure is used to store the number of packets and the write-in-progress flag in a union.
  *
- * @param union_ This is a union of two fields. The split field is a structure that contains the number_of_packets and write_in_progress_flag fields. The join field is an unsigned long that can store the combined value of the two fields in the split structure.
+ * @param union_ This is a union of two fields. The split field is a structure that contains the number_of_packets and write_in_progress_flag fields. The join field is an DWORD that can store the combined value of the two fields in the split structure.
  */
 typedef struct _FAST_IO_WRITE_UNION {
 	union {
@@ -738,7 +738,7 @@ typedef struct _FAST_IO_WRITE_UNION {
 			USHORT number_of_packets;
 			USHORT write_in_progress_flag;
 		} split;
-		ULONG join;
+		DWORD join;
 	} union_;
 }FAST_IO_WRITE_UNION, * PFAST_IO_WRITE_UNION;
 
@@ -746,11 +746,11 @@ typedef struct _FAST_IO_WRITE_UNION {
  * @brief FAST_IO_SECTION_HEADER structure is used to store the fast I/O write union and the read in progress flag.
  *
  * @param fast_io_write_union This field is a FAST_IO_WRITE_UNION structure that stores the number of packets and the write-in-progress flag.
- * @param read_in_progress_flag This field is an unsigned long that stores the read in progress flag.
+ * @param read_in_progress_flag This field is an DWORD that stores the read in progress flag.
  */
 typedef struct _FAST_IO_SECTION_HEADER {
 	FAST_IO_WRITE_UNION fast_io_write_union;
-	ULONG               read_in_progress_flag;
+	DWORD               read_in_progress_flag;
 } FAST_IO_SECTION_HEADER, * PFAST_IO_SECTION_HEADER;
 
 /**
@@ -769,12 +769,12 @@ typedef struct _FAST_IO_SECTION
  * @brief INITIALIZE_FAST_IO_PARAMS structure is used to store the header pointer and the data size for initializing fast I/O.
  *
  * @param header_ptr This field is a pointer to a FAST_IO_SECTION structure that stores the fast I/O section header and the fast I/O packets.
- * @param data_size This field is an unsigned long that stores the data size.
+ * @param data_size This field is an DWORD that stores the data size.
  */
 typedef struct _INITIALIZE_FAST_IO_PARAMS
 {
 	PFAST_IO_SECTION header_ptr;
-	ULONG            data_size;
+	DWORD            data_size;
 }INITIALIZE_FAST_IO_PARAMS, * PINITIALIZE_FAST_IO_PARAMS;
 
 /**********************************************************************************
@@ -790,7 +790,7 @@ typedef struct _INITIALIZE_FAST_IO_PARAMS
 typedef struct _UNSORTED_READ_SEND_REQUEST
 {
 	PINTERMEDIATE_BUFFER* packets;
-	ULONG                 packets_num;
+	DWORD                 packets_num;
 } UNSORTED_READ_SEND_REQUEST, * PUNSORTED_READ_SEND_REQUEST;
 
 // Restore Default Structure Packing

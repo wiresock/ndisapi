@@ -58,10 +58,10 @@ int main(int argc, char* argv[])
 			for (unsigned i = 0; i < pFilterTable->m_TableSize; ++i)
 			{
 				printf ("Filter %d: \n", i);
-				printf ("\tIncoming packets counter = %d \n", pFilterTable->m_StaticFilters[i].m_PacketsIn.QuadPart);
-				printf ("\tIncoming bytes counter = %d \n", pFilterTable->m_StaticFilters[i].m_BytesIn.QuadPart);
-				printf ("\tOutgoing packets counter = %d \n", pFilterTable->m_StaticFilters[i].m_PacketsOut.QuadPart);
-				printf ("\tOutgoing bytes counter = %d \n", pFilterTable->m_StaticFilters[i].m_BytesOut.QuadPart);
+				printf ("\tIncoming packets counter = %llu \n", pFilterTable->m_StaticFilters[i].m_PacketsIn.QuadPart);
+				printf ("\tIncoming bytes counter = %llu \n", pFilterTable->m_StaticFilters[i].m_BytesIn.QuadPart);
+				printf ("\tOutgoing packets counter = %llu \n", pFilterTable->m_StaticFilters[i].m_PacketsOut.QuadPart);
+				printf ("\tOutgoing bytes counter = %llu \n", pFilterTable->m_StaticFilters[i].m_BytesOut.QuadPart);
 				printf ("\tLast reset = %d \n", pFilterTable->m_StaticFilters[i].m_LastReset);
 			}
 

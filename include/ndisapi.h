@@ -157,7 +157,7 @@ public:
 
 private:
 	// Private member functions
-	BOOL DeviceIoControl (DWORD dwService, void *BuffIn, int SizeIn, void *BuffOut, int SizeOut, unsigned long *SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
+	BOOL DeviceIoControl (DWORD dwService, void *BuffIn, int SizeIn, void *BuffOut, int SizeOut, LPDWORD SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
 
 	// Private static functions
 	static BOOL	IsNdiswanInterface (LPCSTR adapterName, LPCSTR ndiswanName);

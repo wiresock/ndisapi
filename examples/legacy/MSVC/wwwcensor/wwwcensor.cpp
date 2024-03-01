@@ -222,7 +222,7 @@ int main(int argc, char* argv[])
 							//
 
 							// Check if this is HTTP GET
-							if (0 == _strnicmp(szTempString, "GET ", strlen("GET ")))
+							if (0 == strncmp(szTempString, "GET ", strlen("GET ")))
 							{
 								PCHAR pPage = szTempString + strlen("GET ");
 								PCHAR pEndPage = strchr (pPage, ' ');
@@ -367,8 +367,8 @@ int main(int argc, char* argv[])
 						SYSTEMTIME today;
 						char date_time_str[256];
 						GetSystemTime ( &today );
-						GetDateFormat(LOCALE_INVARIANT, 0, &today, "ddd',' dd MMM yyyy ", date_time_str, 256);
-						GetTimeFormat(0, TIME_FORCE24HOURFORMAT, &today, "hh':'mm':'ss GMT\r\n", date_time_str + strlen(date_time_str), 256 - (int)strlen(date_time_str));
+						GetDateFormatA(LOCALE_INVARIANT, 0, &today, "ddd',' dd MMM yyyy ", date_time_str, 256);
+						GetTimeFormatA(0, TIME_FORCE24HOURFORMAT, &today, "hh':'mm':'ss GMT\r\n", date_time_str + strlen(date_time_str), 256 - (int)strlen(date_time_str));
 
 
 						// 2. Get pointer to TCP data and fill HTTP response packet

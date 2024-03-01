@@ -366,7 +366,7 @@ CNdisApi::~CNdisApi()
  * This function sends a control code to the NDISAPI driver, either in a synchronous or asynchronous manner,
  * depending on the value of the 'povlp' parameter.
  */
-BOOL CNdisApi::DeviceIoControl(DWORD dwService, void *BuffIn, int SizeIn, void *BuffOut, int SizeOut, unsigned long *SizeRet, LPOVERLAPPED povlp) const
+BOOL CNdisApi::DeviceIoControl(DWORD dwService, void *BuffIn, int SizeIn, void *BuffOut, int SizeOut, LPDWORD SizeRet, LPOVERLAPPED povlp) const
 {
 	BOOL Ret = 0;
 
@@ -2196,7 +2196,7 @@ BOOL CNdisApi::SetMTUDecrement(const DWORD dwMTUDecrement)
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, reinterpret_cast<const BYTE*>(&dwMTUDecrement), sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwMTUDecrement), sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -2211,7 +2211,7 @@ BOOL CNdisApi::SetMTUDecrement(const DWORD dwMTUDecrement)
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
+		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), 0, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
 		{
 			RegCloseKey(hKey);
 			return TRUE;
@@ -2247,7 +2247,7 @@ DWORD CNdisApi::GetMTUDecrement()
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), NULL, NULL, reinterpret_cast<BYTE*>(&dwMTUDecrement), &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), 0, NULL, reinterpret_cast<BYTE*>(&dwMTUDecrement), &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwMTUDecrement;
@@ -2262,7 +2262,7 @@ DWORD CNdisApi::GetMTUDecrement()
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), NULL, NULL, reinterpret_cast<BYTE*>(&dwMTUDecrement), &dwSize))
+		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), 0, NULL, reinterpret_cast<BYTE*>(&dwMTUDecrement), &dwSize))
 		{
 			RegCloseKey(hKey);
 			return dwMTUDecrement;
@@ -2307,7 +2307,7 @@ BOOL CNdisApi::SetAdaptersStartupMode(const DWORD dwStartupMode)
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), NULL, REG_DWORD, reinterpret_cast<const BYTE*>(&dwStartupMode), sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwStartupMode), sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -2322,7 +2322,7 @@ BOOL CNdisApi::SetAdaptersStartupMode(const DWORD dwStartupMode)
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), NULL, REG_DWORD, reinterpret_cast<const BYTE*>(&dwStartupMode), sizeof(DWORD)))
+		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwStartupMode), sizeof(DWORD)))
 		{
 			RegCloseKey(hKey);
 			return TRUE;
@@ -2357,7 +2357,7 @@ DWORD CNdisApi::GetAdaptersStartupMode()
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), NULL, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), 0, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwStartupMode;
@@ -2372,7 +2372,7 @@ DWORD CNdisApi::GetAdaptersStartupMode()
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), NULL, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
+		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), 0, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
 		{
 			RegCloseKey(hKey);
 			return dwStartupMode;
@@ -2405,7 +2405,7 @@ BOOL CNdisApi::SetPoolSize(const DWORD dwPoolSize)
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("PoolSize"), NULL, REG_DWORD, reinterpret_cast<const BYTE*>(&dwPoolSize), sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("PoolSize"), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwPoolSize), sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -2420,7 +2420,7 @@ BOOL CNdisApi::SetPoolSize(const DWORD dwPoolSize)
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("PoolSize"), NULL, REG_DWORD, reinterpret_cast<const BYTE*>(&dwPoolSize), sizeof(DWORD)))
+		if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("PoolSize"), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&dwPoolSize), sizeof(DWORD)))
 		{
 			RegCloseKey(hKey);
 			return TRUE;
@@ -2453,7 +2453,7 @@ DWORD CNdisApi::GetPoolSize()
 		// Windows NT, 2000 or XP
 		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("PoolSize"), NULL, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("PoolSize"), 0, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwStartupMode;
@@ -2468,7 +2468,7 @@ DWORD CNdisApi::GetPoolSize()
 	// Windows 9x/ME
 	if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 	{
-		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("PoolSize"), NULL, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
+		if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("PoolSize"), 0, NULL, reinterpret_cast<BYTE*>(&dwStartupMode), &dwSize))
 		{
 			RegCloseKey(hKey);
 			return dwStartupMode;
@@ -2681,7 +2681,7 @@ BOOL CNdisApi::ConvertWindowsNTAdapterName(
 				{
 					if (_stricmp(szServiceName, &szAdapterName[strlen("\\Device\\")]) == 0)
 					{
-						lResult = RegQueryValueExA(hKeyAdapter, REGSTR_VAL_TITLE, NULL, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
+						lResult = RegQueryValueExA(hKeyAdapter, REGSTR_VAL_TITLE, 0, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
 
 						RegCloseKey(hKeyAdapter);
 						RegCloseKey(hKeyAdapters);
@@ -2799,7 +2799,7 @@ BOOL CNdisApi::ConvertWindows2000AdapterName(
 
     if (lResult == ERROR_SUCCESS)
     {
-        lResult = RegQueryValueExA(hKey, REGSTR_VAL_NAME, NULL, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
+        lResult = RegQueryValueExA(hKey, REGSTR_VAL_NAME, 0, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
 
         RegCloseKey(hKey);
 
@@ -2851,7 +2851,7 @@ CNdisApi::ConvertWindows9xAdapterName(
 
 	if (lResult == ERROR_SUCCESS)
 	{
-		lResult = RegQueryValueExA(hKey, REGSTR_VAL_DRIVER_DESC, NULL, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
+		lResult = RegQueryValueExA(hKey, REGSTR_VAL_DRIVER_DESC, 0, &dwType, reinterpret_cast<LPBYTE>(szUserFriendlyName), &dwUserFriendlyNameLength);
 		if (lResult == ERROR_SUCCESS)
 		{
 			bRet = TRUE;
