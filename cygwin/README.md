@@ -23,7 +23,7 @@ This will compile the `ndisapi` static library and the following example applica
 - `packthru`
 - `filter`
 - `filterstats`
-- `gertunnel`
+- `gretunnel`
 - `ndisrequest`
 - `packetsniffer`
 - `passthru`
