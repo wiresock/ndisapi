@@ -18,8 +18,8 @@
 /*                                                                        */
 /**************************************************************************/
 
-#ifndef __COMMON_H__
-#define __COMMON_H__
+#ifndef COMMON_H
+#define COMMON_H
 
 #ifdef _WINDOWS
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
@@ -893,6 +893,6 @@ typedef struct _UNSORTED_READ_SEND_REQUEST
 #define IOCTL_NDISRD_QUERY_IB_POOL_SIZE\
    CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+29, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-#endif // __COMMON_H__
+#endif // COMMON_H
 
 
