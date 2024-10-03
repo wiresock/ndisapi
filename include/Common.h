@@ -25,6 +25,28 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
+// The following definitions are used to customize the driver build
+// In you would like to redefine these for the custom build do that in the user_settings.h file
+#ifdef USER_NAMES
+#include "user_settings.h"
+#else
+
+// Define NDISRD name once in both ASCII and Unicode formats
+#define NDISRD_NAME_A "NDISRD"
+#define NDISRD_NAME_U L"NDISRD"
+
+// Define lowercase NDISRD name for registry paths
+#define NDISRD_NAME_LOWER_A "ndisrd"
+#define NDISRD_NAME_LOWER_U L"ndisrd"
+
+// FILTER_FRIENDLY_NAME is the friendly name of the NDISRD filter
+#define FILTER_FRIENDLY_NAME L"WinpkFilter NDIS LightWeight Filter"
+
+// FILTER_UNIQUE_NAME is the unique name (GUID) of the NDISRD filter
+#define FILTER_UNIQUE_NAME L"{CD75C963-E19F-4139-BC3B-14019EF72F19}"
+
+#endif // USER_NAMES
+
 #ifndef ANY_SIZE
 #define ANY_SIZE 1
 #endif
@@ -39,31 +61,29 @@
 #define NDISRD_MINOR_VERSION       0x0601
 
 // DRIVER_NAME_A is the ASCII name of the NDISRD driver
-#define DRIVER_NAME_A              "NDISRD"
+#define DRIVER_NAME_A NDISRD_NAME_A
 
 // DRIVER_NAME_U is the Unicode name of the NDISRD driver
-#define DRIVER_NAME_U              L"NDISRD"
+#define DRIVER_NAME_U NDISRD_NAME_U
 
 // DEVICE_NAME is the device name of the NDISRD driver in the device namespace
-#define DEVICE_NAME                L"\\Device\\NDISRD"
+#define DEVICE_PREFIX L"\\Device\\"
+#define DEVICE_NAME DEVICE_PREFIX NDISRD_NAME_U
 
 // SYMLINK_NAME is the symbolic link name of the NDISRD driver in the DOS namespace
-#define SYMLINK_NAME               L"\\DosDevices\\NDISRD"
+#define SYMLINK_PREFIX L"\\DosDevices\\"
+#define SYMLINK_NAME SYMLINK_PREFIX NDISRD_NAME_U
 
 // WIN9X_REG_PARAM is the registry path for the NDISRD driver parameters on Windows 9x systems
-#define WIN9X_REG_PARAM            "System\\CurrentControlSet\\Services\\VxD\\ndisrd\\Parameters"
+#define WIN9X_REG_BASE "System\\CurrentControlSet\\Services\\VxD\\"
+#define WIN9X_REG_PARAM WIN9X_REG_BASE NDISRD_NAME_LOWER_A "\\Parameters"
 
 // WINNT_REG_PARAM is the registry path for the NDISRD driver parameters on Windows NT systems
-#define WINNT_REG_PARAM            TEXT("SYSTEM\\CurrentControlSet\\Services\\ndisrd\\Parameters")
-
-// FILTER_FRIENDLY_NAME is the friendly name of the NDISRD filter
-#define FILTER_FRIENDLY_NAME       L"WinpkFilter NDIS LightWeight Filter"
-
-// FILTER_UNIQUE_NAME is the unique name (GUID) of the NDISRD filter
-#define FILTER_UNIQUE_NAME         L"{CD75C963-E19F-4139-BC3B-14019EF72F19}"
+#define WINNT_REG_BASE TEXT("SYSTEM\\CurrentControlSet\\Services\\")
+#define WINNT_REG_PARAM WINNT_REG_BASE TEXT(NDISRD_NAME_LOWER_A) TEXT("\\Parameters")
 
 // FILTER_SERVICE_NAME is the service name of the NDISRD filter
-#define FILTER_SERVICE_NAME        L"NDISRD"
+#define FILTER_SERVICE_NAME NDISRD_NAME_U
 
 // Some size constants
 #define ADAPTER_NAME_SIZE          256 // Maximum size of the adapter name
