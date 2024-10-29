@@ -8,12 +8,12 @@
 #undef ICMP
 #endif //ICMP
 
-#include "RawPacket.h"
-#include "Packet.h"
-#include "IPLayer.h"
-#include "TcpLayer.h"
-#include "SSLLayer.h"
-#include "SSLHandshake.h"
+#include "pcapplusplus/RawPacket.h"
+#include "pcapplusplus/Packet.h"
+#include "pcapplusplus/IPLayer.h"
+#include "pcapplusplus/TcpLayer.h"
+#include "pcapplusplus/SSLLayer.h"
+#include "pcapplusplus/SSLHandshake.h"
 
 using packet_filter = ndisapi::simple_packet_filter;
 using packet_action = ndisapi::simple_packet_filter::packet_action;
@@ -28,7 +28,7 @@ packet_action auto_parse_ethernet_frame_sni(INTERMEDIATE_BUFFER& buffer)
 
 	// verify packet is TCP and SSL/TLS
 	if (!parsed_packet.isPacketOfType(pcpp::TCP) || !parsed_packet.isPacketOfType(pcpp::SSL))
-		return ndisapi::simple_packet_filter::packet_action::pass;
+		return packet_action::pass;
 
 	// go over all SSL messages in this packet
 	auto* ssl_layer = parsed_packet.getLayerOfType<pcpp::SSLLayer>();
@@ -76,7 +76,7 @@ packet_action auto_parse_ethernet_frame_sni(INTERMEDIATE_BUFFER& buffer)
 		ssl_layer = parsed_packet.getNextLayerOfType<pcpp::SSLLayer>(ssl_layer);
 	}
 
-	return ndisapi::simple_packet_filter::packet_action::pass;
+	return packet_action::pass;
 }
 
 int main()
