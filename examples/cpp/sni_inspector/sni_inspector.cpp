@@ -7,408 +7,443 @@
 
 class tls_parser
 {
-	static constexpr auto server_name_len = 256;
-	static constexpr auto tls_header_len = 5;
-	static constexpr auto tls_handshake_content_type = 0x16;
-	static constexpr auto tls_handshake_type_client_hello = 0x01;
+    static constexpr auto server_name_len = 256;
+    static constexpr auto tls_header_len = 5;
+    static constexpr auto tls_handshake_content_type = 0x16;
+    static constexpr auto tls_handshake_type_client_hello = 0x01;
+    static constexpr auto sni_extension_type = 0x0000;
 
-	static std::optional<std::string> parse_server_name_extension(const uint8_t* data, const size_t length)
-	{
-		size_t position = 2; // skip server name list length
+    static std::optional<std::string> parse_server_name_extension(const uint8_t* data, const size_t length)
+    {
+        size_t position = 0;
 
-		while (position + 3 < length)
-		{
-			const auto len = (static_cast<size_t>(data[position + 1]) << 8) + static_cast<size_t>(data[position + 2]);
+        if (position + 2 > length)
+        {
+            // Incomplete Server Name List Length
+            return std::nullopt;
+        }
 
-			if (position + 3 + len > length)
-			{
-				std::cout << "Invalid TLS client hello" << "\n";
-				return std::nullopt;
-			}
+        size_t server_name_list_length = (data[position] << 8) | data[position + 1];
+        position += 2;
 
-			switch (data[position]) // name type
-			{
-			case 0x00: // host_name
-				return std::string(reinterpret_cast<const char*>(data + position + 3), len);
-			default:
-				std::cout << "Unknown server name extension name type: " << data[position] << "\n";
-				break;
-			}
-			position += 3 + len;
-		}
+        // Adjust server_name_list_length if not enough data
+        if (position + server_name_list_length > length)
+        {
+            // Incomplete Server Name List, adjusting length
+            server_name_list_length = length - position;
+        }
 
-		// Check we ended where we expected to
-		if (position != length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        while (position + 3 <= length)
+        {
+            const uint8_t name_type = data[position];
+            uint16_t name_length = static_cast<uint16_t>(data[position + 1] << 8) | data[position + 2];
+            position += 3;
 
-		std::cout << "No Host header included in this request" << "\n";
-		return std::nullopt;
-	}
+            // Adjust name_length if not enough data
+            if (position + name_length > length)
+            {
+                // Incomplete Server Name, adjusting length
+                name_length = static_cast<uint16_t>(length - position);
+            }
 
-	static std::optional<std::string> parse_extensions(const uint8_t* data, const size_t length)
-	{
-		size_t position = 0;
+            if (name_type == 0x00) // Hostname
+            {
+                std::string server_name(reinterpret_cast<const char*>(data + position), name_length);
+                return server_name;
+            }
 
-		// Parse each 4 bytes for the extension header
-		while (position + 4 <= length)
-		{
-			// Extension Length
-			const auto len = (static_cast<size_t>(data[position + 2]) << 8) + static_cast<size_t>(data[position + 3]);
+            position += name_length;
+        }
 
-			// Check if it's a server name extension
-			if (data[position] == 0x00 && data[position + 1] == 0x00)
-			{
-				// There can be only one extension of each type, so we break our state and move p to beginning of the extension here
-				if (position + 4 + len > length)
-				{
-					std::cout << "Invalid TLS client hello" << "\n";
-					return std::nullopt;
-				}
+        // No valid Server Name found
+        return std::nullopt;
+    }
 
-				return parse_server_name_extension(data + position + 4, len);
-			}
-			position += 4 + len; // Advance to the next extension header
-		}
+    static std::optional<std::string> parse_extensions(const uint8_t* data, const size_t length)
+    {
+        size_t position = 0;
 
-		// Check we ended where we expected to
-		if (position != length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Parse each extension
+        while (position + 4 <= length)
+        {
+            // Extension Type and Length
+            const uint16_t extension_type = static_cast<uint16_t>(data[position] << 8) | data[position + 1];
+            uint16_t extension_length = static_cast<uint16_t>(data[position + 2] << 8) | data[position + 3];
+            position += 4;
 
-		std::cout << "No Host header included in this request" << "\n";
-		return std::nullopt;
-	}
+            // Adjust extension_length if not enough data
+            if (position + extension_length > length)
+            {
+                // Incomplete Extension, adjusting length
+                extension_length = static_cast<uint16_t>(length - position);
+            }
+
+            if (extension_type == sni_extension_type) // Server Name Extension
+            {
+                return parse_server_name_extension(data + position, extension_length);
+            }
+
+            position += extension_length;
+        }
+
+        return std::nullopt;
+    }
 
 public:
-	// ********************************************************************************
-	/// <summary>
-	/// Parse a TLS packet for the Server Name Indication extension in the client
-	/// hello handshake, returning the first server name found
-	/// </summary>
-	/// <param name="data">SSL packet pointer</param>
-	/// <param name="length">SSL packet size</param>
-	/// <returns>optional string with SNI found </returns>
-	// ********************************************************************************
-	static std::optional<std::string> parse_tls_header(const uint8_t* data, size_t length)
-	{
-		size_t position = tls_header_len;
+    // ********************************************************************************
+    /// <summary>
+    /// Parse a TLS packet for the Server Name Indication extension in the client
+    /// hello handshake, returning the first server name found.
+    /// </summary>
+    /// <param name="data">Pointer to the TLS packet data.</param>
+    /// <param name="length">Length of the TLS packet data.</param>
+    /// <returns>Optional string containing the extracted SNI, if found.</returns>
+    // ********************************************************************************
+    static std::optional<std::string> parse_tls_header(const uint8_t* data, size_t length)
+    {
+        size_t position = tls_header_len;
 
-		// Check that our TCP payload is at least large enough for a TLS header
-		if (length < tls_header_len)
-		{
-			std::cout << "Incomplete TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Check that we have at least enough data for the TLS header
+        if (length < tls_header_len)
+        {
+            // Incomplete TLS header
+            return std::nullopt;
+        }
 
-		// SSL 2.0 compatible Client Hello
-		// High bit of first byte (length) and content type is Client Hello
-		// See RFC5246 Appendix E.2
-		if (data[0] & 0x80 && data[2] == 1)
-		{
-			std::cout << "Received SSL 2.0 Client Hello which can not support SNI." << "\n";
-			return std::nullopt;
-		}
+        // SSL 2.0 Client Hello (not supported for SNI)
+        if (data[0] & 0x80 && data[2] == 1)
+        {
+            // Received SSL 2.0 Client Hello which cannot support SNI.
+            return std::nullopt;
+        }
 
-		if (const auto tls_content_type = data[0]; tls_content_type != tls_handshake_content_type)
-		{
-			std::cout << "Request did not begin with TLS handshake." << "\n";
-			return std::nullopt;
-		}
+        // Ensure the content type is Handshake
+        if (data[0] != tls_handshake_content_type)
+        {
+            // Request did not begin with TLS handshake.
+            return std::nullopt;
+        }
 
-		const auto tls_version_major = data[1];
-		const auto tls_version_minor = data[2];
-		if (tls_version_major < 3)
-		{
-			std::cout << "Received SSL " << tls_version_major << "." << tls_version_minor <<
-				" handshake which can not support SNI." << "\n";
-			return std::nullopt;
-		}
+        // Extract TLS version
+        const auto tls_version_major = data[1];
+        const auto tls_version_minor = data[2];
 
-		// TLS record length
-		auto len = (static_cast<size_t>(data[3]) << 8) + static_cast<size_t>(data[4]) + tls_header_len;
-		length = min(length, len);
+        // Read the TLS record length
+        size_t record_length = (static_cast<size_t>(data[3]) << 8) + static_cast<size_t>(data[4]);
 
-		// Check we received entire TLS record length
-		if (length < len)
-			return std::nullopt;
+        // Adjust record_length to the available data
+        record_length = min(record_length, length - tls_header_len);
 
-		// Handshake
-		if (position + 1 > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Proceed to parse the Handshake message
+        if (position + 1 > length)
+        {
+            // Incomplete Handshake message
+            return std::nullopt;
+        }
 
-		if (data[position] != tls_handshake_type_client_hello)
-		{
-			std::cout << "Not a client hello" << "\n";
-			return std::nullopt;
-		}
+        // Check Handshake Type
+        if (data[position] != tls_handshake_type_client_hello)
+        {
+            // Not a ClientHello message
+            return std::nullopt;
+        }
 
-		// Skip past fixed length records:
-		//   1	Handshake Type
-		//   3	Length
-		//   2	Version (again)
-		//   32	Random
-		//   to	Session ID Length
+        // Handshake Length
+        if (position + 4 > length)
+        {
+            // Incomplete Handshake Length
+            return std::nullopt;
+        }
+        size_t handshake_length = (static_cast<size_t>(data[position + 1]) << 16) +
+            (static_cast<size_t>(data[position + 2]) << 8) +
+            static_cast<size_t>(data[position + 3]);
+        position += 4;
 
-		position += 38;
+        // Skip Version (2 bytes)
+        if (position + 2 > length)
+        {
+            // Incomplete Version info
+            return std::nullopt;
+        }
+        position += 2;
 
-		// Session ID
-		if (position + 1 > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Skip Random (32 bytes)
+        if (position + 32 > length)
+        {
+            // Incomplete Random data
+            return std::nullopt;
+        }
+        position += 32;
 
-		len = static_cast<size_t>(data[position]);
-		position += 1 + len;
+        // Session ID Length
+        if (position + 1 > length)
+        {
+            // Incomplete Session ID Length
+            return std::nullopt;
+        }
+        size_t session_id_length = data[position];
+        position += 1;
 
-		// Cipher Suites
-		if (position + 2 > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Adjust session_id_length if not enough data
+        if (position + session_id_length > length)
+        {
+            // Incomplete Session ID, adjusting length
+            session_id_length = length - position;
+        }
+        position += session_id_length;
 
-		len = (static_cast<size_t>(data[position]) << 8) + static_cast<size_t>(data[position + 1]);
-		position += 2 + len;
+        // Cipher Suites Length
+        if (position + 2 > length)
+        {
+            // Incomplete Cipher Suites Length
+            return std::nullopt;
+        }
+        size_t cipher_suites_length = (static_cast<size_t>(data[position]) << 8) + data[position + 1];
+        position += 2;
 
-		// Compression Methods
-		if (position + 1 > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Adjust cipher_suites_length if not enough data
+        if (position + cipher_suites_length > length)
+        {
+            // Incomplete Cipher Suites, adjusting length
+            cipher_suites_length = length - position;
+        }
+        position += cipher_suites_length;
 
-		len = static_cast<size_t>(data[position]);
-		position += 1 + len;
+        // Compression Methods Length
+        if (position + 1 > length)
+        {
+            // Incomplete Compression Methods Length
+            return std::nullopt;
+        }
+        size_t compression_methods_length = data[position];
+        position += 1;
 
-		if (position == length && tls_version_major == 3 && tls_version_minor == 0)
-		{
-			std::cout << "Received SSL 3.0 handshake without extensions" << "\n";
-			return std::nullopt;
-		}
+        // Adjust compression_methods_length if not enough data
+        if (position + compression_methods_length > length)
+        {
+            // Incomplete Compression Methods, adjusting length
+            compression_methods_length = length - position;
+        }
+        position += compression_methods_length;
 
-		// Extensions
-		if (position + 2 > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
+        // Check if there are extensions
+        if (position + 2 > length)
+        {
+            // No Extensions present or incomplete extensions length
+            return std::nullopt;
+        }
+        size_t extensions_length = (static_cast<size_t>(data[position]) << 8) + data[position + 1];
+        position += 2;
 
-		len = (static_cast<size_t>(data[position]) << 8) + static_cast<size_t>(data[position + 1]);
-		position += 2;
+        // Adjust extensions_length if not enough data
+        if (position + extensions_length > length)
+        {
+            // Incomplete Extensions, adjusting length
+            extensions_length = length - position;
+        }
 
-		if (position + len > length)
-		{
-			std::cout << "Invalid TLS client hello" << "\n";
-			return std::nullopt;
-		}
-
-		return parse_extensions(data + position, len);
-	}
+        // Parse Extensions
+        return parse_extensions(data + position, extensions_length);
+    }
 };
 
 class http_parser
 {
-	static constexpr auto server_name_len = 256;
-	static constexpr auto http_request_min_len = 26;
+    static constexpr auto server_name_len = 256;
+    static constexpr auto http_request_min_len = 26;
 
-	static size_t next_header(const char** data, size_t* length)
-	{
-		// walk data stream until the end of the header
-		while (*length > 2 && (*data)[0] != '\r' && (*data)[1] != '\n')
-		{
-			(*length)--;
-			(*data)++;
-		}
+    static size_t next_header(const char** data, size_t* length)
+    {
+        // walk data stream until the end of the header
+        while (*length > 2 && (*data)[0] != '\r' && (*data)[1] != '\n')
+        {
+            (*length)--;
+            (*data)++;
+        }
 
-		// advanced past the <CR><LF> pair
-		*data += 2;
-		*length -= 2;
+        // advanced past the <CR><LF> pair
+        *data += 2;
+        *length -= 2;
 
-		// Find the length of the next header
-		size_t header_length = 0;
-		while (*length > header_length + 1
-			&& (*data)[header_length] != '\r'
-			&& (*data)[header_length + 1] != '\n')
-		{
-			header_length++;
-		}
+        // Find the length of the next header
+        size_t header_length = 0;
+        while (*length > header_length + 1
+            && (*data)[header_length] != '\r'
+            && (*data)[header_length + 1] != '\n')
+        {
+            header_length++;
+        }
 
-		return header_length;
-	}
+        return header_length;
+    }
 
-	static std::optional<std::string> get_header(const char* header, const char* data, size_t length)
-	{
-		size_t len;
+    static std::optional<std::string> get_header(const char* header, const char* data, size_t length)
+    {
+        size_t len;
 
-		auto header_len = strlen(header);
+        auto header_len = strlen(header);
 
-		// loop through headers stopping at first blank line
-		while ((len = next_header(&data, &length)) != 0)
-		{
-			if (len > header_len && _strnicmp(header, data, header_len) == 0)
-			{
-				// skip leading whitespace
-				while (header_len < len && isblank(data[header_len]))
-					header_len++;
+        // loop through headers stopping at first blank line
+        while ((len = next_header(&data, &length)) != 0)
+        {
+            if (len > header_len && _strnicmp(header, data, header_len) == 0)
+            {
+                // skip leading whitespace
+                while (header_len < len && isblank(data[header_len]))
+                    header_len++;
 
-				return std::string(data + header_len, len - header_len);
-			}
-		}
+                return std::string(data + header_len, len - header_len);
+            }
+        }
 
-		// if there is no data left after reading all the headers then we do not
-		// have a complete HTTP request, there must be a blank line
-		if (length == 0)
-		{
-			std::cout << "Incomplete HTTP request" << "\n";
-			return std::nullopt;
-		}
+        // if there is no data left after reading all the headers then we do not
+        // have a complete HTTP request, there must be a blank line
+        if (length == 0)
+        {
+            // Incomplete HTTP request
+            return std::nullopt;
+        }
 
-		std::cout << "No Host header included in HTTP request" << "\n";
-		return std::nullopt;
-	}
+        // No Host header included in HTTP request
+        return std::nullopt;
+    }
 
 public:
-	// ********************************************************************************
-	/// <summary>
-	/// Parses a HTTP request for the Host: header
-	/// </summary>
-	/// <param name="data">HTTP payload pointer</param>
-	/// <param name="length">HTTP payload data size</param>
-	/// <returns>Optional string from the Host: header</returns>
-	// ********************************************************************************
-	static std::optional<std::string> parse_http_header(const char* data, const size_t length)
-	{
-		if (length < http_request_min_len)
-			return std::nullopt;
+    // ********************************************************************************
+    /// <summary>
+    /// Parses a HTTP request for the Host: header
+    /// </summary>
+    /// <param name="data">HTTP payload pointer</param>
+    /// <param name="length">HTTP payload data size</param>
+    /// <returns>Optional string from the Host: header</returns>
+    // ********************************************************************************
+    static std::optional<std::string> parse_http_header(const char* data, const size_t length)
+    {
+        if (length < http_request_min_len)
+            return std::nullopt;
 
-		auto host = get_header("Host:", data, length);
+        auto host = get_header("Host:", data, length);
 
-		if (!host.has_value())
-			return host;
+        if (!host.has_value())
+            return host;
 
-		// Trim the port if it follows the hostname
+        // Trim the port if it follows the hostname
 
-		for (auto i = host.value().size() - 1; i > 0; --i)
-		{
-			if (host.value()[i] == ':')
-			{
-				host.value().erase(i);
-				break;
-			}
+        for (auto i = host.value().size() - 1; i > 0; --i)
+        {
+            if (host.value()[i] == ':')
+            {
+                host.value().erase(i);
+                break;
+            }
 
-			if (!isdigit(host.value()[i]))
-				break;
-		}
+            if (!isdigit(host.value()[i]))
+                break;
+        }
 
-		return host;
-	}
+        return host;
+    }
 };
 
 int main()
 {
-	auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
-		nullptr,
-		[](HANDLE, INTERMEDIATE_BUFFER& buffer)
-		{
-			if (auto* const ethernet_header = reinterpret_cast<ether_header_ptr>(buffer.m_IBuffer); ntohs(
-				ethernet_header->h_proto) == ETH_P_IP)
-			{
-				if (auto* const ip_header = reinterpret_cast<iphdr_ptr>(ethernet_header + 1); ip_header->ip_p ==
-					IPPROTO_TCP)
-				{
-					if (auto* const tcp_header = reinterpret_cast<tcphdr_ptr>(reinterpret_cast<PUCHAR>(ip_header) +
-						sizeof(DWORD) * ip_header->ip_hl); ntohs(tcp_header->th_dport) == 443)
-					{
-						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
-						const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl + 4 *
-							tcp_header->th_off);
+    const auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
+        nullptr,
+        [](HANDLE, const INTERMEDIATE_BUFFER& buffer)
+        {
+            if (auto* const ethernet_header = reinterpret_cast<ether_header const*>(buffer.m_IBuffer); ntohs(
+                ethernet_header->h_proto) == ETH_P_IP)
+            {
+                if (auto* const ip_header = reinterpret_cast<iphdr const*>(ethernet_header + 1); ip_header->ip_p ==
+                    IPPROTO_TCP)
+                {
+                    if (auto* const tcp_header = reinterpret_cast<tcphdr const*>(reinterpret_cast<uint8_t const*>(ip_header) +
+                        sizeof(DWORD) * ip_header->ip_hl); ntohs(tcp_header->th_dport) == 443)
+                    {
+                        const auto* const payload = reinterpret_cast<uint8_t const*>(tcp_header) +
+                            static_cast<ptrdiff_t>(4 * tcp_header->th_off);
+                        const auto payload_length = buffer.m_Length - (sizeof(ether_header) +
+                            static_cast<ptrdiff_t>(4 * ip_header->ip_hl) + static_cast<ptrdiff_t>(4 * tcp_header->th_off));
 
-						if ((payload[0] == 0x16) && (payload[5] == 0x1))
-						{
-							std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) <<
-								" --> " <<
-								net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " SNI: ";
+                        if ((payload[0] == 0x16) && (payload[5] == 0x1))
+                        {
+                            std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) <<
+                                " --> " <<
+                                net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " SNI: ";
+                            
+                            std::cout << tls_parser::parse_tls_header(payload, payload_length).value_or("no SNI") <<
+                                '\n';
+                        }
+                    }
+                    else if (ntohs(tcp_header->th_dport) == 80)
+                    {
+                        auto* const payload = reinterpret_cast<uint8_t const*>(tcp_header) +
+                            static_cast<ptrdiff_t>(4 * tcp_header->th_off);
 
-							std::cout << tls_parser::parse_tls_header(payload, payload_length).value_or("no SNI") <<
-								std::endl;
-						}
-					}
-					else if (ntohs(tcp_header->th_dport) == 80)
-					{
-						auto* const payload = reinterpret_cast<unsigned char*>(tcp_header) + 4 * tcp_header->th_off;
+                        if (const auto payload_length = buffer.m_Length - 
+                            (sizeof(ether_header) + static_cast<ptrdiff_t>(4 * ip_header->ip_hl) +
+                            static_cast<ptrdiff_t>(4 * tcp_header->th_off)); payload_length > 26)
+                        {
+                            if (const auto host = http_parser::parse_http_header(
+                                reinterpret_cast<char const*>(payload), payload_length); host.has_value())
+                            {
+                                std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
+                                    << " --> " <<
+                                    net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
+                                    " Host: ";
 
-						if (const auto payload_length = buffer.m_Length - (sizeof(ether_header) + 4 * ip_header->ip_hl +
-							4 * tcp_header->th_off); payload_length > 26)
-						{
-							if (auto host = http_parser::parse_http_header(
-								reinterpret_cast<char*>(payload), payload_length); host.has_value())
-							{
-								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
-									<< " --> " <<
-									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
-									" Host: ";
+                                std::cout << host.value() << '\n';
+                            }
+                            else
+                            {
+                                std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
+                                    << " --> " <<
+                                    net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
+                                    " length: ";
 
-								std::cout << host.value() << std::endl;
-							}
-							else
-							{
-								std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
-									<< " --> " <<
-									net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
-									" length: ";
+                                std::cout << payload_length << '\n';
+                            }
+                        }
+                    }
+                }
+            }
 
-								std::cout << payload_length << std::endl;
-							}
-						}
-					}
-				}
-			}
+            return ndisapi::fastio_packet_filter::packet_action::pass;
+        }, true);
 
-			return ndisapi::fastio_packet_filter::packet_action::pass;
-		}, true);
+    if (ndis_api->IsDriverLoaded())
+    {
+        std::cout << "WinpkFilter is loaded" << '\n' << '\n';
+    }
+    else
+    {
+        std::cout << "WinpkFilter is not loaded" << '\n' << '\n';
+        return 1;
+    }
 
-	if (ndis_api->IsDriverLoaded())
-	{
-		std::cout << "WinpkFilter is loaded" << std::endl << std::endl;
-	}
-	else
-	{
-		std::cout << "WinpkFilter is not loaded" << std::endl << std::endl;
-		return 1;
-	}
+    std::cout << "Available network interfaces:" << '\n' << '\n';
+    size_t index = 0;
+    for (auto& e : ndis_api->get_interface_names_list())
+    {
+        std::cout << ++index << ")\t" << e << '\n';
+    }
 
-	std::cout << "Available network interfaces:" << std::endl << std::endl;
-	size_t index = 0;
-	for (auto& e : ndis_api->get_interface_names_list())
-	{
-		std::cout << ++index << ")\t" << e << std::endl;
-	}
+    std::cout << '\n' << "Select interface to filter:";
+    std::cin >> index;
 
-	std::cout << std::endl << "Select interface to filter:";
-	std::cin >> index;
+    if (index > ndis_api->get_interface_names_list().size())
+    {
+        std::cout << "Wrong parameter was selected. Out of range." << '\n';
+        return 0;
+    }
 
-	if (index > ndis_api->get_interface_names_list().size())
-	{
-		std::cout << "Wrong parameter was selected. Out of range." << std::endl;
-		return 0;
-	}
+    ndis_api->start_filter(index - 1);
 
-	ndis_api->start_filter(index - 1);
+    std::cout << "Press any key to stop filtering" << '\n';
 
-	std::cout << "Press any key to stop filtering" << std::endl;
+    std::ignore = _getch();
 
-	std::ignore = _getch();
+    std::cout << "Exiting..." << '\n';
 
-	std::cout << "Exiting..." << std::endl;
-
-	return 0;
+    return 0;
 }
