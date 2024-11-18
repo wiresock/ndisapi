@@ -5,14 +5,29 @@
 #include <iostream>
 #include <optional>
 
+/// <summary>
+/// The `tls_parser` class provides static methods for parsing TLS (Transport Layer Security) packets.
+/// It focuses on extracting the Server Name Indication (SNI) extension from TLS ClientHello messages,
+/// which is essential for identifying the hostname requested by a client during the TLS handshake.
+/// </summary>
 class tls_parser
 {
-    static constexpr auto server_name_len = 256;
-    static constexpr auto tls_header_len = 5;
-    static constexpr auto tls_handshake_content_type = 0x16;
-    static constexpr auto tls_handshake_type_client_hello = 0x01;
-    static constexpr auto sni_extension_type = 0x0000;
+    // Constants
+    static constexpr auto server_name_len = 256; ///< Maximum length for server name (unused in current implementation).
+    static constexpr auto tls_header_len = 5; ///< Minimum length of the TLS header.
+    static constexpr auto tls_handshake_content_type = 0x16; ///< TLS Handshake content type identifier.
+    static constexpr auto tls_handshake_type_client_hello = 0x01; ///< ClientHello handshake type identifier.
+    static constexpr auto sni_extension_type = 0x0000; ///< Extension type identifier for SNI.
 
+    /// <summary>
+    /// Parses the Server Name Indication (SNI) extension from the provided data.
+    /// </summary>
+    /// <param name="data">Pointer to the data containing the SNI extension.</param>
+    /// <param name="length">Length of the data.</param>
+    /// <returns>
+    /// An optional string containing the server name if the SNI extension is found and valid;
+    /// otherwise, `std::nullopt`.
+    /// </returns>
     static std::optional<std::string> parse_server_name_extension(const uint8_t* data, const size_t length)
     {
         size_t position = 0;
@@ -23,15 +38,7 @@ class tls_parser
             return std::nullopt;
         }
 
-        size_t server_name_list_length = (data[position] << 8) | data[position + 1];
         position += 2;
-
-        // Adjust server_name_list_length if not enough data
-        if (position + server_name_list_length > length)
-        {
-            // Incomplete Server Name List, adjusting length
-            server_name_list_length = length - position;
-        }
 
         while (position + 3 <= length)
         {
@@ -59,6 +66,15 @@ class tls_parser
         return std::nullopt;
     }
 
+    /// <summary>
+    /// Parses the extensions from the provided data.
+    /// </summary>
+    /// <param name="data">Pointer to the data containing the extensions.</param>
+    /// <param name="length">Length of the data.</param>
+    /// <returns>
+    /// An optional string containing the server name if the SNI extension is found and valid;
+    /// otherwise, `std::nullopt`.
+    /// </returns>
     static std::optional<std::string> parse_extensions(const uint8_t* data, const size_t length)
     {
         size_t position = 0;
@@ -90,16 +106,14 @@ class tls_parser
     }
 
 public:
-    // ********************************************************************************
     /// <summary>
-    /// Parse a TLS packet for the Server Name Indication extension in the client
+    /// Parses a TLS packet for the Server Name Indication extension in the client
     /// hello handshake, returning the first server name found.
     /// </summary>
     /// <param name="data">Pointer to the TLS packet data.</param>
     /// <param name="length">Length of the TLS packet data.</param>
     /// <returns>Optional string containing the extracted SNI, if found.</returns>
-    // ********************************************************************************
-    static std::optional<std::string> parse_tls_header(const uint8_t* data, size_t length)
+    static std::optional<std::string> parse_tls_header(const uint8_t* data, const size_t length)
     {
         size_t position = tls_header_len;
 
@@ -125,14 +139,11 @@ public:
         }
 
         // Extract TLS version
-        const auto tls_version_major = data[1];
-        const auto tls_version_minor = data[2];
-
-        // Read the TLS record length
-        size_t record_length = (static_cast<size_t>(data[3]) << 8) + static_cast<size_t>(data[4]);
-
-        // Adjust record_length to the available data
-        record_length = min(record_length, length - tls_header_len);
+        if (const auto tls_version_major = data[1]; tls_version_major < 3)
+        {
+            // Received SSL handshake which can not support SNI
+            return std::nullopt;
+        }
 
         // Proceed to parse the Handshake message
         if (position + 1 > length)
@@ -154,9 +165,7 @@ public:
             // Incomplete Handshake Length
             return std::nullopt;
         }
-        size_t handshake_length = (static_cast<size_t>(data[position + 1]) << 16) +
-            (static_cast<size_t>(data[position + 2]) << 8) +
-            static_cast<size_t>(data[position + 3]);
+
         position += 4;
 
         // Skip Version (2 bytes)
@@ -247,21 +256,34 @@ public:
     }
 };
 
+/// <summary>
+/// The `http_parser` class provides static methods for parsing HTTP requests.
+/// Its primary focus is on extracting specific headers, such as the "Host" header,
+/// from an HTTP request payload. The class is designed for minimal overhead
+/// and operates directly on raw data streams.
+/// </summary>
 class http_parser
 {
-    static constexpr auto server_name_len = 256;
-    static constexpr auto http_request_min_len = 26;
+    // Constants
+    static constexpr auto server_name_len = 256; ///< Maximum length for server name (unused in current implementation).
+    static constexpr auto http_request_min_len = 26; ///< Minimum length of an HTTP request to be considered valid.
 
+    /// <summary>
+    /// Advances through the data stream to locate the next HTTP header.
+    /// </summary>
+    /// <param name="data">Pointer to the HTTP payload pointer.</param>
+    /// <param name="length">Pointer to the remaining length of the HTTP payload.</param>
+    /// <returns>The length of the next header found in the data.</returns>
     static size_t next_header(const char** data, size_t* length)
     {
-        // walk data stream until the end of the header
+        // Walk data stream until the end of the header
         while (*length > 2 && (*data)[0] != '\r' && (*data)[1] != '\n')
         {
             (*length)--;
             (*data)++;
         }
 
-        // advanced past the <CR><LF> pair
+        // Advance past the <CR><LF> pair
         *data += 2;
         *length -= 2;
 
@@ -277,18 +299,28 @@ class http_parser
         return header_length;
     }
 
+    /// <summary>
+    /// Retrieves the value of a specific HTTP header from the provided data stream.
+    /// </summary>
+    /// <param name="header">The name of the header to search for.</param>
+    /// <param name="data">Pointer to the HTTP payload.</param>
+    /// <param name="length">Size of the HTTP payload.</param>
+    /// <returns>
+    /// An optional string containing the header value if found, or `std::nullopt` if the header
+    /// is not found or the request is incomplete.
+    /// </returns>
     static std::optional<std::string> get_header(const char* header, const char* data, size_t length)
     {
         size_t len;
 
         auto header_len = strlen(header);
 
-        // loop through headers stopping at first blank line
+        // Loop through headers stopping at first blank line
         while ((len = next_header(&data, &length)) != 0)
         {
             if (len > header_len && _strnicmp(header, data, header_len) == 0)
             {
-                // skip leading whitespace
+                // Skip leading whitespace
                 while (header_len < len && isblank(data[header_len]))
                     header_len++;
 
@@ -296,27 +328,29 @@ class http_parser
             }
         }
 
-        // if there is no data left after reading all the headers then we do not
-        // have a complete HTTP request, there must be a blank line
+        // If there is no data left after reading all the headers then we do not
+        // have a complete HTTP request; there must be a blank line
         if (length == 0)
         {
             // Incomplete HTTP request
             return std::nullopt;
         }
 
-        // No Host header included in HTTP request
+        // No matching header found
         return std::nullopt;
     }
 
 public:
-    // ********************************************************************************
     /// <summary>
-    /// Parses a HTTP request for the Host: header
+    /// Extracts the value of the "Host" header from an HTTP request.
     /// </summary>
-    /// <param name="data">HTTP payload pointer</param>
-    /// <param name="length">HTTP payload data size</param>
-    /// <returns>Optional string from the Host: header</returns>
-    // ********************************************************************************
+    /// <param name="data">Pointer to the HTTP request payload.</param>
+    /// <param name="length">Size of the HTTP request payload.</param>
+    /// <returns>
+    /// An optional string containing the value of the "Host" header if found,
+    /// or `std::nullopt` if the header is not present or the request is invalid.
+    /// The returned value is trimmed to exclude any trailing port information.
+    /// </returns>
     static std::optional<std::string> parse_http_header(const char* data, const size_t length)
     {
         if (length < http_request_min_len)
@@ -328,7 +362,6 @@ public:
             return host;
 
         // Trim the port if it follows the hostname
-
         for (auto i = host.value().size() - 1; i > 0; --i)
         {
             if (host.value()[i] == ':')
@@ -345,72 +378,84 @@ public:
     }
 };
 
+/// <summary>
+/// This code sets up a network packet filtering application using the `ndisapi::fastio_packet_filter` 
+/// interface from WinpkFilter. The program monitors TCP traffic for HTTPS (port 443) and HTTP (port 80) packets, 
+/// extracting the SNI (Server Name Indication) from TLS packets and the Host header from HTTP requests.
+/// </summary>
 int main()
 {
+    /// <summary>
+    /// Initializes the `fastio_packet_filter` to filter network packets using a custom callback function.
+    /// The callback inspects Ethernet frames, extracts IPv4 packets, and identifies TCP packets. 
+    /// For HTTPS (port 443), it extracts the SNI from TLS handshake messages. For HTTP (port 80), it extracts
+    /// the Host header from HTTP requests.
+    /// </summary>
     const auto ndis_api = std::make_unique<ndisapi::fastio_packet_filter>(
         nullptr,
         [](HANDLE, const INTERMEDIATE_BUFFER& buffer)
         {
-            if (auto* const ethernet_header = reinterpret_cast<ether_header const*>(buffer.m_IBuffer); ntohs(
-                ethernet_header->h_proto) == ETH_P_IP)
+            // Parse Ethernet header
+            if (auto* const ethernet_header = reinterpret_cast<ether_header const*>(buffer.m_IBuffer);
+                ntohs(ethernet_header->h_proto) == ETH_P_IP)
             {
-                if (auto* const ip_header = reinterpret_cast<iphdr const*>(ethernet_header + 1); ip_header->ip_p ==
-                    IPPROTO_TCP)
+                // Parse IPv4 header
+                if (auto* const ip_header = reinterpret_cast<iphdr const*>(ethernet_header + 1);
+                    ip_header->ip_p == IPPROTO_TCP)
                 {
+                    // Parse TCP header
                     if (auto* const tcp_header = reinterpret_cast<tcphdr const*>(reinterpret_cast<uint8_t const*>(ip_header) +
                         sizeof(DWORD) * ip_header->ip_hl); ntohs(tcp_header->th_dport) == 443)
                     {
+                        // HTTPS packet: Extract and parse TLS payload for SNI
                         const auto* const payload = reinterpret_cast<uint8_t const*>(tcp_header) +
                             static_cast<ptrdiff_t>(4 * tcp_header->th_off);
                         const auto payload_length = buffer.m_Length - (sizeof(ether_header) +
                             static_cast<ptrdiff_t>(4 * ip_header->ip_hl) + static_cast<ptrdiff_t>(4 * tcp_header->th_off));
 
+                        // Check if the payload matches a TLS ClientHello
                         if ((payload[0] == 0x16) && (payload[5] == 0x1))
                         {
-                            std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport) <<
-                                " --> " <<
-                                net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) << " SNI: ";
-                            
-                            std::cout << tls_parser::parse_tls_header(payload, payload_length).value_or("no SNI") <<
-                                '\n';
+                            if (const auto sni = tls_parser::parse_tls_header(payload, payload_length);
+                                sni.has_value())
+                            {
+                                // Print source, destination, and extracted SNI
+                                std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
+                                    << " --> " << net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport)
+                                    << " SNI: " << sni.value() << '\n';
+                            }
                         }
                     }
                     else if (ntohs(tcp_header->th_dport) == 80)
                     {
+                        // HTTP packet: Extract and parse payload for Host header
                         auto* const payload = reinterpret_cast<uint8_t const*>(tcp_header) +
                             static_cast<ptrdiff_t>(4 * tcp_header->th_off);
 
-                        if (const auto payload_length = buffer.m_Length - 
+                        if (const auto payload_length = buffer.m_Length -
                             (sizeof(ether_header) + static_cast<ptrdiff_t>(4 * ip_header->ip_hl) +
-                            static_cast<ptrdiff_t>(4 * tcp_header->th_off)); payload_length > 26)
+                                static_cast<ptrdiff_t>(4 * tcp_header->th_off)); payload_length > 26)
                         {
                             if (const auto host = http_parser::parse_http_header(
                                 reinterpret_cast<char const*>(payload), payload_length); host.has_value())
                             {
+                                // Print source, destination, and extracted Host header
                                 std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
-                                    << " --> " <<
-                                    net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
-                                    " Host: ";
-
-                                std::cout << host.value() << '\n';
-                            }
-                            else
-                            {
-                                std::cout << net::ip_address_v4(ip_header->ip_src) << ":" << ntohs(tcp_header->th_sport)
-                                    << " --> " <<
-                                    net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport) <<
-                                    " length: ";
-
-                                std::cout << payload_length << '\n';
+                                    << " --> " << net::ip_address_v4(ip_header->ip_dst) << ":" << ntohs(tcp_header->th_dport)
+                                    << " Host: " << host.value() << '\n';
                             }
                         }
                     }
                 }
             }
 
+            // Pass the packet unmodified
             return ndisapi::fastio_packet_filter::packet_action::pass;
         }, true);
 
+    /// <summary>
+    /// Checks if the WinpkFilter driver is loaded. If not, the application exits.
+    /// </summary>
     if (ndis_api->IsDriverLoaded())
     {
         std::cout << "WinpkFilter is loaded" << '\n' << '\n';
@@ -421,6 +466,9 @@ int main()
         return 1;
     }
 
+    /// <summary>
+    /// Displays the list of available network interfaces and allows the user to select one for filtering.
+    /// </summary>
     std::cout << "Available network interfaces:" << '\n' << '\n';
     size_t index = 0;
     for (auto& e : ndis_api->get_interface_names_list())
@@ -428,7 +476,7 @@ int main()
         std::cout << ++index << ")\t" << e << '\n';
     }
 
-    std::cout << '\n' << "Select interface to filter:";
+    std::cout << '\n' << "Select interface to filter: ";
     std::cin >> index;
 
     if (index > ndis_api->get_interface_names_list().size())
@@ -437,10 +485,14 @@ int main()
         return 0;
     }
 
+    /// <summary>
+    /// Starts filtering on the selected interface.
+    /// </summary>
     ndis_api->start_filter(index - 1);
 
     std::cout << "Press any key to stop filtering" << '\n';
 
+    // Wait for user input to stop filtering
     std::ignore = _getch();
 
     std::cout << "Exiting..." << '\n';
