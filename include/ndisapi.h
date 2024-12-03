@@ -155,9 +155,12 @@ public:
     CNdisApi& operator=(CNdisApi&& other) = delete;
 #endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
 
+protected:
+    // Protected member functions
+    BOOL DeviceIoControl(DWORD dwService, void* BuffIn, int SizeIn, void* BuffOut, int SizeOut, LPDWORD SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
+
 private:
     // Private member functions
-    BOOL DeviceIoControl(DWORD dwService, void* BuffIn, int SizeIn, void* BuffOut, int SizeOut, LPDWORD SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
     BOOL SetPacketFilterCacheState(BOOL bState) const;
     BOOL SetPacketFragmentCacheState(BOOL bState) const;
     // Private static functions

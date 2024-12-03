@@ -891,7 +891,7 @@ typedef struct _UNSORTED_READ_SEND_REQUEST
 #pragma pack(pop)
 
 /**********************************************************************************
-                 IOCTL Codes For NDIS Packet Redirector Driver
+                 Standard IOCTL Codes For NDIS Packet Redirector Driver
 ***********************************************************************************/
 
 #define FILE_DEVICE_NDISRD  0x00008300
@@ -1007,5 +1007,37 @@ typedef struct _UNSORTED_READ_SEND_REQUEST
 
 #define IOCTL_NDISRD_SET_FRAGMENT_CACHE_STATE\
     CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+36, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/**********************************************************************************
+                 Conditional Inclusion of Custom IOCTLs
+***********************************************************************************/
+
+/**
+ * @brief This section allows for the inclusion of user-defined IOCTLs.
+ *
+ * User-defined IOCTLs can be defined starting from NDISRD_USER_IOCTL_INDEX in the user_ioctls.h file.
+ * This provides flexibility for extending the functionality of the Windows Packet Filter Driver
+ * with custom operations as needed.
+ *
+ * Example:
+ * #ifndef USER_IOCTLS_H
+ * #define USER_IOCTLS_H
+ *
+ * #define IOCTL_NDISRD_CUSTOM_OPERATION_1\
+ *     CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_USER_IOCTL_INDEX, METHOD_BUFFERED, FILE_ANY_ACCESS)
+ *
+ * #define IOCTL_NDISRD_CUSTOM_OPERATION_2\
+ *     CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_USER_IOCTL_INDEX + 1, METHOD_BUFFERED, FILE_ANY_ACCESS)
+ *
+ * // Add more custom IOCTLs here...
+ *
+ * #endif // USER_IOCTLS_H
+ */
+
+#ifdef USER_IOCTLS
+ // User-defined IOCTL range, reserve the range from 0x80 to 0xFF for user-defined IOCTLs
+#define NDISRD_USER_IOCTL_INDEX  NDISRD_IOCTL_INDEX + 0x80
+#include "user_ioctls.h"
+#endif
 
 #endif // COMMON_H
