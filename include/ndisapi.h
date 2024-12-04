@@ -155,10 +155,6 @@ public:
     CNdisApi& operator=(CNdisApi&& other) = delete;
 #endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
 
-protected:
-    // Protected member functions
-    BOOL DeviceIoControl(DWORD dwService, void* BuffIn, int SizeIn, void* BuffOut, int SizeOut, LPDWORD SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
-
 private:
     // Private member functions
     BOOL SetPacketFilterCacheState(BOOL bState) const;
@@ -168,6 +164,7 @@ private:
 
 public:
     // Driver services
+    BOOL    DeviceIoControl(DWORD dwService, void* BuffIn, int SizeIn, void* BuffOut, int SizeOut, LPDWORD SizeRet = NULL, LPOVERLAPPED povlp = NULL) const;
     ULONG   GetVersion() const;
     BOOL    GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const;
     BOOL    SendPacketToMstcp(PETH_REQUEST pPacket) const;
