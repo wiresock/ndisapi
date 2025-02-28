@@ -1931,21 +1931,21 @@ BOOL CNdisApi::InsertStaticFilter(PSTATIC_FILTER pFilter, unsigned long Position
 }
 
 /**
- * @brief Removes a static filter by its unique identifier.
+ * @brief Removes a static filter by its index.
  *
- * This method removes a previously added static filter from the filter chain based on its unique identifier.
- * The identifier is a DWORD value that uniquely identifies the filter to be removed. This operation directly
+ * This method removes a previously added static filter from the filter chain based on its index.
+ * The index is a DWORD value that specifies the position of the filter to be removed. This operation directly
  * communicates with the driver using the IOCTL_NDISRD_REMOVE_FILTER_BY_INDEX control code to perform the removal.
  * If the operation is successful, the filter is no longer applied to the network packets.
  *
- * @param dwFilterId The unique identifier of the filter to be removed.
+ * @param dwIndex The index of the filter to be removed.
  * @return TRUE if the operation was successful, FALSE otherwise.
  */
-BOOL CNdisApi::RemoveStaticFilter(DWORD dwFilterId) const
+BOOL CNdisApi::RemoveStaticFilter(DWORD dwIndex) const
 {
     BOOL bIOResult = DeviceIoControl(
         IOCTL_NDISRD_REMOVE_FILTER_BY_INDEX,
-        &dwFilterId,
+        &dwIndex,
         sizeof(DWORD),
         NULL,
         0,
@@ -2199,6 +2199,32 @@ BOOL CNdisApi::DisablePacketFragmentCache() const
 {
     return SetPacketFragmentCacheState(FALSE);
 }
+
+/**
+ * @brief Deletes a static filter by its unique identifier.
+ *
+ * This method removes a static filter from the filter list based on its unique identifier.
+ * The identifier is a ULARGE_INTEGER value that uniquely identifies the filter to be removed.
+ * This operation directly communicates with the driver using the IOCTL_NDISRD_DELETE_FILTER_BY_ID
+ * control code to perform the removal. If the operation is successful, the filter is no longer
+ * applied to the network packets.
+ *
+ * @param ulId The unique identifier of the filter to be removed.
+ * @return TRUE if the operation was successful, FALSE otherwise.
+ */
+BOOL CNdisApi::DeleteStaticFilterById(ULARGE_INTEGER ulId) const
+{
+    return  DeviceIoControl(
+        IOCTL_NDISRD_DELETE_FILTER_BY_ID,
+        &ulId,
+        sizeof(ULARGE_INTEGER),
+        NULL,
+        0,
+        NULL,   // Bytes Returned
+        NULL
+    );
+}
+
 
 /**
  * @brief Checks if the Windows Packet Filter driver is loaded successfully.
@@ -3814,24 +3840,46 @@ BOOL __stdcall InsertStaticFilter(HANDLE hOpen, PSTATIC_FILTER pFilter, unsigned
 }
 
 /**
- * @brief Removes a static filter from the filter list by its unique identifier.
+ * @brief Removes a static filter from the filter list by its index.
  *
- * This function removes a static filter from the filter list managed by the NDISAPI driver. The filter to be removed
- * is identified by its unique identifier (dwFilterId). This operation is only successful if the handle to the driver
- * (hOpen) is valid.
+ * This function removes a static filter from the filter list based on its index. The index is a zero-based
+ * value that specifies the position of the filter to be removed. This operation is only successful if the handle
+ * to the driver (hOpen) is valid.
  *
  * @param hOpen Handle to the NDISAPI driver.
- * @param dwFilterId The unique identifier of the filter to be removed.
+ * @param dwIndex The zero-based index of the filter to be removed.
  * @return TRUE if the filter was successfully removed, FALSE otherwise.
  */
-BOOL __stdcall RemoveStaticFilter(HANDLE hOpen, DWORD dwFilterId)
+BOOL __stdcall RemoveStaticFilter(HANDLE hOpen, DWORD dwIndex)
 {
     if (!hOpen)
         return FALSE;
 
     const CNdisApi* pApi = static_cast<CNdisApi*>(hOpen);
 
-    return pApi->RemoveStaticFilter(dwFilterId);
+    return pApi->RemoveStaticFilter(dwIndex);
+}
+
+/**
+ * @brief Deletes a static filter by its unique identifier.
+ *
+ * This method removes a static filter from the filter list based on its unique identifier.
+ * The identifier is a ULARGE_INTEGER value that uniquely identifies the filter to be removed.
+ * This operation directly communicates with the driver using the IOCTL_NDISRD_DELETE_FILTER_BY_ID
+ * control code to perform the removal. If the operation is successful, the filter is no longer
+ * applied to the network packets.
+ *
+ * @param ulId The unique identifier of the filter to be removed.
+ * @return TRUE if the operation was successful, FALSE otherwise.
+ */
+BOOL __stdcall DeleteStaticFilterById(HANDLE hOpen, ULARGE_INTEGER ulId)
+{
+    if (!hOpen)
+        return FALSE;
+
+    const CNdisApi* pApi = static_cast<CNdisApi*>(hOpen);
+
+    return pApi->DeleteStaticFilterById(ulId);
 }
 
 /**

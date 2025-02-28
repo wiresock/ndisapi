@@ -52,13 +52,13 @@
 #endif
 
 // NDISRD_VERSION is the version number of the NDISRD driver
-#define NDISRD_VERSION             0x06013000
+#define NDISRD_VERSION             0x07013000
 
 // NDISRD_MAJOR_VERSION is the major version number of the NDISRD driver
 #define NDISRD_MAJOR_VERSION       0x0003
 
 // NDISRD_MINOR_VERSION is the minor version number of the NDISRD driver
-#define NDISRD_MINOR_VERSION       0x0601
+#define NDISRD_MINOR_VERSION       0x0701
 
 // DRIVER_NAME_A is the ASCII name of the NDISRD driver
 #define DRIVER_NAME_A NDISRD_NAME_A
@@ -772,6 +772,32 @@ typedef struct _STATIC_FILTER
     DATA_LINK_LAYER_FILTER   m_DataLinkFilter;
     NETWORK_LAYER_FILTER     m_NetworkFilter;
     TRANSPORT_LAYER_FILTER   m_TransportFilter;
+
+    /**
+     * @brief Indicates if the Process ID is valid.
+     */
+#define PROCESS_ID_VALID    0x00000008
+
+     /**
+      * @brief Indicates if the Filter ID is valid.
+      */
+#define FILTER_ID_VALID     0x00000010
+
+     /**
+      * @brief Process ID of the application that is associated with the filter.
+      * If the application exits, the filter is removed.
+      */
+    ULARGE_INTEGER   m_ulProcessId;
+
+    /**
+     * @brief Unique filter ID for identifying the filter.
+     */
+    ULARGE_INTEGER   m_ulUniqueFilterId;
+
+    /**
+     * @brief Reserved for future use.
+     */
+    ULARGE_INTEGER   m_ulReserved[4];
 } STATIC_FILTER, * PSTATIC_FILTER;
 
 /**
@@ -1007,6 +1033,9 @@ typedef struct _UNSORTED_READ_SEND_REQUEST
 
 #define IOCTL_NDISRD_SET_FRAGMENT_CACHE_STATE\
     CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+36, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_NDISRD_DELETE_FILTER_BY_ID\
+    CTL_CODE(FILE_DEVICE_NDISRD, NDISRD_IOCTL_INDEX+37, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 /**********************************************************************************
                  Conditional Inclusion of Custom IOCTLs

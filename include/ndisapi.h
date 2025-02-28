@@ -189,7 +189,8 @@ public:
     BOOL    AddStaticFilterFront(PSTATIC_FILTER pFilter) const;
     BOOL    AddStaticFilterBack(PSTATIC_FILTER pFilter) const;
     BOOL    InsertStaticFilter(PSTATIC_FILTER pFilter, unsigned long Position) const;
-    BOOL    RemoveStaticFilter(DWORD dwFilterId) const;
+    BOOL    RemoveStaticFilter(DWORD dwIndex) const;
+    BOOL    DeleteStaticFilterById(ULARGE_INTEGER ulId) const;
     BOOL    ResetPacketFilterTable() const;
     BOOL    GetPacketFilterTableSize(PDWORD pdwTableSize) const;
     BOOL    GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const;
@@ -316,7 +317,8 @@ extern "C"
     BOOL    __stdcall        AddStaticFilterFront(HANDLE hOpen, PSTATIC_FILTER pFilter);
     BOOL    __stdcall        AddStaticFilterBack(HANDLE hOpen, PSTATIC_FILTER pFilter);
     BOOL    __stdcall        InsertStaticFilter(HANDLE hOpen, PSTATIC_FILTER pFilter, unsigned long Position);
-    BOOL    __stdcall        RemoveStaticFilter(HANDLE hOpen, DWORD dwFilterId);
+    BOOL    __stdcall        RemoveStaticFilter(HANDLE hOpen, DWORD dwIndex);
+    BOOL    __stdcall        DeleteStaticFilterById(HANDLE hOpen, ULARGE_INTEGER ulId);
     BOOL    __stdcall        ResetPacketFilterTable(HANDLE hOpen);
     BOOL    __stdcall        GetPacketFilterTableSize(HANDLE hOpen, PDWORD pdwTableSize);
     BOOL    __stdcall        GetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList);
