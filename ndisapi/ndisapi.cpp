@@ -1208,7 +1208,10 @@ BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
             hKernel32Dll, "OpenVxDHandle"));
 
         if (!pfOpenVxDHandle)
+        {
+            FreeLibrary(hKernel32Dll);
             return FALSE;
+        }
 
         if (hWin32Event)
             hRing0Event = pfOpenVxDHandle(hWin32Event);
