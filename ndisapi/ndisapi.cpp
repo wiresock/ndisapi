@@ -3256,7 +3256,25 @@ void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
     else
         return;
 
-    const DWORD dwTcpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;
+    const DWORD dwIpHeaderLen = static_cast<DWORD>(pIpHeader->ip_hl) * 4;
+    const DWORD dwIpPacketLen = ntohs(pIpHeader->ip_len);
+
+    // Validate the lengths before the unsigned subtraction below. A packet whose
+    // IP total-length field is smaller than its IP + TCP headers would otherwise
+    // underflow dwTcpLen to a huge value, and the checksum loop would then read far
+    // past m_IBuffer (EXCEPTION_ACCESS_VIOLATION). The usual trigger is TCP/UDP
+    // segmentation offload, which can present outbound segments with ip_len == 0
+    // (the NIC fills in the real length later). The third condition additionally
+    // requires the whole L4 payload to lie within the captured frame, so an
+    // over-stated ip_len cannot over-read here or over-write the padding byte below.
+    if (dwIpHeaderLen < sizeof(iphdr) ||
+        dwIpPacketLen < dwIpHeaderLen + sizeof(tcphdr) ||
+        static_cast<DWORD>(sizeof(ether_header)) + dwIpPacketLen > pPacket->m_Length)
+    {
+        return;
+    }
+
+    const DWORD dwTcpLen = dwIpPacketLen - dwIpHeaderLen;
 
     if ((dwTcpLen / 2) * 2 != dwTcpLen)
     {
@@ -3314,7 +3332,24 @@ void CNdisApi::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket) {
     const udphdr_ptr pUdpHeader = reinterpret_cast<udphdr_ptr>(reinterpret_cast<PUCHAR>(pIpHeader) + sizeof(DWORD) * pIpHeader
         ->ip_hl);
 
-    const DWORD dwUdpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;
+    const DWORD dwIpHeaderLen = static_cast<DWORD>(pIpHeader->ip_hl) * 4;
+    const DWORD dwIpPacketLen = ntohs(pIpHeader->ip_len);
+
+    // Validate the lengths before the unsigned subtraction below. A packet whose
+    // IP total-length field is smaller than its IP + UDP headers would otherwise
+    // underflow dwUdpLen to a huge value, and the checksum loop would then read far
+    // past m_IBuffer (EXCEPTION_ACCESS_VIOLATION). The usual trigger is TCP/UDP
+    // segmentation offload, which can present outbound segments with ip_len == 0
+    // (the NIC fills in the real length later). The third condition additionally
+    // requires the whole L4 payload to lie within the captured frame, so an
+    // over-stated ip_len cannot over-read here or over-write the padding byte below.
+    if (dwIpHeaderLen < sizeof(iphdr) ||
+        dwIpPacketLen < dwIpHeaderLen + sizeof(udphdr) ||
+        static_cast<DWORD>(sizeof(ether_header)) + dwIpPacketLen > pPacket->m_Length) {
+        return;
+    }
+
+    const DWORD dwUdpLen = dwIpPacketLen - dwIpHeaderLen;
 
     // Check if padding is needed
     if ((dwUdpLen / 2) * 2 != dwUdpLen) {
