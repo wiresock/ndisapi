@@ -27,9 +27,13 @@
 // down the legacy branch, which is how that branch is compile- and
 // correctness-tested without a VC6 installation. It changes types and
 // spelling only, never values.
+// <stddef.h> in both branches: sum16_be's signature uses unqualified size_t,
+// and only the C header is guaranteed to place it in the global namespace --
+// <cstring>/<cstddef> promise std::size_t, with global injection unspecified.
+#include <stddef.h>
+
 #if (defined(_MSC_VER) && _MSC_VER < 1600) || defined(INET_CHECKSUM_FORCE_LEGACY_COMPAT)
 #include <string.h>
-#include <stddef.h>
 #define INET_CHECKSUM_MEMCPY ::memcpy
 namespace inet_checksum
 {
