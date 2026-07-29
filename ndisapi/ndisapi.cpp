@@ -14,6 +14,7 @@
 /*************************************************************************/
 
 #include "precomp.h"
+#include "inet_checksum.h"
 
 #if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
 #include <mutex>
@@ -3224,12 +3225,9 @@ void CNdisApi::RecalculateIPChecksum(PINTERMEDIATE_BUFFER pPacket)
     pIpHeader->ip_sum = 0;
     const PUCHAR buff = reinterpret_cast<PUCHAR>(pIpHeader);
 
-    // Calculate IP header checksum
-    for (unsigned int i = 0; i < pIpHeader->ip_hl * sizeof(DWORD); i += 2)
-    {
-        const unsigned short word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-        sum += word16;
-    }
+    // Wide one's-complement sum over the header; bit-identical to the former
+    // byte-pair loop (see inet_checksum.h).
+    sum = inet_checksum::sum16_be(buff, pIpHeader->ip_hl * sizeof(DWORD));
 
     // Keep only the last 16 bits of the 32-bit calculated sum and add the carries
     while (sum >> 16)
@@ -3249,7 +3247,6 @@ void CNdisApi::RecalculateIPChecksum(PINTERMEDIATE_BUFFER pPacket)
  */
 void CNdisApi::RecalculateICMPChecksum(PINTERMEDIATE_BUFFER pPacket)
 {
-    unsigned short padd = 0;
     unsigned int sum = 0;
     icmphdr_ptr pIcmpHeader;
     const iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(&pPacket->m_IBuffer[sizeof(ether_header)]);
@@ -3262,23 +3259,30 @@ void CNdisApi::RecalculateICMPChecksum(PINTERMEDIATE_BUFFER pPacket)
     else
         return;
 
-    const DWORD dwIcmpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;
+    const DWORD dwIpHeaderLen = static_cast<DWORD>(pIpHeader->ip_hl) * 4;
+    const DWORD dwIpPacketLen = ntohs(pIpHeader->ip_len);
 
-    if ((dwIcmpLen / 2) * 2 != dwIcmpLen)
+    // Validate the lengths before the unsigned subtraction below, exactly as the
+    // TCP and UDP siblings do. A packet whose IP total-length field is smaller
+    // than its IP + ICMP headers would otherwise underflow dwIcmpLen to a huge
+    // value and the checksum would read far past m_IBuffer. This function was
+    // the one of the four that never received the guard.
+    if (dwIpHeaderLen < sizeof(iphdr) ||
+        dwIpPacketLen < dwIpHeaderLen + sizeof(icmphdr) ||
+        static_cast<DWORD>(sizeof(ether_header)) + dwIpPacketLen > pPacket->m_Length)
     {
-        padd = 1;
-        pPacket->m_IBuffer[dwIcmpLen + pIpHeader->ip_hl * 4 + static_cast<DWORD>(sizeof(ether_header))] = 0;
+        return;
     }
+
+    const DWORD dwIcmpLen = dwIpPacketLen - dwIpHeaderLen;
 
     const PUCHAR buff = reinterpret_cast<PUCHAR>(pIcmpHeader);
     pIcmpHeader->checksum = 0;
 
-    // Make 16-bit words out of every two adjacent 8-bit words and calculate the sum of all 16-bit words
-    for (unsigned int i = 0; i < dwIcmpLen + padd; i = i + 2)
-    {
-        const unsigned short word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-        sum = sum + static_cast<unsigned long>(word16);
-    }
+    // Wide one's-complement sum; bit-identical to the former byte-pair loop and,
+    // unlike it, needs no zero pad byte written into the packet buffer for odd
+    // lengths (see inet_checksum.h).
+    sum = inet_checksum::sum16_be(buff, dwIcmpLen);
 
     // Keep only the last 16 bits of the 32-bit calculated sum and add the carries
     while (sum >> 16)
@@ -3298,7 +3302,6 @@ void CNdisApi::RecalculateICMPChecksum(PINTERMEDIATE_BUFFER pPacket)
 void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
 {
     tcphdr_ptr pTcpHeader;
-    unsigned short padd = 0;
     unsigned int sum = 0;
 
     const iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(&pPacket->m_IBuffer[sizeof(ether_header)]);
@@ -3331,21 +3334,13 @@ void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
 
     const DWORD dwTcpLen = dwIpPacketLen - dwIpHeaderLen;
 
-    if ((dwTcpLen / 2) * 2 != dwTcpLen)
-    {
-        padd = 1;
-        pPacket->m_IBuffer[dwTcpLen + pIpHeader->ip_hl * 4 + static_cast<DWORD>(sizeof(ether_header))] = 0;
-    }
-
     const PUCHAR buff = reinterpret_cast<PUCHAR>(pTcpHeader);
     pTcpHeader->th_sum = 0;
 
-    // Make 16-bit words out of every two adjacent 8-bit words and calculate the sum of all 16-bit words
-    for (unsigned int i = 0; i < dwTcpLen + padd; i = i + 2)
-    {
-        const unsigned short word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-        sum = sum + static_cast<unsigned long>(word16);
-    }
+    // Wide one's-complement sum over the TCP segment; bit-identical to the
+    // former byte-pair loop and, unlike it, needs no zero pad byte written into
+    // the packet buffer for odd lengths (see inet_checksum.h).
+    sum = inet_checksum::sum16_be(buff, dwTcpLen);
 
     // Add the TCP pseudo header which contains:
     // the IP source and destination addresses
@@ -3374,7 +3369,6 @@ void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
  * the UDP packet. The calculated checksum is stored in the UDP header of the packet.
  */
 void CNdisApi::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket) {
-    unsigned short padd = 0;
     unsigned int sum = 0;
 
     const iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(&pPacket->m_IBuffer[sizeof(ether_header)]);
@@ -3406,20 +3400,13 @@ void CNdisApi::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket) {
 
     const DWORD dwUdpLen = dwIpPacketLen - dwIpHeaderLen;
 
-    // Check if padding is needed
-    if ((dwUdpLen / 2) * 2 != dwUdpLen) {
-        padd = 1;
-        pPacket->m_IBuffer[dwUdpLen + pIpHeader->ip_hl * 4 + static_cast<DWORD>(sizeof(ether_header))] = 0;
-    }
-
     const PUCHAR buff = reinterpret_cast<PUCHAR>(pUdpHeader);
     pUdpHeader->th_sum = 0;
 
-    // Calculate the sum of 16-bit words of the UDP packet
-    for (unsigned int i = 0; i < dwUdpLen + padd; i = i + 2) {
-        const unsigned short word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-        sum = sum + static_cast<unsigned long>(word16);
-    }
+    // Wide one's-complement sum over the UDP datagram; bit-identical to the
+    // former byte-pair loop and, unlike it, needs no zero pad byte written into
+    // the packet buffer for odd lengths (see inet_checksum.h).
+    sum = inet_checksum::sum16_be(buff, dwUdpLen);
 
     // Add the UDP pseudo-header to the sum
     sum = sum + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w2);
