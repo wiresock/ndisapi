@@ -181,6 +181,9 @@ public:
     BOOL    SetWANEvent(HANDLE hWin32Event) const;
     BOOL    SetAdapterListChangeEvent(HANDLE hWin32Event) const;
     BOOL    NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const;
+    // Terminal status of a (possibly overlapped) request: a signalled event means the
+    // request COMPLETED, not that it succeeded. See the definition.
+    BOOL    CompleteOverlappedRequest(BOOL bIoResult, LPOVERLAPPED pOverlap, LPDWORD pBytes) const;
     BOOL    GetRasLinks(HANDLE hAdapter, PRAS_LINKS pLinks) const;
     BOOL    SetHwPacketFilter(HANDLE hAdapter, DWORD Filter) const;
     BOOL    GetHwPacketFilter(HANDLE hAdapter, PDWORD pFilter) const;
