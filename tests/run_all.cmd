@@ -41,7 +41,7 @@ call :arch x86
 if "%ABLATION%"=="1" (
     call :stage_prefix
     if not "!ERRORLEVEL!"=="0" (
-        echo ABLATION SETUP FAILED
+        echo ABLATION RESULT: SETUP_FAILED - the pre-fix sources could not be staged
         set RESULT=1
     ) else (
         call :ablate x64
@@ -63,16 +63,43 @@ goto :eof
 
 rem ---------------------------------------------------------------- the pre-fix SDK
 :ablate
+rem B-ABLATE-01. Whether an ablation proved anything is decided by Classify-Ablation.ps1,
+rem not by "the exit code was nonzero". A compile error, a crash - including a crash AFTER
+rem the footer was printed - and a test that failed for an unrelated reason all look like
+rem success from here.
 echo.
 echo === ablation %~1 ^(ndisapi.cpp at %PREFIX_REV%: these tests MUST fail^)
-call :build_and_run "%~1" "%OUT%\prefix" "%OUT%\%~1_prefix" oid_test
-if "!ERRORLEVEL!"=="0" (
-    echo ABLATION FAILED: the tests passed against the pre-fix SDK, so they do not test the fix
-    set RESULT=1
-) else (
-    echo ablation ok: the pre-fix SDK fails these tests
+set "AO=%OUT%\%~1_prefix"
+if not exist "!AO!" mkdir "!AO!"
+set "BUILDOUTCOME=OK"
+set "ABRC="
+if not exist "%OUT%\prefix\ndisapi\ndisapi.cpp" set "BUILDOUTCOME=SETUP_FAILED"
+if "!BUILDOUTCOME!"=="OK" (
+    call :build_only "%~1" "%OUT%\prefix" "!AO!" oid_test
+    if not "!ERRORLEVEL!"=="0" set "BUILDOUTCOME=COMPILE_FAILED"
 )
+if "!BUILDOUTCOME!"=="OK" (
+    "!AO!\oid_test.exe" > "!AO!\ablation.log" 2>&1
+    set "ABRC=!ERRORLEVEL!"
+    findstr /C:"checks," "!AO!\ablation.log"
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\Classify-Ablation.ps1" -BuildOutcome "!BUILDOUTCOME!" -ExitCode "!ABRC!" -LogPath "!AO!\ablation.log" -ExpectedExitCode 1 -VerdictPattern "(?m)^^RESULT=" -FailFooterPattern "(?m)^^RESULT=1" -SignaturePattern "\[FAIL\] pending failure: GET returns FALSE" -Label "%~1"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
+rem %1 arch, %2 sdk root, %3 output dir, %4 exe name - builds only, so the ablation can tell
+rem a build failure apart from a test failure
+:build_only
+set "A=%~1"
+set "SRC=%~2"
+set "O=%~3"
+set "EXE=%~4"
+if not exist "%O%" mkdir "%O%"
+cmd /c ""%VCVARSALL%" %A% >nul 2>&1 && cl /nologo /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIoidshim.h /Fo"%O%\\" /Fe"%O%\%EXE%.exe" "%TESTS%\oid_test.cpp" "%TESTS%\oidshim.c" "%SRC%\ndisapi\ndisapi.cpp" /link ws2_32.lib iphlpapi.lib advapi32.lib" > "%O%\build.log" 2>&1
+if not "!ERRORLEVEL!"=="0" (
+    findstr /C:"error " "%O%\build.log"
+    exit /b 2
+)
+exit /b 0
 
 rem %1 arch, %2 sdk root, %3 output dir, %4 exe name
 :build_and_run
