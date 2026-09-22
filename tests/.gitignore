@@ -1,0 +1,4 @@
+bin/
+
+# the repository root ignores *.cpp; test sources here are not build output
+!*.cpp

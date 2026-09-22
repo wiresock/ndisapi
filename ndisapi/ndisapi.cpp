@@ -1440,6 +1440,61 @@ BOOL CNdisApi::SetAdapterListChangeEvent(HANDLE hWin32Event) const
  *
  * If the operation is not successful, the function returns FALSE.
  */
+/**
+ * @brief Resolves the TERMINAL status of a (possibly overlapped) device request.
+ *
+ * An event handed to an overlapped DeviceIoControl is signalled when the request COMPLETES.
+ * That is not the same thing as the request SUCCEEDING, and the two were being conflated:
+ * NdisrdRequest waited on the event and then inferred the outcome from whether
+ * PACKET_OID_DATA::Length still equalled the length that had been submitted. Length is
+ * result accounting, not a status - so a request that completed with a failure could be
+ * reported as success, and a request that succeeded while writing FEWER bytes than the
+ * caller offered was reported as failure.
+ *
+ * This asks the operating system instead. GetOverlappedResult returns the terminal status of
+ * the completed request, and that is what the caller is told.
+ *
+ * @param bIoResult   what DeviceIoControl returned.
+ * @param pOverlap    the OVERLAPPED the request was issued with.
+ * @param pBytes      receives the bytes transferred (may be NULL).
+ * @return TRUE when the request completed successfully.
+ *
+ * On FALSE the thread's last-error value is the one that describes the failure - either the
+ * one DeviceIoControl failed with, or the one GetOverlappedResult reports for the completed
+ * request - so existing callers that inspect GetLastError() after a FALSE return keep
+ * working.
+ */
+BOOL CNdisApi::CompleteOverlappedRequest(BOOL bIoResult, LPOVERLAPPED pOverlap, LPDWORD pBytes) const
+{
+    DWORD dwBytes = 0;
+
+    if (bIoResult)
+    {
+        // Completed inline and successfully; the overlapped result is already final.
+        if (pBytes)
+        {
+            if (::GetOverlappedResult(m_hFileHandle, pOverlap, &dwBytes, FALSE))
+                *pBytes = dwBytes;
+        }
+        return TRUE;
+    }
+
+    if (::GetLastError() != ERROR_IO_PENDING)
+    {
+        // Failed outright; the last error already describes it.
+        return FALSE;
+    }
+
+    // Pending: wait for the completion, then ask for its terminal status. GetOverlappedResult
+    // with bWait = TRUE performs the wait itself, so the event is waited on exactly once.
+    if (!::GetOverlappedResult(m_hFileHandle, pOverlap, &dwBytes, TRUE))
+        return FALSE;
+
+    if (pBytes)
+        *pBytes = dwBytes;
+
+    return TRUE;
+}
 BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 {
     OVERLAPPED Overlap;
@@ -1489,26 +1544,27 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
                 &Overlap
             );
 
-            if ((!bIOResult) && (ERROR_IO_PENDING == GetLastError()))
-            {
-                WaitForSingleObject(Overlap.hEvent, INFINITE);
+            // The TERMINAL status, not merely "the event was signalled". The old code waited
+            // and then judged the outcome by comparing Length, which cannot see a failure at
+            // all on this path: the copy-back below is guarded by !Set, so a SET that
+            // completed with a failure left the caller's Length untouched and the comparison
+            // reported success.
+            bIOResult = CompleteOverlappedRequest(bIOResult, &Overlap, NULL);
 
-                if (!Set)
-                {
-                    memmove(OidData->Data, OidData64->Data, OidData64->Length);
-                    OidData->Length = OidData64->Length;
-                }
+            if (bIOResult && !Set)
+            {
+                memmove(OidData->Data, OidData64->Data, OidData64->Length);
+                OidData->Length = OidData64->Length;
             }
-            else
-                if (!bIOResult)
-                {
-                    ::CloseHandle(Overlap.hEvent);
-                    free(OidData64);
-                    return FALSE;
-                }
 
             free(OidData64);
+            ::CloseHandle(Overlap.hEvent);
+            return bIOResult;
         }
+
+        // the conversion buffer could not be allocated
+        ::CloseHandle(Overlap.hEvent);
+        return FALSE;
     }
     else
 #endif //_WIN64
@@ -1523,22 +1579,21 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
             &Overlap
         );
 
-        if ((!bIOResult) && (ERROR_IO_PENDING == GetLastError()))
-            WaitForSingleObject(Overlap.hEvent, INFINITE);
-        else
-            if (!bIOResult)
-            {
-                ::CloseHandle(Overlap.hEvent);
-                return FALSE;
-            }
+        bIOResult = CompleteOverlappedRequest(bIOResult, &Overlap, NULL);
     }
 
     ::CloseHandle(Overlap.hEvent);
 
-    if (dwLength == OidData->Length)
-        return TRUE;
+    //
+    // The operating system's terminal status decides this, and nothing else. The old code
+    // returned "dwLength == OidData->Length", which is not a status: on success the driver
+    // sets Length to the bytes actually written (a query) or read (a set), so a SUCCESSFUL
+    // request that transferred fewer bytes than the caller offered was reported as a
+    // failure.
+    //
+    UNREFERENCED_PARAMETER(dwLength);
 
-    return FALSE;
+    return bIOResult;
 }
 
 /**
