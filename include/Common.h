@@ -52,13 +52,13 @@
 #endif
 
 // NDISRD_VERSION is the version number of the NDISRD driver
-#define NDISRD_VERSION             0x07013000
+#define NDISRD_VERSION             0x08013000
 
 // NDISRD_MAJOR_VERSION is the major version number of the NDISRD driver
 #define NDISRD_MAJOR_VERSION       0x0003
 
 // NDISRD_MINOR_VERSION is the minor version number of the NDISRD driver
-#define NDISRD_MINOR_VERSION       0x0701
+#define NDISRD_MINOR_VERSION       0x0801
 
 // DRIVER_NAME_A is the ASCII name of the NDISRD driver
 #define DRIVER_NAME_A NDISRD_NAME_A
