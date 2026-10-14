@@ -72,6 +72,14 @@ reported as success, with `GetLastError()` still `0x3E5` `ERROR_IO_PENDING`) and
 
 Pass a different revision as the second argument to ablate against something else.
 
+## OID request byte extents
+
+The maintained [OID bounds fixture](oid_bounds/README.md) runs on native x64 and
+genuine WOW64 from `run_all.cmd`. It requires malformed or unrepresentable request
+sizes to be rejected before staging or IOCTL submission, using bounded allocator
+and copy controls. Valid generic GET/SET, short results and terminal completion
+semantics remain covered. No live driver or large allocation is used.
+
 ## Handle and static table regressions
 
 The maintained [handles fixture](handles/README.md) is also run on x64 and genuine WOW64.

@@ -37,6 +37,8 @@ if not defined VCVARSALL (
 
 call :arch x64
 call :arch x86
+call :oid_bounds x64
+call :oid_bounds x86
 call :handles x64
 call :handles x86
 call :packets x64
@@ -86,6 +88,14 @@ rem ---------------------------------------------------------------- the current
 echo.
 echo === oid_test %~1 ^(ndisapi\ndisapi.cpp as shipped^)
 call :build_and_run "%~1" "%ROOT%" "%OUT%\%~1" oid_test
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+rem ---------------------------------------------------------------- checked OID request extents
+:oid_bounds
+echo.
+echo === oid_bounds %~1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\oid_bounds\Run-Bounds.ps1" -Arch "%~1"
 if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
 
