@@ -39,6 +39,8 @@ call :arch x64
 call :arch x86
 call :handles x64
 call :handles x86
+call :packets x64
+call :packets x86
 
 if "%ABLATION%"=="1" (
     call :stage_prefix
@@ -68,6 +70,14 @@ rem ---------------------------------------------------------------- handle/tabl
 echo.
 echo === handles_test %~1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\handles\Run-Handles.ps1" -Arch "%~1"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+rem ---------------------------------------------------------------- packet result/staging regressions
+:packets
+echo.
+echo === packets_test %~1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\packets\Run-Packets.ps1" -Arch "%~1"
 if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
 
