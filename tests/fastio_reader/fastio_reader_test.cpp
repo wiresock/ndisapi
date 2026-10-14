@@ -255,6 +255,9 @@ static BOOL submit(PINTERMEDIATE_BUFFER* pointers, DWORD count, PDWORD returned,
 class CNdisApi {
 public:
     virtual ~CNdisApi() = default;
+    BOOL IsDriverLoaded() const { return TRUE; }
+    BOOL SetAdapterMode(PADAPTER_MODE) const { return TRUE; }
+    BOOL SetPacketEvent(HANDLE, HANDLE) const { return TRUE; }
     BOOL GetTcpipBoundAdaptersInfo(PTCP_AdapterList list) const { list->m_nAdapterCount = 0; return TRUE; }
     static BOOL ConvertWindows2000AdapterName(const char*, char* name, DWORD size)
     { if (size) name[0] = '\0'; return TRUE; }
@@ -274,6 +277,7 @@ class network_adapter {
 public:
     network_adapter() = default;
     network_adapter(CNdisApi*, HANDLE, unsigned char*, std::string, std::string, uint32_t, uint16_t) {}
+    HANDLE get_adapter() const { return reinterpret_cast<HANDLE>(1); }
     bool set_packet_event() const { return true; }
     void set_mode(unsigned) {}
     void release() {}
@@ -368,6 +372,7 @@ static void run_case(const char* name, fixture::schedule schedule, size_t per_se
     }
     bool returned = false;
     c.enabled = true;
+    filter.filter_state_ = ndisapi::fastio_packet_filter::filter_state::running;
     try { filter.filter_working_thread(); returned = true; }
     catch (const fixture::controlled_bounds&) {}
     catch (const fixture::bounded_poll&) {}
