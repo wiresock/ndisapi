@@ -1688,7 +1688,9 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 
     if (!ResetEvent(Overlap.hEvent))
     {
+        const DWORD error = ::GetLastError();
         ::CloseHandle(Overlap.hEvent);
+        ::SetLastError(error);
         return FALSE;
     }
 
@@ -1722,6 +1724,14 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
             // completed with a failure left the caller's Length untouched and the comparison
             // reported success.
             bIOResult = CompleteOverlappedRequest(bIOResult, &Overlap, NULL);
+            DWORD error = bIOResult ? ERROR_SUCCESS : ::GetLastError();
+            // A successful GET or SET must report a length within the captured capacity.
+            // Validate before publishing any staged reply bytes or metadata to the caller.
+            if (bIOResult && OidData64->Length > dwLength)
+            {
+                bIOResult = FALSE;
+                error = ERROR_INVALID_DATA;
+            }
 
             if (bIOResult && !Set)
             {
@@ -1731,11 +1741,14 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 
             free(OidData64);
             ::CloseHandle(Overlap.hEvent);
+            if (!bIOResult)
+                ::SetLastError(error);
             return bIOResult;
         }
 
-        // the conversion buffer could not be allocated
+        // The conversion buffer could not be allocated.
         ::CloseHandle(Overlap.hEvent);
+        ::SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return FALSE;
     }
     else
@@ -1754,14 +1767,21 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
         bIOResult = CompleteOverlappedRequest(bIOResult, &Overlap, NULL);
     }
 
+    DWORD error = bIOResult ? ERROR_SUCCESS : ::GetLastError();
+    // Native I/O already uses the caller's buffer directly; reject malformed metadata
+    // without promising to roll back bytes the operating system has already written.
+    if (bIOResult && OidData->Length > dwLength)
+    {
+        bIOResult = FALSE;
+        error = ERROR_INVALID_DATA;
+    }
     ::CloseHandle(Overlap.hEvent);
+    if (!bIOResult)
+        ::SetLastError(error);
 
     //
-    // The operating system's terminal status decides this, and nothing else. The old code
-    // returned "dwLength == OidData->Length", which is not a status: on success the driver
-    // sets Length to the bytes actually written (a query) or read (a set), so a SUCCESSFUL
-    // request that transferred fewer bytes than the caller offered was reported as a
-    // failure.
+    // Terminal success also requires valid reply accounting. Length need not equal the
+    // offered capacity: zero, short and exact successful replies are all valid.
     //
 
     return bIOResult;

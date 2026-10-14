@@ -9,15 +9,17 @@
 #include <limits.h>
 #include "Common.h"
 struct BOUNDS_STATE {
-    unsigned allocations, copies, ioctls, events, completions, faults;
+    unsigned allocations, copies, ioctls, events, completions, faults, frees, closes;
     size_t requestedBytes;
     DWORD inputBytes, outputBytes;
-    bool pending, failIo, boundary;
+    bool pending, failIo, boundary, replyLengthSet, clobberCleanup;
+    DWORD replyLength;
 };
 extern BOUNDS_STATE g_bounds;
 bool BoundsWow64();
 void BoundsReset();
 void BoundsCleanup();
+void BoundsWatchCaller(void*,size_t);
 HANDLE WINAPI BoundsCreateFile(LPCTSTR,DWORD,DWORD,LPSECURITY_ATTRIBUTES,DWORD,DWORD,HANDLE);
 HANDLE WINAPI BoundsCreateEvent(LPSECURITY_ATTRIBUTES,BOOL,BOOL,LPCTSTR);
 BOOL WINAPI BoundsCloseHandle(HANDLE);
