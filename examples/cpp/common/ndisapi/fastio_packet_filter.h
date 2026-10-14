@@ -179,79 +179,70 @@ namespace ndisapi
 		std::unique_ptr<request_storage_type_t> write_mstcp_request_ptr_;
 		/// <summary>shared fast i/o memory</summary>
 		std::unique_ptr<fast_io_storage_type_t[]> fast_io_ptr_;
+		// Close the registration handle before backing storage, including member destruction.
+		std::unique_ptr<CNdisApi> registration_owner_;
+		bool packet_event_registered_{false};
+		bool adapter_mode_set_{false};
 	};
 
 	inline bool fastio_packet_filter::init_filter()
 	{
-		try
-		{
-			packet_buffer_ = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
-
-			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
-			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
-			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t[]>(fast_io_section_count);
-		}
-		catch (const std::bad_alloc&)
-		{
+		// A fresh file object owns only this start's shared-memory registrations.
+		registration_owner_ = std::make_unique<CNdisApi>();
+		if (!registration_owner_->IsDriverLoaded())
 			return false;
-		}
 
-		//
-		// Set events for helper driver
-		//
+		packet_buffer_ = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
+		write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
+		write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
+		fast_io_ptr_ = std::make_unique<fast_io_storage_type_t[]>(fast_io_section_count);
+
 		if (wait_on_poll_)
 		{
 			if (!network_interfaces_[adapter_]->set_packet_event())
-			{
-				packet_buffer_.reset();
-				write_adapter_request_ptr_.reset();
-				write_mstcp_request_ptr_.reset();
-				fast_io_ptr_.reset();
-
 				return false;
-			}
+			packet_event_registered_ = true;
 		}
 
 		auto fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]);
-
-		if (!InitializeFastIo(fast_io_section, fast_io_size))
-		{
-			packet_buffer_.reset();
-			write_adapter_request_ptr_.reset();
-			write_mstcp_request_ptr_.reset();
-			fast_io_ptr_.reset();
-
+		if (!registration_owner_->InitializeFastIo(fast_io_section, fast_io_size))
 			return false;
-		}
 
 		for (size_t i = 1; i < fast_io_section_count; ++i)
 		{
 			fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[i]);
-
-			if (!AddSecondaryFastIo(fast_io_section, fast_io_size))
-			{
-				packet_buffer_.reset();
-				write_adapter_request_ptr_.reset();
-				write_mstcp_request_ptr_.reset();
-				fast_io_ptr_.reset();
-
+			if (!registration_owner_->AddSecondaryFastIo(fast_io_section, fast_io_size))
 				return false;
-			}
 		}
 
-		network_interfaces_[adapter_]->set_mode(MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL);
-
+		ADAPTER_MODE mode{network_interfaces_[adapter_]->get_adapter(),
+			MSTCP_FLAG_SENT_TUNNEL | MSTCP_FLAG_RECV_TUNNEL};
+		if (!SetAdapterMode(&mode))
+			return false;
+		adapter_mode_set_ = true;
 		return true;
 	}
 
 	inline void fastio_packet_filter::release_filter()
 	{
-		network_interfaces_[adapter_]->release();
+		// Only undo adapter setup acquired by this start. release() also wakes the worker.
+		if (adapter_mode_set_)
+		{
+			network_interfaces_[adapter_]->release();
+			adapter_mode_set_ = false;
+		}
 
-		// Wait for working thread to exit
 		if (working_thread_.joinable())
 			working_thread_.join();
 
+		if (packet_event_registered_)
+		{
+			SetPacketEvent(network_interfaces_[adapter_]->get_adapter(), nullptr);
+			packet_event_registered_ = false;
+		}
+
+		// Driver close removes the owned mappings before their backing storage is freed.
+		registration_owner_.reset();
 		packet_buffer_.reset();
 		write_adapter_request_ptr_.reset();
 		write_mstcp_request_ptr_.reset();
@@ -279,12 +270,27 @@ namespace ndisapi
 
 		adapter_ = adapter;
 
-		if (init_filter())
-			working_thread_ = std::thread(&fastio_packet_filter::filter_working_thread, this);
-		else
-			return false;
+		try
+		{
+			if (init_filter())
+			{
+				// Publish before the worker can execute; the worker never changes lifecycle state.
+				filter_state_ = filter_state::running;
+				working_thread_ = std::thread(&fastio_packet_filter::filter_working_thread, this);
+				return true;
+			}
+		}
+		catch (const std::bad_alloc&)
+		{
+		}
+		catch (const std::system_error&)
+		{
+		}
 
-		return true;
+		filter_state_ = filter_state::stopping;
+		release_filter();
+		filter_state_ = filter_state::stopped;
+		return false;
 	}
 
 	inline bool fastio_packet_filter::stop_filter()
@@ -393,7 +399,6 @@ namespace ndisapi
 	{
 		using namespace std::chrono_literals;
 
-		filter_state_ = filter_state::running;
 
 		DWORD sent_success = 0;
 		DWORD fast_io_packets_success = 0;
