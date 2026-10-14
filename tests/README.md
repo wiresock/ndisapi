@@ -79,3 +79,9 @@ It covers checked mapping at all callers, stable enumeration identities, immutab
 transactional table outputs, terminal completion storage lifetime, byte extents and overflow.
 Its pre-implementation oracle was frozen before the Task12a change; the three C++ fixture files
 are preserved byte-for-byte. The historical 20aa90f ablation above is specific to the OID suite.
+
+## Packet result and staging regressions
+
+The maintained [packets fixture](packets/README.md) also runs on x64 and genuine WOW64.
+It exercises all nine single, sorted and unsorted convenience APIs, pending ownership, validated
+metadata/counts, independent staging arithmetic, and transactional WOW64 frame copy-back.

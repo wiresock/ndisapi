@@ -147,6 +147,202 @@ static BOOL SdkReadStaticTable(const CNdisApi& api, DWORD service,
     return TRUE;
 }
 
+// Request metadata crosses the exported signed-int byte boundary. The private
+// WOW64 payload array has a separate SIZE_T bound, checked before either allocation.
+static BOOL SdkPacketRequestBytes(DWORD count, size_t header, size_t entry, int& bytes)
+{
+    if (count == 0)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (count > (static_cast<size_t>(INT_MAX) - header) / entry)
+    {
+        ::SetLastError(ERROR_ARITHMETIC_OVERFLOW);
+        return FALSE;
+    }
+    bytes = static_cast<int>(header + static_cast<size_t>(count) * entry);
+    return TRUE;
+}
+
+#ifndef _WIN64
+static BOOL SdkCopyPacketToWow64(const INTERMEDIATE_BUFFER* source,
+    INTERMEDIATE_BUFFER_WOW64& target)
+{
+    if (source == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    const DWORD length = source->m_Length;
+    if (length > sizeof(source->m_IBuffer) || length > sizeof(target.m_IBuffer))
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    target.m_dwDeviceFlags = source->m_dwDeviceFlags;
+    target.m_Flags = source->m_Flags;
+    target.m_8021q = source->m_8021q;
+    target.m_FilterID = source->m_FilterID;
+    memmove(target.m_Reserved, source->m_Reserved, sizeof(target.m_Reserved));
+    target.m_Length = length;
+    memmove(target.m_IBuffer, source->m_IBuffer, length);
+    return TRUE;
+}
+
+static BOOL SdkValidatePacketFromWow64(const INTERMEDIATE_BUFFER_WOW64& source)
+{
+    if (source.m_Length > sizeof(source.m_IBuffer) ||
+        source.m_Length > sizeof(((PINTERMEDIATE_BUFFER)NULL)->m_IBuffer))
+    {
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// The source is private storage whose I/O has completed; validate every returned
+// frame before invoking this copy for any member of a sorted batch.
+static void SdkCopyPacketFromWow64(const INTERMEDIATE_BUFFER_WOW64& source,
+    INTERMEDIATE_BUFFER& target)
+{
+    target.m_dwDeviceFlags = source.m_dwDeviceFlags;
+    target.m_Flags = source.m_Flags;
+    target.m_8021q = source.m_8021q;
+    target.m_FilterID = source.m_FilterID;
+    memmove(target.m_Reserved, source.m_Reserved, sizeof(target.m_Reserved));
+    target.m_Length = source.m_Length;
+    memmove(target.m_IBuffer, source.m_IBuffer, source.m_Length);
+}
+
+static BOOL SdkSendPacketWow64(const CNdisApi& api, DWORD service,
+    ULONGLONG adapter, const INTERMEDIATE_BUFFER* packet, DWORD& bytesReturned)
+{
+    INTERMEDIATE_BUFFER_WOW64 buffer = { 0 };
+    ETH_REQUEST_WOW64 request = { 0 };
+    if (!SdkCopyPacketToWow64(packet, buffer))
+        return FALSE;
+    request.hAdapterHandle.QuadPart = adapter;
+    request.EthPacket.Buffer.QuadPart = reinterpret_cast<ULONG_PTR>(&buffer);
+    return SdkSynchronousIoControl(api, service, &request, sizeof(request),
+        NULL, 0, bytesReturned);
+}
+
+static BOOL SdkPreparePacketBatchWow64(DWORD count, ULONGLONG adapter,
+    SdkByteBuffer& requestStorage, SdkByteBuffer& packetStorage, int& requestBytes)
+{
+    if (!SdkPacketRequestBytes(count, offsetof(ETH_M_REQUEST_WOW64, EthPacket),
+        sizeof(NDISRD_ETH_Packet_WOW64), requestBytes))
+        return FALSE;
+    if (count > static_cast<size_t>(-1) / sizeof(INTERMEDIATE_BUFFER_WOW64))
+    {
+        ::SetLastError(ERROR_ARITHMETIC_OVERFLOW);
+        return FALSE;
+    }
+    const size_t packetBytes = static_cast<size_t>(count) * sizeof(INTERMEDIATE_BUFFER_WOW64);
+    if (!requestStorage.Allocate(requestBytes) || !packetStorage.Allocate(packetBytes))
+        return FALSE;
+    memset(requestStorage.Get(), 0, requestBytes);
+    memset(packetStorage.Get(), 0, packetBytes);
+    PETH_M_REQUEST_WOW64 request = static_cast<PETH_M_REQUEST_WOW64>(requestStorage.Get());
+    PINTERMEDIATE_BUFFER_WOW64 packets = static_cast<PINTERMEDIATE_BUFFER_WOW64>(packetStorage.Get());
+    request->hAdapterHandle.QuadPart = adapter;
+    request->dwPacketsNumber = count;
+    for (DWORD i = 0; i < count; ++i)
+        request->EthPacket[i].Buffer.QuadPart = reinterpret_cast<ULONG_PTR>(&packets[i]);
+    return TRUE;
+}
+
+static BOOL SdkSendPacketsWow64(const CNdisApi& api, DWORD service,
+    ULONGLONG adapter, PETH_M_REQUEST caller, DWORD count, DWORD& bytesReturned)
+{
+    SdkByteBuffer requestStorage, packetStorage;
+    int requestBytes;
+    if (!SdkPreparePacketBatchWow64(count, adapter, requestStorage, packetStorage, requestBytes))
+        return FALSE;
+    PINTERMEDIATE_BUFFER_WOW64 packets = static_cast<PINTERMEDIATE_BUFFER_WOW64>(packetStorage.Get());
+    for (DWORD i = 0; i < count; ++i)
+    {
+        if (!SdkCopyPacketToWow64(caller->EthPacket[i].Buffer, packets[i]))
+            return FALSE;
+    }
+    return SdkSynchronousIoControl(api, service, requestStorage.Get(), requestBytes,
+        NULL, 0, bytesReturned);
+}
+
+static BOOL SdkReadPacketsWow64(const CNdisApi& api, ULONGLONG adapter,
+    PETH_M_REQUEST caller, DWORD capacity, DWORD& bytesReturned)
+{
+    SdkByteBuffer requestStorage, packetStorage;
+    int requestBytes;
+    if (!SdkPreparePacketBatchWow64(capacity, adapter, requestStorage, packetStorage, requestBytes))
+        return FALSE;
+    for (DWORD i = 0; i < capacity; ++i)
+    {
+        if (caller->EthPacket[i].Buffer == NULL)
+        {
+            ::SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+    if (!SdkSynchronousIoControl(api, static_cast<DWORD>(IOCTL_NDISRD_READ_PACKETS),
+        requestStorage.Get(), requestBytes, requestStorage.Get(), requestBytes, bytesReturned))
+        return FALSE;
+    PETH_M_REQUEST_WOW64 request = static_cast<PETH_M_REQUEST_WOW64>(requestStorage.Get());
+    if (bytesReturned < offsetof(ETH_M_REQUEST_WOW64, EthPacket) ||
+        bytesReturned > static_cast<DWORD>(requestBytes) || request->dwPacketsSuccess > capacity)
+    {
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    const DWORD count = request->dwPacketsSuccess;
+    PINTERMEDIATE_BUFFER_WOW64 packets = static_cast<PINTERMEDIATE_BUFFER_WOW64>(packetStorage.Get());
+    for (DWORD i = 0; i < count; ++i)
+    {
+        if (!SdkValidatePacketFromWow64(packets[i]))
+            return FALSE;
+    }
+    for (DWORD i = 0; i < count; ++i)
+        SdkCopyPacketFromWow64(packets[i], *caller->EthPacket[i].Buffer);
+    caller->dwPacketsSuccess = count;
+    return TRUE;
+}
+#endif // !_WIN64
+
+static BOOL SdkUnsortedPacketIoControl(const CNdisApi& api, DWORD service,
+    PINTERMEDIATE_BUFFER* packets, DWORD capacity, PDWORD count, BOOL wow64,
+    DWORD& bytesReturned)
+{
+    if (count == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *count = 0;
+    if (wow64)
+    {
+        ::SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
+    if (capacity != 0 && packets == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    UNSORTED_READ_SEND_REQUEST request = { packets, capacity };
+    if (!SdkSynchronousIoControl(api, service, &request, sizeof(request),
+        &request, sizeof(request), bytesReturned))
+        return FALSE;
+    if (bytesReturned < offsetof(UNSORTED_READ_SEND_REQUEST, packets_num) + sizeof(request.packets_num) ||
+        bytesReturned > sizeof(request) || request.packets_num > capacity)
+    {
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    *count = request.packets_num;
+    return TRUE;
+}
+
 // OS version information
 CVersionInfo CNdisApi::ms_Version;
 
@@ -607,61 +803,30 @@ BOOL CNdisApi::GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const
  */
 BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+    if (pPacket == NULL || pPacket->EthPacket.Buffer == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult;
-
+    }
+    DWORD bytes = 0;
+    BOOL result;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        ETH_REQUEST_WOW64 EthRequest;
-        INTERMEDIATE_BUFFER_WOW64 Buffer;
-
-        // Initialize INTERMEDIATE_BUFFER_WOW64
-        Buffer.m_dwDeviceFlags = pPacket->EthPacket.Buffer->m_dwDeviceFlags;
-        Buffer.m_Flags = pPacket->EthPacket.Buffer->m_Flags;
-        Buffer.m_8021q = pPacket->EthPacket.Buffer->m_8021q;
-        Buffer.m_FilterID = pPacket->EthPacket.Buffer->m_FilterID;
-        memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG) * 4);
-        Buffer.m_Length = pPacket->EthPacket.Buffer->m_Length;
-        memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
-
-        // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = adapter64;
-        EthRequest.EthPacket.Buffer.HighPart = 0;
-        EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
-
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
-            &EthRequest,
-            sizeof(ETH_REQUEST_WOW64),
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
-
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter))
+            return FALSE;
+        result = SdkSendPacketWow64(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_MSTCP),
+            adapter, pPacket->EthPacket.Buffer, bytes);
     }
     else
-#endif //_WIN64
+#endif
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
-            pPacket,
-            sizeof(ETH_REQUEST),
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
+        result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_MSTCP),
+            pPacket, sizeof(*pPacket), NULL, 0, bytes);
     }
-
-    return bIOResult;
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -678,61 +843,30 @@ BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+    if (pPacket == NULL || pPacket->EthPacket.Buffer == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult;
-
+    }
+    DWORD bytes = 0;
+    BOOL result;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        ETH_REQUEST_WOW64 EthRequest;
-        INTERMEDIATE_BUFFER_WOW64 Buffer;
-
-        // Initialize INTERMEDIATE_BUFFER_WOW64
-        Buffer.m_dwDeviceFlags = pPacket->EthPacket.Buffer->m_dwDeviceFlags;
-        Buffer.m_Flags = pPacket->EthPacket.Buffer->m_Flags;
-        Buffer.m_8021q = pPacket->EthPacket.Buffer->m_8021q;
-        Buffer.m_FilterID = pPacket->EthPacket.Buffer->m_FilterID;
-        memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG) * 4);
-        Buffer.m_Length = pPacket->EthPacket.Buffer->m_Length;
-        memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
-
-        // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = adapter64;
-        EthRequest.EthPacket.Buffer.HighPart = 0;
-        EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
-
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
-            &EthRequest,
-            sizeof(ETH_REQUEST_WOW64),
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
-
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter))
+            return FALSE;
+        result = SdkSendPacketWow64(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER),
+            adapter, pPacket->EthPacket.Buffer, bytes);
     }
     else
-#endif //_WIN64
+#endif
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
-            pPacket,
-            sizeof(ETH_REQUEST),
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
+        result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER),
+            pPacket, sizeof(*pPacket), NULL, 0, bytes);
     }
-
-    return bIOResult;
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -750,63 +884,47 @@ BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+    if (pPacket == NULL || pPacket->EthPacket.Buffer == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult;
-
+    }
+    DWORD bytes = 0;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        ETH_REQUEST_WOW64 EthRequest;
-        INTERMEDIATE_BUFFER_WOW64 Buffer;
-
-        // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = adapter64;
-        EthRequest.EthPacket.Buffer.HighPart = 0;
-        EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
-
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_READ_PACKET,
-            &EthRequest,
-            sizeof(ETH_REQUEST_WOW64),
-            &EthRequest,
-            sizeof(ETH_REQUEST_WOW64),
-            NULL,   // Bytes Returned
-            NULL
-        );
-
-        if (bIOResult)
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter))
+            return FALSE;
+        ETH_REQUEST_WOW64 request = { 0 };
+        INTERMEDIATE_BUFFER_WOW64 buffer = { 0 };
+        request.hAdapterHandle.QuadPart = adapter;
+        request.EthPacket.Buffer.QuadPart = reinterpret_cast<ULONG_PTR>(&buffer);
+        const BOOL result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_READ_PACKET),
+            &request, sizeof(request), &request, sizeof(request), bytes);
+        m_BytesReturned = bytes;
+        if (!result)
+            return FALSE;
+        if (bytes != sizeof(request))
         {
-            // Copy the resulting packet from INTERMEDIATE_BUFFER_WOW64 to INTERMEDIATE_BUFFER
-            pPacket->EthPacket.Buffer->m_dwDeviceFlags = Buffer.m_dwDeviceFlags;
-            pPacket->EthPacket.Buffer->m_Flags = Buffer.m_Flags;
-            pPacket->EthPacket.Buffer->m_8021q = Buffer.m_8021q;
-            pPacket->EthPacket.Buffer->m_FilterID = Buffer.m_FilterID;
-            memmove(pPacket->EthPacket.Buffer->m_Reserved, Buffer.m_Reserved, sizeof(ULONG) * 4);
-            pPacket->EthPacket.Buffer->m_Length = Buffer.m_Length;
-            memmove(pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_IBuffer, Buffer.m_Length);
+            ::SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
         }
+        if (!SdkValidatePacketFromWow64(buffer))
+            return FALSE;
+        SdkCopyPacketFromWow64(buffer, *pPacket->EthPacket.Buffer);
+        return TRUE;
     }
-    else
-#endif //_WIN64
+#endif
+    const BOOL result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_READ_PACKET),
+        pPacket, sizeof(*pPacket), pPacket, sizeof(*pPacket), bytes);
+    m_BytesReturned = bytes;
+    if (result && bytes != sizeof(*pPacket))
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_READ_PACKET,
-            pPacket,
-            sizeof(ETH_REQUEST),
-            pPacket,
-            sizeof(ETH_REQUEST),
-            NULL,   // Bytes Returned
-            NULL
-        );
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
     }
-
-    return bIOResult;
+    return result;
 }
 
 /**
@@ -825,86 +943,34 @@ BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+    if (pPackets == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult;
-
+    }
+    const DWORD count = pPackets->dwPacketsNumber;
+    DWORD bytes = 0;
+    BOOL result;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        PINTERMEDIATE_BUFFER_WOW64 Buffers;
-
-        const PETH_M_REQUEST_WOW64 pEthRequest = static_cast<PETH_M_REQUEST_WOW64>(malloc(
-            sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1)));
-        Buffers = static_cast<PINTERMEDIATE_BUFFER_WOW64>(malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64)));
-
-        if (Buffers && pEthRequest)
-        {
-            memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
-            memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-            pEthRequest->hAdapterHandle.QuadPart = adapter64;
-            pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
-
-            for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
-            {
-                // Initialize INTERMEDIATE_BUFFER_WOW64
-                Buffers[i].m_dwDeviceFlags = pPackets->EthPacket[i].Buffer->m_dwDeviceFlags;
-                Buffers[i].m_Flags = pPackets->EthPacket[i].Buffer->m_Flags;
-                Buffers[i].m_8021q = pPackets->EthPacket[i].Buffer->m_8021q;
-                Buffers[i].m_FilterID = pPackets->EthPacket[i].Buffer->m_FilterID;
-                memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG) * 4);
-                Buffers[i].m_Length = pPackets->EthPacket[i].Buffer->m_Length;
-                memmove(Buffers[i].m_IBuffer, pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_Length);
-
-                // Initialize ETH_REQUEST_WOW64
-                pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-                pEthRequest->EthPacket[i].Buffer.LowPart = reinterpret_cast<ULONG_PTR>(&Buffers[i]);
-            }
-
-            bIOResult = DeviceIoControl(
-                IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
-                pEthRequest,
-                sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1),
-                NULL,
-                0,
-                NULL,   // Bytes Returned
-                NULL
-            );
-
-            free(Buffers);
-            free(pEthRequest);
-        }
-        else
-        {
-            if (Buffers)
-                free(Buffers);
-
-            if (pEthRequest)
-                free(pEthRequest);
-
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter))
             return FALSE;
-        }
+        result = SdkSendPacketsWow64(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP),
+            adapter, pPackets, count, bytes);
     }
     else
-#endif //_WIN64
+#endif
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
-            pPackets,
-            sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet) * (pPackets->dwPacketsNumber - 1),  // NOLINT(bugprone-narrowing-conversions, cppcoreguidelines-narrowing-conversions)
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
+        int requestBytes;
+        if (!SdkPacketRequestBytes(count, offsetof(ETH_M_REQUEST, EthPacket), sizeof(NDISRD_ETH_Packet), requestBytes))
+            return FALSE;
+        result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP),
+            pPackets, requestBytes, NULL, 0, bytes);
     }
-
-    return bIOResult;
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -923,86 +989,34 @@ BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
  */
 BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+    if (pPackets == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult;
-
+    }
+    const DWORD count = pPackets->dwPacketsNumber;
+    DWORD bytes = 0;
+    BOOL result;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        PINTERMEDIATE_BUFFER_WOW64 Buffers;
-
-        const PETH_M_REQUEST_WOW64 pEthRequest = static_cast<PETH_M_REQUEST_WOW64>(malloc(
-            sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1)));
-        Buffers = static_cast<PINTERMEDIATE_BUFFER_WOW64>(malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64)));
-
-        if (Buffers && pEthRequest)
-        {
-            memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
-            memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-            pEthRequest->hAdapterHandle.QuadPart = adapter64;
-            pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
-
-            for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
-            {
-                // Initialize INTERMEDIATE_BUFFER_WOW64
-                Buffers[i].m_dwDeviceFlags = pPackets->EthPacket[i].Buffer->m_dwDeviceFlags;
-                Buffers[i].m_Flags = pPackets->EthPacket[i].Buffer->m_Flags;
-                Buffers[i].m_8021q = pPackets->EthPacket[i].Buffer->m_8021q;
-                Buffers[i].m_FilterID = pPackets->EthPacket[i].Buffer->m_FilterID;
-                memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG) * 4);
-                Buffers[i].m_Length = pPackets->EthPacket[i].Buffer->m_Length;
-                memmove(Buffers[i].m_IBuffer, pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_Length);
-
-                // Initialize ETH_REQUEST_WOW64
-                pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-                pEthRequest->EthPacket[i].Buffer.LowPart = reinterpret_cast<ULONG_PTR>(&Buffers[i]);
-            }
-
-            bIOResult = DeviceIoControl(
-                IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
-                pEthRequest,
-                sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1),
-                NULL,
-                0,
-                NULL,   // Bytes Returned
-                NULL
-            );
-
-            free(Buffers);
-            free(pEthRequest);
-        }
-        else
-        {
-            if (Buffers)
-                free(Buffers);
-
-            if (pEthRequest)
-                free(pEthRequest);
-
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter))
             return FALSE;
-        }
+        result = SdkSendPacketsWow64(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER),
+            adapter, pPackets, count, bytes);
     }
     else
-#endif //_WIN64
+#endif
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
-            pPackets,
-            sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet) * (pPackets->dwPacketsNumber - 1),
-            NULL,
-            0,
-            NULL,   // Bytes Returned
-            NULL
-        );
+        int requestBytes;
+        if (!SdkPacketRequestBytes(count, offsetof(ETH_M_REQUEST, EthPacket), sizeof(NDISRD_ETH_Packet), requestBytes))
+            return FALSE;
+        result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER),
+            pPackets, requestBytes, NULL, 0, bytes);
     }
-
-    return bIOResult;
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -1021,104 +1035,44 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
  */
 BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 {
-#ifndef _WIN64
-    ULONGLONG adapter64 = 0;
-    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
-        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+    if (pPackets == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
-#endif
-
-    BOOL bIOResult = FALSE;
-
+    }
+    const DWORD capacity = pPackets->dwPacketsNumber;
+    pPackets->dwPacketsSuccess = 0;
+    DWORD bytes = 0;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
-
-        if (!pEthRequest)
-            return bIOResult;
-
-        PINTERMEDIATE_BUFFER_WOW64 Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-
-        if (!Buffers)
-        {
-            if (pEthRequest)
-                free(pEthRequest);
-
-            return bIOResult;
-        }
-
-        memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
-        memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-
-        if (Buffers && pEthRequest)
-        {
-            pEthRequest->hAdapterHandle.QuadPart = adapter64;
-            pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
-
-            for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
-            {
-                // Initialize ETH_REQUEST_WOW64
-                pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-                pEthRequest->EthPacket[i].Buffer.LowPart = (ULONG_PTR)&Buffers[i];
-            }
-
-            bIOResult = DeviceIoControl(
-                IOCTL_NDISRD_READ_PACKETS,
-                pEthRequest,
-                sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1),
-                pEthRequest,
-                sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1),
-                NULL,   // Bytes Returned
-                NULL
-            );
-
-            if (bIOResult)
-            {
-                pPackets->dwPacketsSuccess = pEthRequest->dwPacketsSuccess;
-
-                for (unsigned i = 0; i < pEthRequest->dwPacketsSuccess; ++i)
-                {
-                    // Copy back
-                    pPackets->EthPacket[i].Buffer->m_dwDeviceFlags = Buffers[i].m_dwDeviceFlags;
-                    pPackets->EthPacket[i].Buffer->m_Flags = Buffers[i].m_Flags;
-                    pPackets->EthPacket[i].Buffer->m_8021q = Buffers[i].m_8021q;
-                    pPackets->EthPacket[i].Buffer->m_FilterID = Buffers[i].m_FilterID;
-                    memmove(pPackets->EthPacket[i].Buffer->m_Reserved, Buffers[i].m_Reserved, sizeof(ULONG) * 4);
-                    pPackets->EthPacket[i].Buffer->m_Length = Buffers[i].m_Length;
-                    memmove(pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_IBuffer, Buffers[i].m_Length);
-                }
-            }
-
-            free(Buffers);
-            free(pEthRequest);
-        }
-        else
-        {
-            if (Buffers)
-                free(Buffers);
-
-            if (pEthRequest)
-                free(pEthRequest);
-
+        ULONGLONG adapter = 0;
+        if (!m_Wow64Helper.From32to64Handle(reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter))
             return FALSE;
-        }
+        const BOOL result = SdkReadPacketsWow64(*this, adapter, pPackets, capacity, bytes);
+        m_BytesReturned = bytes;
+        return result;
     }
-    else
-#endif //_WIN64
+#endif
+    int requestBytes;
+    if (!SdkPacketRequestBytes(capacity, offsetof(ETH_M_REQUEST, EthPacket), sizeof(NDISRD_ETH_Packet), requestBytes))
+        return FALSE;
+    const BOOL result = SdkSynchronousIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_READ_PACKETS),
+        pPackets, requestBytes, pPackets, requestBytes, bytes);
+    m_BytesReturned = bytes;
+    if (!result)
     {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_READ_PACKETS,
-            pPackets,
-            sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet) * (pPackets->dwPacketsNumber - 1),
-            pPackets,
-            sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet) * (pPackets->dwPacketsNumber - 1),
-            NULL,   // Bytes Returned
-            NULL
-        );
+        pPackets->dwPacketsSuccess = 0;
+        return FALSE;
     }
-
-    return bIOResult;
+    if (bytes < offsetof(ETH_M_REQUEST, EthPacket) || bytes > static_cast<DWORD>(requestBytes) ||
+        pPackets->dwPacketsSuccess > capacity)
+    {
+        pPackets->dwPacketsSuccess = 0;
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    return TRUE;
 }
 
 /**
@@ -2581,24 +2535,11 @@ BOOL CNdisApi::AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
  */
 BOOL CNdisApi::ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const
 {
-    if (m_bIsWow64Process)
-        return FALSE;
-
-    UNSORTED_READ_SEND_REQUEST request = { Packets, dwPacketsNum };
-
-    const BOOL bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_READ_PACKETS_UNSORTED,
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    *pdwPacketsSuccess = request.packets_num;
-
-    return bIOResult;
+    DWORD bytes = 0;
+    const BOOL result = SdkUnsortedPacketIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_READ_PACKETS_UNSORTED),
+        Packets, dwPacketsNum, pdwPacketsSuccess, m_bIsWow64Process, bytes);
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -2617,24 +2558,11 @@ BOOL CNdisApi::ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacket
  */
 BOOL CNdisApi::SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const
 {
-    if (m_bIsWow64Process)
-        return FALSE;
-
-    UNSORTED_READ_SEND_REQUEST request = { Packets, dwPacketsNum };
-
-    const BOOL bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER_UNSORTED,
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    *pdwPacketSuccess = request.packets_num;
-
-    return bIOResult;
+    DWORD bytes = 0;
+    const BOOL result = SdkUnsortedPacketIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER_UNSORTED),
+        Packets, dwPacketsNum, pdwPacketSuccess, m_bIsWow64Process, bytes);
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
@@ -2653,24 +2581,11 @@ BOOL CNdisApi::SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWOR
  */
 BOOL CNdisApi::SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const
 {
-    if (m_bIsWow64Process)
-        return FALSE;
-
-    UNSORTED_READ_SEND_REQUEST request = { Packets, dwPacketsNum };
-
-    const BOOL bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_SEND_PACKET_TO_MSTCP_UNSORTED,
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        &request,
-        sizeof(UNSORTED_READ_SEND_REQUEST),
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    *pdwPacketSuccess = request.packets_num;
-
-    return bIOResult;
+    DWORD bytes = 0;
+    const BOOL result = SdkUnsortedPacketIoControl(*this, static_cast<DWORD>(IOCTL_NDISRD_SEND_PACKET_TO_MSTCP_UNSORTED),
+        Packets, dwPacketsNum, pdwPacketSuccess, m_bIsWow64Process, bytes);
+    m_BytesReturned = bytes;
+    return result;
 }
 
 /**
