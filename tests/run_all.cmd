@@ -2,7 +2,7 @@
 rem run_all.cmd - build and run the SDK's offline regressions.
 rem
 rem   run_all.cmd                 build + run for x64 and x86; exit code 0 iff every test passed
-rem   run_all.cmd ablation        additionally compile the SAME tests against the PRE-FIX SDK and
+rem   run_all.cmd ablation        additionally compile the SAME OID tests against the PRE-FIX SDK and
 rem                               require them to FAIL, which is what makes them a regression
 rem                               rather than a description of the current code
 rem   run_all.cmd ablation <rev>  use <rev> instead of the default pre-fix commit
@@ -37,6 +37,8 @@ if not defined VCVARSALL (
 
 call :arch x64
 call :arch x86
+call :handles x64
+call :handles x86
 
 if "%ABLATION%"=="1" (
     call :stage_prefix
@@ -58,6 +60,14 @@ rem ---------------------------------------------------------------- the current
 echo.
 echo === oid_test %~1 ^(ndisapi\ndisapi.cpp as shipped^)
 call :build_and_run "%~1" "%ROOT%" "%OUT%\%~1" oid_test
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+rem ---------------------------------------------------------------- handle/table regressions
+:handles
+echo.
+echo === handles_test %~1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\handles\Run-Handles.ps1" -Arch "%~1"
 if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
 

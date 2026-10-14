@@ -4,7 +4,7 @@ No driver, no adapter, no administrator rights. `run_all.cmd` builds and runs ev
 
 ```
 run_all.cmd            build + run for x64 and x86
-run_all.cmd ablation   also compile the same tests against the PRE-FIX SDK and require them to fail
+run_all.cmd ablation   also run the historical OID regression ablation against the PRE-FIX SDK
 ```
 
 `OVERALL RESULT=0` is the only passing outcome.
@@ -34,6 +34,10 @@ mapping.
 `DeviceIoControl` and `GetOverlappedResult`. A real driver, real NDIS and real asynchrony are not
 modelled; what is modelled is the three answers the I/O manager can give - immediate success,
 immediate failure, and `ERROR_IO_PENDING` followed by a terminal status.
+
+Adapter enumeration supplies a genuine full 64-bit identity and the test consumes the SDK's
+returned public handle. OID immediate and terminal byte counts have independent controls; the
+historical status assertions remain unchanged.
 
 The shim is force-included (`/FIoidshim.h`) **after** `<windows.h>` has declared the real
 functions, so the platform declarations are untouched and only the SDK's own calls are diverted.
@@ -67,3 +71,11 @@ reported as success, with `GetLastError()` still `0x3E5` `ERROR_IO_PENDING`) and
 `short GET success: returns TRUE - got 0` (the successful short transfer reported as a failure).
 
 Pass a different revision as the second argument to ablate against something else.
+
+## Handle and static table regressions
+
+The maintained [handles fixture](handles/README.md) is also run on x64 and genuine WOW64.
+It covers checked mapping at all callers, stable enumeration identities, immutable input staging,
+transactional table outputs, terminal completion storage lifetime, byte extents and overflow.
+Its pre-implementation oracle was frozen before the Task12a change; the three C++ fixture files
+are preserved byte-for-byte. The historical 20aa90f ablation above is specific to the OID suite.

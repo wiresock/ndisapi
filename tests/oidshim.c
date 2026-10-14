@@ -11,9 +11,16 @@
 
 #define OIDSHIM_IMPL   /* this file calls the REAL Win32 functions */
 #include "oidshim.h"
+#include <iphlpapi.h>
+/* The SDK wire ABI intentionally uses anonymous structs/unions in C. */
+#pragma warning(push)
+#pragma warning(disable:4201)
+#include "Common.h"
+#pragma warning(pop)
 
 SHIM_IOCTL_MODE g_ShimIoMode = ShimIoImmediateSuccess;
 DWORD g_ShimIoImmediateError = ERROR_INVALID_FUNCTION;
+DWORD g_ShimIoImmediateBytes = 0;
 
 BOOL  g_ShimTerminalSuccess = TRUE;
 DWORD g_ShimTerminalError = ERROR_GEN_FAILURE;
@@ -35,6 +42,7 @@ void ShimReset(void)
 {
     g_ShimIoMode = ShimIoImmediateSuccess;
     g_ShimIoImmediateError = ERROR_INVALID_FUNCTION;
+    g_ShimIoImmediateBytes = 0;
     g_ShimTerminalSuccess = TRUE;
     g_ShimTerminalError = ERROR_GEN_FAILURE;
     g_ShimTerminalBytes = 0;
@@ -92,6 +100,41 @@ BOOL WINAPI ShimDeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD inLen, LP
     UNREFERENCED_PARAMETER(h);
     UNREFERENCED_PARAMETER(in);
 
+    /* Seed the genuine constructor/refresh mapping with a full 64-bit identity.
+       Enumeration is setup, separate from the programmable OID operation. */
+    if (code == IOCTL_NDISRD_GET_TCPIP_INTERFACES)
+    {
+        BOOL wow = FALSE;
+        ULONGLONG adapterIdentity = 0x1122334455667788ULL;
+#ifndef _WIN64
+        IsWow64Process(GetCurrentProcess(), &wow);
+#endif
+        if (wow && out != NULL && outLen == sizeof(TCP_AdapterList_WOW64))
+        {
+            PTCP_AdapterList_WOW64 adapters = (PTCP_AdapterList_WOW64)out;
+            ZeroMemory(adapters, sizeof(*adapters));
+            adapters->m_nAdapterCount = 1;
+            adapters->m_nAdapterHandle[0].QuadPart = adapterIdentity;
+            adapters->m_usMTU[0] = 1500;
+        }
+        else if (!wow && out != NULL && outLen == sizeof(TCP_AdapterList))
+        {
+            PTCP_AdapterList adapters = (PTCP_AdapterList)out;
+            ZeroMemory(adapters, sizeof(*adapters));
+            adapters->m_nAdapterCount = 1;
+            adapters->m_nAdapterHandle[0] = (HANDLE)(ULONG_PTR)adapterIdentity;
+            adapters->m_usMTU[0] = 1500;
+        }
+        else
+        {
+            SetLastError(ERROR_BAD_LENGTH);
+            return FALSE;
+        }
+        if (ret)
+            *ret = outLen;
+        return TRUE;
+    }
+
     InterlockedIncrement(&g_ShimIoctlCalls);
     g_ShimLastIoctlCode = code;
     g_ShimLastInSize = inLen;
@@ -104,7 +147,7 @@ BOOL WINAPI ShimDeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD inLen, LP
     }
 
     if (ret)
-        *ret = 0;
+        *ret = g_ShimIoImmediateBytes;
 
     switch (g_ShimIoMode)
     {

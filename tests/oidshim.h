@@ -48,6 +48,7 @@ typedef enum _SHIM_IOCTL_MODE
 } SHIM_IOCTL_MODE;
 
 extern SHIM_IOCTL_MODE g_ShimIoMode;
+extern DWORD g_ShimIoImmediateBytes;      /* independent immediate completion byte count */
 extern DWORD g_ShimIoImmediateError;      /* the error an immediate failure reports */
 
 /* the terminal status GetOverlappedResult reports for the completed request */
