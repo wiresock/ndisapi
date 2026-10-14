@@ -2,7 +2,7 @@
 rem run_all.cmd - build and run the SDK's offline regressions.
 rem
 rem   run_all.cmd                 build + run for x64 and x86; exit code 0 iff every test passed
-rem   run_all.cmd ablation        additionally run exact FastIO ablations and the SAME historical OID tests and
+rem   run_all.cmd ablation        additionally run exact checksum/FastIO ablations and the SAME historical OID tests and
 rem                               require them to FAIL, which is what makes them a regression
 rem                               rather than a description of the current code
 rem   run_all.cmd ablation <rev>  use <rev> instead of the default pre-fix commit
@@ -45,12 +45,28 @@ call :fastio x64 standard
 call :fastio x64 jumbo
 call :fastio x86 standard
 call :fastio x86 jumbo
+call :checksum x64 standard modern
+call :checksum x64 standard legacy
+call :checksum x64 jumbo modern
+call :checksum x64 jumbo legacy
+call :checksum x86 standard modern
+call :checksum x86 standard legacy
+call :checksum x86 jumbo modern
+call :checksum x86 jumbo legacy
 
 if "%ABLATION%"=="1" (
     call :fastio_ablate x64 standard
     call :fastio_ablate x64 jumbo
     call :fastio_ablate x86 standard
     call :fastio_ablate x86 jumbo
+    call :checksum_ablate x64 standard modern
+    call :checksum_ablate x64 standard legacy
+    call :checksum_ablate x64 jumbo modern
+    call :checksum_ablate x64 jumbo legacy
+    call :checksum_ablate x86 standard modern
+    call :checksum_ablate x86 standard legacy
+    call :checksum_ablate x86 jumbo modern
+    call :checksum_ablate x86 jumbo legacy
     call :stage_prefix
     if not "!ERRORLEVEL!"=="0" (
         echo ABLATION RESULT: SETUP_FAILED - the pre-fix sources could not be staged
@@ -101,6 +117,21 @@ goto :eof
 echo.
 echo === fastio_reader ablation %~1 %~2
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\fastio_reader\Run-Ablation.ps1" -Arch "%~1" -Layout "%~2"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+rem ---------------------------------------------------------------- actual checksum methods and exports
+:checksum
+echo.
+echo === checksum %~1 %~2 %~3
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\checksum\Run-Checksum.ps1" -Arch "%~1" -Layout "%~2" -Codec "%~3"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+:checksum_ablate
+echo.
+echo === checksum ablation %~1 %~2 %~3
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\checksum\Run-Ablation.ps1" -Arch "%~1" -Layout "%~2" -Codec "%~3"
 if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
 

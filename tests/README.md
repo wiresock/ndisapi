@@ -4,7 +4,7 @@ No driver, no adapter, no administrator rights. `run_all.cmd` builds and runs ev
 
 ```
 run_all.cmd            build + run for x64 and x86
-run_all.cmd ablation   also run the historical OID regression ablation against the PRE-FIX SDK
+run_all.cmd ablation   also run exact checksum/FastIO ablations and the historical OID regression ablation
 ```
 
 `OVERALL RESULT=0` is the only passing outcome.
@@ -89,3 +89,12 @@ metadata/counts, independent staging arithmetic, and transactional WOW64 frame c
 ## FastIO example reader
 
 `fastio_reader/Run-Reader.ps1` compiles the actual example class/header for x86/x64 and standard/jumbo layouts, including its worker and private section-drain helper. All four configurations run from `run_all.cmd`; `ablation` also requires exact pre-fix worker and targeted remaining-capacity failure contracts. See `fastio_reader/README.md` for schedules, substituted boundaries, counts, and runtime/evidence safeguards. No driver is used.
+
+## Checksum fixed-array ceilings
+
+The [checksum fixture](checksum/README.md) compiles the complete actual SDK and
+exercises all four methods and their C exports on x64 and genuine WOW64, with
+standard/jumbo frames and both checksum compatibility branches. All eight runs
+require guarded oversized rejection and unchanged valid golden checksums. The
+optional ablation uses the exact accepted pre-ceiling SDK and requires its named
+66 failures; crashes or unrelated failures cannot satisfy it.
