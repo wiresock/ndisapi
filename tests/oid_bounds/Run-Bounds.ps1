@@ -47,10 +47,10 @@ elseif($drift) {$invalid='Input changed'}
 elseif($err.Trim()) {$invalid='Unexpected stderr'}
 elseif(-not ($runExit -is [int]) -or $runExit -notin @(0,1)) {$invalid='Abnormal child exit'}
 elseif(-not $footer.Success -or [regex]::Matches($log,'(?m)^RESULT=').Count -ne 1) {$invalid='Invalid footer'}
-elseif([int]$footer.Groups[1].Value -ne 416 -or $assertions -ne 416 -or [int]$footer.Groups[2].Value -ne $failed -or [int]$footer.Groups[3].Value -ne $runExit -or (($failed -eq 0) -ne ($runExit -eq 0))) {$invalid='Incomplete or inconsistent verdict'}
+elseif([int]$footer.Groups[1].Value -ne 978 -or $assertions -ne 978 -or [int]$footer.Groups[2].Value -ne $failed -or [int]$footer.Groups[3].Value -ne $runExit -or (($failed -eq 0) -ne ($runExit -eq 0))) {$invalid='Incomplete or inconsistent verdict'}
 elseif($Arch -eq 'x86' -and $log -notmatch '(?m)^branch=WOW64 ') {$invalid='x86 did not execute genuine WOW64'}
 elseif($Arch -eq 'x64' -and $log -notmatch '(?m)^branch=native ') {$invalid='x64 did not execute native branch'}
-$controlFailures=[regex]::Matches($log,'(?m)^\[FAIL\].*(valid=|pending failure|exact INT_MAX envelope)').Count
+$controlFailures=[regex]::Matches($log,'(?m)^\[FAIL\].*(valid=|valid reply=|terminal failure|exact INT_MAX envelope|copy guard)').Count
 [pscustomobject]@{architecture=$Arch;build_exit=$buildExit;run_exit=$runExit;checks=$assertions;failures=$failed;control_failures=$controlFailures;valid_evidence=($invalid -eq '');invalid_reason=$invalid;before=$before;after=$after;utc=[DateTime]::UtcNow.ToString('o')} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Encoding UTF8
 $log.Split([char]10) | Select-Object -First 1
