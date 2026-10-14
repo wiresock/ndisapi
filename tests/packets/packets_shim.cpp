@@ -107,6 +107,7 @@ static void WriteResponse() {
 }
 BOOL WINAPI PacketIoctl(HANDLE,DWORD code,void* in,DWORD inLen,void* out,DWORD outLen,DWORD* bytes,OVERLAPPED* ov) {
     if(code==IOCTL_NDISRD_GET_TCPIP_INTERFACES)return Enumerate(out,outLen,bytes);
+    if(PacketEventsEnabled())return PacketEventsIoctl(in,inLen,bytes,ov);
     ++g_Packet.ioctlCalls;g_Packet.code=code;g_Packet.inLength=inLen;g_Packet.outLength=outLen;
     g_Packet.inputPointer=in;g_Packet.outputPointer=out;g_Packet.overlap=ov;
     if(inLen>1024*1024||outLen>1024*1024) {++g_Packet.oversizedInputs;SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
@@ -130,6 +131,7 @@ BOOL WINAPI PacketIoctl(HANDLE,DWORD code,void* in,DWORD inLen,void* out,DWORD o
     return TRUE;
 }
 BOOL WINAPI PacketCompletion(HANDLE,OVERLAPPED* ov,DWORD* bytes,BOOL wait) {
+    if(PacketEventsEnabled())return PacketEventsCompletion(ov,bytes,wait);
     ++g_Packet.completions;if(wait)++g_Packet.waits;
     if(g_Packet.pending&&ov!=g_Packet.overlap) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
     if(g_Packet.pending&&g_Packet.inputPointer&&g_Packet.capturedInput&&memcmp(g_Packet.input,g_Packet.inputPointer,g_Packet.capturedInput)!=0)++g_Packet.completionInputChanged;
@@ -139,7 +141,7 @@ BOOL WINAPI PacketCompletion(HANDLE,OVERLAPPED* ov,DWORD* bytes,BOOL wait) {
 }
 BOOL WINAPI PacketCloseHandle(HANDLE h) {
     if(g_Packet.pending&&h==g_Packet.pendingEvent)++g_Packet.closedWhilePending;
-    const BOOL result=::CloseHandle(h);if(g_Packet.cleanupClobbersError)SetLastError(ERROR_INVALID_DATA);return result;
+    const BOOL result=::CloseHandle(h);PacketEventsObserveClose(h,result);if(g_Packet.cleanupClobbersError)SetLastError(ERROR_INVALID_DATA);return result;
 }
 void* PacketMalloc(size_t bytes) {
     ++g_Packet.allocationCalls;
