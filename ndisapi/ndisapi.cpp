@@ -3328,6 +3328,11 @@ CNdisApi::ConvertWindows9xAdapterName(
  */
 void CNdisApi::RecalculateIPChecksum(PINTERMEDIATE_BUFFER pPacket)
 {
+    if (pPacket->m_Length > sizeof(pPacket->m_IBuffer))
+    {
+        return;
+    }
+
     unsigned int sum = 0;
 
     // Get a pointer to the IP header within the packet
@@ -3359,6 +3364,11 @@ void CNdisApi::RecalculateIPChecksum(PINTERMEDIATE_BUFFER pPacket)
  */
 void CNdisApi::RecalculateICMPChecksum(PINTERMEDIATE_BUFFER pPacket)
 {
+    if (pPacket->m_Length > sizeof(pPacket->m_IBuffer))
+    {
+        return;
+    }
+
     unsigned int sum = 0;
     icmphdr_ptr pIcmpHeader;
     const iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(&pPacket->m_IBuffer[sizeof(ether_header)]);
@@ -3413,6 +3423,11 @@ void CNdisApi::RecalculateICMPChecksum(PINTERMEDIATE_BUFFER pPacket)
  */
 void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
 {
+    if (pPacket->m_Length > sizeof(pPacket->m_IBuffer))
+    {
+        return;
+    }
+
     tcphdr_ptr pTcpHeader;
     unsigned int sum = 0;
 
@@ -3481,6 +3496,11 @@ void CNdisApi::RecalculateTCPChecksum(PINTERMEDIATE_BUFFER pPacket)
  * the UDP packet. The calculated checksum is stored in the UDP header of the packet.
  */
 void CNdisApi::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket) {
+    if (pPacket->m_Length > sizeof(pPacket->m_IBuffer))
+    {
+        return;
+    }
+
     unsigned int sum = 0;
 
     const iphdr_ptr pIpHeader = reinterpret_cast<iphdr_ptr>(&pPacket->m_IBuffer[sizeof(ether_header)]);
