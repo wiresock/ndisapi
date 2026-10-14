@@ -15,6 +15,8 @@
 
 #include "precomp.h"
 #include "inet_checksum.h"
+#include <limits.h>
+#include <stddef.h>
 
 #if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
 #include <mutex>
@@ -43,6 +45,108 @@
 
 #define OID_GEN_CURRENT_PACKET_FILTER            0x0001010E
 
+
+// Synchronous convenience methods must own their OVERLAPPED and request storage
+// until terminal completion. The public DeviceIoControl wrapper remains async.
+static BOOL SdkSynchronousIoControl(const CNdisApi& api, DWORD service,
+    void* input, int inputBytes, void* output, int outputBytes, DWORD& bytesReturned)
+{
+    OVERLAPPED overlap = { 0 };
+    bytesReturned = 0;
+    overlap.hEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+    if (overlap.hEvent == NULL)
+        return FALSE;
+
+    BOOL result = api.DeviceIoControl(service, input, inputBytes, output,
+        outputBytes, &bytesReturned, &overlap);
+    if (!result && ::GetLastError() == ERROR_IO_PENDING)
+    {
+        // The immediate byte count is not a terminal result.
+        bytesReturned = 0;
+        result = api.CompleteOverlappedRequest(result, &overlap, &bytesReturned);
+    }
+
+    const DWORD error = ::GetLastError();
+    ::CloseHandle(overlap.hEvent);
+    if (!result)
+        ::SetLastError(error);
+    return result;
+}
+
+// No policy rule cap belongs in the SDK. INT_MAX is the narrowest byte-length
+// boundary in this call chain (SIZE_T allocation, DWORD Win32, exported int API).
+static BOOL SdkStaticTableBytes(DWORD count, int& bytes)
+{
+    const size_t header = offsetof(STATIC_FILTER_TABLE, m_StaticFilters);
+    if (count > (static_cast<size_t>(INT_MAX) - header) / sizeof(STATIC_FILTER))
+    {
+        ::SetLastError(ERROR_ARITHMETIC_OVERFLOW);
+        return FALSE;
+    }
+    bytes = static_cast<int>(header + static_cast<size_t>(count) * sizeof(STATIC_FILTER));
+    return TRUE;
+}
+
+// Kept compatible with the SDK's older compiler branch. Cleanup must not hide
+// an IOCTL or conversion error, including allocation-injection test seams.
+class SdkByteBuffer
+{
+public:
+    SdkByteBuffer() : m_Data(NULL) {}
+    ~SdkByteBuffer()
+    {
+        const DWORD error = ::GetLastError();
+        free(m_Data);
+        ::SetLastError(error);
+    }
+    BOOL Allocate(size_t bytes)
+    {
+        m_Data = malloc(bytes);
+        if (m_Data == NULL)
+        {
+            ::SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        return TRUE;
+    }
+    void* Get() const { return m_Data; }
+private:
+    SdkByteBuffer(const SdkByteBuffer&);
+    SdkByteBuffer& operator=(const SdkByteBuffer&);
+    void* m_Data;
+};
+
+static BOOL SdkReadStaticTable(const CNdisApi& api, DWORD service,
+    PSTATIC_FILTER_TABLE caller, SdkByteBuffer& buffer, DWORD& bytesReturned)
+{
+    bytesReturned = 0;
+    if (caller == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    const DWORD capacity = caller->m_TableSize;
+    int capacityBytes;
+    if (!SdkStaticTableBytes(capacity, capacityBytes) || !buffer.Allocate(capacityBytes))
+        return FALSE;
+
+    memset(buffer.Get(), 0, capacityBytes);
+    if (!SdkSynchronousIoControl(api, service, NULL, 0, buffer.Get(), capacityBytes, bytesReturned))
+        return FALSE;
+
+    const DWORD header = static_cast<DWORD>(offsetof(STATIC_FILTER_TABLE, m_StaticFilters));
+    const PSTATIC_FILTER_TABLE result = static_cast<PSTATIC_FILTER_TABLE>(buffer.Get());
+    if (bytesReturned < header || bytesReturned > static_cast<DWORD>(capacityBytes) ||
+        result->m_TableSize > capacity ||
+        result->m_TableSize > (bytesReturned - header) / sizeof(STATIC_FILTER))
+    {
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 // OS version information
 CVersionInfo CNdisApi::ms_Version;
 
@@ -56,7 +160,8 @@ CVersionInfo CNdisApi::ms_Version;
  *
  * Usage:
  * auto& wow64Helper = CNdisApi::CWow64Helper::getInstance();
- * unsigned int handle32 = wow64Helper.From64to32Handle(handle64);
+ * unsigned int handle32;
+ * BOOL valid = wow64Helper.From64to32Handle(handle64, handle32);
  */
 class CNdisApi::CWow64Helper
 {
@@ -94,58 +199,78 @@ public:
      * @brief Updates the handle mappings based on the provided TCP_AdapterList_WOW64.
      * @param adapterListWow64 A reference to the TCP_AdapterList_WOW64 structure.
      */
-    void Update(const TCP_AdapterList_WOW64& adapterListWow64);
+    BOOL Update(const TCP_AdapterList_WOW64& adapterListWow64, HANDLE* handles32);
 
     /**
      * @brief Converts a 32-bit handle to its 64-bit equivalent.
      * @param handle The 32-bit handle to convert.
-     * @return The corresponding 64-bit handle.
+     * @return TRUE for a known handle (or actual wildcard zero), FALSE otherwise.
      */
-    ULONGLONG From32to64Handle(const unsigned int handle)
+    BOOL From32to64Handle(const ULONGLONG handle, ULONGLONG& result)
     {
+        result = 0;
+        if (handle == 0)
+            return TRUE; // Actual zero is the wildcard, never a table index.
+        if (handle > ADAPTER_LIST_SIZE)
+        {
+            ::SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+
+        {
 #if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
-        std::shared_lock <std::shared_mutex> lock(m_SharedLock);
+            std::shared_lock <std::shared_mutex> lock(m_SharedLock);
 #else
-        InternalLock();
-#endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
-
-        const ULONGLONG result = m_Handle32to64[handle];
-
+            InternalLock();
+#endif
+            result = m_Handle32to64[static_cast<unsigned int>(handle)];
 #if _MSC_VER < 1800 || defined(_USING_V110_SDK71_)
-        InternalUnlock();
-#endif //_MSC_VER < 1800 || defined(_USING_V110_SDK71_)
-
-        return result;
+            InternalUnlock();
+#endif
+        }
+        if (result == 0)
+        {
+            ::SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        return TRUE;
     }
 
     /**
      * @brief Converts a 64-bit handle to its 32-bit equivalent.
      * @param handle The 64-bit handle to convert.
-     * @return The corresponding 32-bit handle.
+     * @return TRUE for a known handle (or actual wildcard zero), FALSE otherwise.
      */
-    unsigned int From64to32Handle(const ULONGLONG handle)
+    BOOL From64to32Handle(const ULONGLONG handle, unsigned int& result)
     {
-        unsigned int result = 0;
+        result = 0;
+        if (handle == 0)
+            return TRUE;
 
-#if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
-        std::shared_lock <std::shared_mutex> lock(m_SharedLock);
-#else
-        InternalLock();
-#endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
-
-        for (unsigned int i = 1; i < ADAPTER_LIST_SIZE + 1; ++i)
         {
-            if (m_Handle32to64[i] == handle)
+#if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
+            std::shared_lock <std::shared_mutex> lock(m_SharedLock);
+#else
+            InternalLock();
+#endif
+            for (unsigned int i = 1; i <= ADAPTER_LIST_SIZE; ++i)
             {
-                result = i;
-                break;
+                if (m_Handle32to64[i] == handle)
+                {
+                    result = i;
+                    break;
+                }
             }
-        }
-
 #if _MSC_VER < 1800 || defined(_USING_V110_SDK71_)
-        InternalUnlock();
-#endif //_MSC_VER < 1800 || defined(_USING_V110_SDK71_)
-        return result;
+            InternalUnlock();
+#endif
+        }
+        if (result == 0)
+        {
+            ::SetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        return TRUE;
     }
 
 private:
@@ -183,76 +308,83 @@ private:
  * @param adapterListWow64 A reference to the TCP_AdapterList_WOW64 structure containing the
  *                         current adapter handles.
  */
-void CNdisApi::CWow64Helper::Update(const TCP_AdapterList_WOW64& adapterListWow64)
+BOOL CNdisApi::CWow64Helper::Update(const TCP_AdapterList_WOW64& adapterListWow64, HANDLE* handles32)
 {
+    const unsigned count = adapterListWow64.m_nAdapterCount;
+    if (count > ADAPTER_LIST_SIZE)
+    {
+        ::SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    for (unsigned i = 0; i < count; ++i)
+    {
+        if (adapterListWow64.m_nAdapterHandle[i].QuadPart == 0)
+        {
+            ::SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        for (unsigned j = 0; j < i; ++j)
+        {
+            if (adapterListWow64.m_nAdapterHandle[i].QuadPart == adapterListWow64.m_nAdapterHandle[j].QuadPart)
+            {
+                ::SetLastError(ERROR_INVALID_DATA);
+                return FALSE;
+            }
+        }
+    }
+
+    BOOL valid = TRUE;
+    {
 #if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
-    std::unique_lock <std::shared_mutex> _lock(m_SharedLock);
+        std::unique_lock <std::shared_mutex> lock(m_SharedLock);
 #else
-    InternalLock();
-#endif // _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
+        InternalLock();
+#endif
+        ULONGLONG updated[ADAPTER_LIST_SIZE + 1];
+        memcpy(updated, m_Handle32to64, sizeof(updated));
+        updated[0] = 0;
 
-    if (m_Handle32to64[0] == 0)
-    {
-        // First call to GetTcpipBoundAdaptersInfo, initialize m_Handle32to64
-        m_Handle32to64[0] = (-1);
-
-        for (unsigned i = 0; i < adapterListWow64.m_nAdapterCount; ++i)
+        // Preserve indices for surviving adapters, even after reorder/removal.
+        // Empty enumeration invalidates every former mapping.
+        for (unsigned slot = 1; slot <= ADAPTER_LIST_SIZE; ++slot)
         {
-            m_Handle32to64[i + 1] = adapterListWow64.m_nAdapterHandle[i].QuadPart;
-        }
-    }
-    else
-    {
-        for (unsigned i = 0; i < adapterListWow64.m_nAdapterCount; ++i)
-        {
-            // Check if we already have adapterListWow64.m_nAdapterHandle[i] adapter in the translation table
-            bool bAlreadyExists = false;
-
-            for (unsigned j = 1; j < ADAPTER_LIST_SIZE + 1; ++j)
-            {
-                if (m_Handle32to64[j] == adapterListWow64.m_nAdapterHandle[i].QuadPart)
-                {
-                    bAlreadyExists = true;
+            unsigned i;
+            for (i = 0; i < count; ++i)
+                if (updated[slot] == adapterListWow64.m_nAdapterHandle[i].QuadPart)
                     break;
-                }
-            }
-
-            if (!bAlreadyExists)
-            {
-                // This is a new interface, not present in the table
-                // Search through the table for the first entry which can be replaced
-
-                unsigned pos = 0;
-
-                for (unsigned j = 1; j < ADAPTER_LIST_SIZE + 1; ++j)
-                {
-                    for (unsigned k = 0; k < adapterListWow64.m_nAdapterCount; ++k)
-                    {
-                        if (m_Handle32to64[j] == adapterListWow64.m_nAdapterHandle[k].QuadPart)
-                            break;
-
-                        // We are at the last element and m_Handle32to64[j] is not found
-                        if (k == (adapterListWow64.m_nAdapterCount - 1))
-                        {
-                            pos = j;
-                        }
-
-                        if (pos)
-                            break;
-                    }
-                }
-
-                if (pos)
-                {
-                    m_Handle32to64[pos] = adapterListWow64.m_nAdapterHandle[i].QuadPart;
-                }
-            }
+            if (i == count)
+                updated[slot] = 0;
         }
-    }
-
+        for (unsigned i = 0; i < count; ++i)
+        {
+            const ULONGLONG handle = adapterListWow64.m_nAdapterHandle[i].QuadPart;
+            unsigned slot;
+            for (slot = 1; slot <= ADAPTER_LIST_SIZE; ++slot)
+                if (updated[slot] == handle)
+                    break;
+            if (slot > ADAPTER_LIST_SIZE)
+            {
+                for (slot = 1; slot <= ADAPTER_LIST_SIZE; ++slot)
+                    if (updated[slot] == 0)
+                        break;
+            }
+            if (slot > ADAPTER_LIST_SIZE)
+            {
+                valid = FALSE;
+                break;
+            }
+            updated[slot] = handle;
+            handles32[i] = reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(slot));
+        }
+        if (valid)
+            memcpy(m_Handle32to64, updated, sizeof(updated));
 #if _MSC_VER < 1800 || defined(_USING_V110_SDK71_)
-    InternalUnlock();
-#endif //_MSC_VER < 1800 || defined(_USING_V110_SDK71_)
+        InternalUnlock();
+#endif
+    }
+    if (!valid)
+        ::SetLastError(ERROR_INVALID_DATA);
+    return valid;
 }
 
 /**
@@ -421,62 +553,44 @@ ULONG CNdisApi::GetVersion() const
  */
 BOOL CNdisApi::GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const
 {
-    BOOL bIOResult;
-
+    if (pAdapters == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
 #ifndef _WIN64
-    TCP_AdapterList_WOW64 adaptersList = { 0 };  // NOLINT(clang-diagnostic-missing-field-initializers)
-
     if (m_bIsWow64Process)
     {
-        // In case of WOW64 process pass our own structure to driver
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_GET_TCPIP_INTERFACES,
-            &adaptersList,
-            sizeof(TCP_AdapterList_WOW64),
-            &adaptersList,
-            sizeof(TCP_AdapterList_WOW64),
-            NULL,   // Bytes Returned
-            NULL
-        );
-
-        if (bIOResult)
+        TCP_AdapterList_WOW64 adaptersList = { 0 };
+        DWORD bytesReturned = 0;
+        const BOOL result = SdkSynchronousIoControl(*this,
+            static_cast<DWORD>(IOCTL_NDISRD_GET_TCPIP_INTERFACES),
+            &adaptersList, sizeof(adaptersList), &adaptersList, sizeof(adaptersList), bytesReturned);
+        m_BytesReturned = bytesReturned;
+        if (!result)
+            return FALSE;
+        if (bytesReturned != sizeof(adaptersList))
         {
-            // Update WOW64 handle conversion helper
-            m_Wow64Helper.Update(adaptersList);
-
-            // Zero-initialize
-            ZeroMemory(pAdapters, sizeof(TCP_AdapterList));
-
-            // Simply copy all the fields except adapters handles
-            pAdapters->m_nAdapterCount = adaptersList.m_nAdapterCount;
-            memmove(pAdapters->m_szAdapterNameList, adaptersList.m_szAdapterNameList, sizeof(pAdapters->m_szAdapterNameList));
-            memmove(pAdapters->m_nAdapterMediumList, adaptersList.m_nAdapterMediumList, sizeof(pAdapters->m_nAdapterMediumList));
-            memmove(pAdapters->m_czCurrentAddress, adaptersList.m_czCurrentAddress, sizeof(pAdapters->m_czCurrentAddress));
-            memmove(pAdapters->m_usMTU, adaptersList.m_usMTU, sizeof(pAdapters->m_usMTU));
-
-            // Convert 64 bit handles to 32 bit ones
-            for (size_t i = 0; i < pAdapters->m_nAdapterCount; ++i)
-            {
-                pAdapters->m_nAdapterHandle[i] = reinterpret_cast<HANDLE>(m_Wow64Helper.From64to32Handle(
-                    adaptersList.m_nAdapterHandle[i].QuadPart));
-            }
+            ::SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
         }
-    }
-    else
-#endif //_WIN64
-    {
-        bIOResult = DeviceIoControl(
-            IOCTL_NDISRD_GET_TCPIP_INTERFACES,
-            pAdapters,
-            sizeof(TCP_AdapterList),
-            pAdapters,
-            sizeof(TCP_AdapterList),
-            NULL,   // Bytes Returned
-            NULL
-        );
-    }
 
-    return bIOResult;
+        TCP_AdapterList translated = { 0 };
+        // Validate and update the map atomically with the returned indices.
+        if (!m_Wow64Helper.Update(adaptersList, translated.m_nAdapterHandle))
+            return FALSE;
+        translated.m_nAdapterCount = adaptersList.m_nAdapterCount;
+        memmove(translated.m_szAdapterNameList, adaptersList.m_szAdapterNameList, sizeof(translated.m_szAdapterNameList));
+        memmove(translated.m_nAdapterMediumList, adaptersList.m_nAdapterMediumList, sizeof(translated.m_nAdapterMediumList));
+        memmove(translated.m_czCurrentAddress, adaptersList.m_czCurrentAddress, sizeof(translated.m_czCurrentAddress));
+        memmove(translated.m_usMTU, adaptersList.m_usMTU, sizeof(translated.m_usMTU));
+        *pAdapters = translated;
+        return TRUE;
+    }
+#endif
+    return DeviceIoControl(
+        static_cast<DWORD>(IOCTL_NDISRD_GET_TCPIP_INTERFACES),
+        pAdapters, sizeof(TCP_AdapterList), pAdapters, sizeof(TCP_AdapterList), NULL, NULL);
 }
 
 /**
@@ -493,6 +607,13 @@ BOOL CNdisApi::GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const
  */
 BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -511,7 +632,7 @@ BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
         memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
 
         // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pPacket->hAdapterHandle);
+        EthRequest.hAdapterHandle.QuadPart = adapter64;
         EthRequest.EthPacket.Buffer.HighPart = 0;
         EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
@@ -557,6 +678,13 @@ BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -575,7 +703,7 @@ BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
         memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
 
         // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pPacket->hAdapterHandle);
+        EthRequest.hAdapterHandle.QuadPart = adapter64;
         EthRequest.EthPacket.Buffer.HighPart = 0;
         EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
@@ -622,6 +750,13 @@ BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPacket->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -631,7 +766,7 @@ BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
         INTERMEDIATE_BUFFER_WOW64 Buffer;
 
         // Initialize ETH_REQUEST_WOW64
-        EthRequest.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pPacket->hAdapterHandle);
+        EthRequest.hAdapterHandle.QuadPart = adapter64;
         EthRequest.EthPacket.Buffer.HighPart = 0;
         EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
@@ -690,6 +825,13 @@ BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
  */
 BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -705,7 +847,7 @@ BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
         {
             memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
             memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-            pEthRequest->hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle(reinterpret_cast<unsigned>(pPackets->hAdapterHandle));
+            pEthRequest->hAdapterHandle.QuadPart = adapter64;
             pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
             for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -781,6 +923,13 @@ BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
  */
 BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -796,7 +945,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
         {
             memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64) * (pPackets->dwPacketsNumber - 1));
             memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
-            pEthRequest->hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle(reinterpret_cast<unsigned>(pPackets->hAdapterHandle));
+            pEthRequest->hAdapterHandle.QuadPart = adapter64;
             pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
             for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -872,6 +1021,13 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
  */
 BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pPackets->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult = FALSE;
 
 #ifndef _WIN64
@@ -897,7 +1053,7 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 
         if (Buffers && pEthRequest)
         {
-            pEthRequest->hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pPackets->hAdapterHandle);
+            pEthRequest->hAdapterHandle.QuadPart = adapter64;
             pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
             for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -980,6 +1136,13 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
  */
 BOOL CNdisApi::SetAdapterMode(PADAPTER_MODE pMode) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pMode->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
@@ -987,7 +1150,7 @@ BOOL CNdisApi::SetAdapterMode(PADAPTER_MODE pMode) const
     {
         ADAPTER_MODE_WOW64 AdapterMode;
         AdapterMode.dwFlags = pMode->dwFlags;
-        AdapterMode.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle(reinterpret_cast<unsigned>(pMode->hAdapterHandle));
+        AdapterMode.hAdapterHandle.QuadPart = adapter64;
 
         bIOResult = DeviceIoControl(
             IOCTL_NDISRD_SET_ADAPTER_MODE,
@@ -1031,13 +1194,20 @@ BOOL CNdisApi::SetAdapterMode(PADAPTER_MODE pMode) const
  */
 BOOL CNdisApi::GetAdapterMode(PADAPTER_MODE pMode) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(pMode->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
         ADAPTER_MODE_WOW64 AdapterMode;
-        AdapterMode.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pMode->hAdapterHandle);
+        AdapterMode.hAdapterHandle.QuadPart = adapter64;
 
         bIOResult = DeviceIoControl(
             IOCTL_NDISRD_GET_ADAPTER_MODE,
@@ -1084,13 +1254,20 @@ BOOL CNdisApi::GetAdapterMode(PADAPTER_MODE pMode) const
  */
 BOOL CNdisApi::FlushAdapterPacketQueue(HANDLE hAdapter) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(hAdapter), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
         ULARGE_INTEGER h64Adapter;
-        h64Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)hAdapter);
+        h64Adapter.QuadPart = adapter64;
 
         bIOResult = DeviceIoControl(
             IOCTL_NDISRD_FLUSH_ADAPTER_QUEUE,
@@ -1134,13 +1311,20 @@ BOOL CNdisApi::FlushAdapterPacketQueue(HANDLE hAdapter) const
  */
 BOOL CNdisApi::GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(hAdapter), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
         ULARGE_INTEGER h64Adapter;
-        h64Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)hAdapter);
+        h64Adapter.QuadPart = adapter64;
 
         bIOResult = DeviceIoControl(
             IOCTL_NDISRD_ADAPTER_QUEUE_SIZE,
@@ -1187,6 +1371,13 @@ BOOL CNdisApi::GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const
  */
 BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(hAdapter), adapter64))
+        return FALSE;
+#endif
+
     HANDLE hRing0Event;
     ADAPTER_EVENT AdapterEvent;
 
@@ -1230,7 +1421,7 @@ BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
     if (m_bIsWow64Process)
     {
         ADAPTER_EVENT_WOW64 AdapterEvent64;
-        AdapterEvent64.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)AdapterEvent.hAdapterHandle);
+        AdapterEvent64.hAdapterHandle.QuadPart = adapter64;
         AdapterEvent64.hEvent.HighPart = 0;
         AdapterEvent64.hEvent.LowPart = (ULONG_PTR)AdapterEvent.hEvent;
 
@@ -1498,6 +1689,13 @@ BOOL CNdisApi::CompleteOverlappedRequest(BOOL bIoResult, LPOVERLAPPED pOverlap, 
 }
 BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(OidData->hAdapterHandle), adapter64))
+        return FALSE;
+#endif
+
     OVERLAPPED Overlap;
     const DWORD dwLength = OidData->Length;
 
@@ -1529,7 +1727,7 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
         PPACKET_OID_DATA_WOW64 OidData64 = (PPACKET_OID_DATA_WOW64)malloc(sizeof(PACKET_OID_DATA_WOW64) + OidData->Length - 1);
         if (OidData64)
         {
-            OidData64->hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)OidData->hAdapterHandle);
+            OidData64->hAdapterHandle.QuadPart = adapter64;
             OidData64->Oid = OidData->Oid;
             OidData64->Length = OidData->Length;
             if (Set)
@@ -1612,13 +1810,20 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
  */
 BOOL CNdisApi::GetRasLinks(HANDLE hAdapter, PRAS_LINKS pLinks) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(hAdapter), adapter64))
+        return FALSE;
+#endif
+
     BOOL bIOResult;
 
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
         ULARGE_INTEGER h64Adapter;
-        h64Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)hAdapter);
+        h64Adapter.QuadPart = adapter64;
 
         bIOResult = DeviceIoControl(
             IOCTL_NDISRD_GET_RAS_LINKS,
@@ -1741,6 +1946,13 @@ BOOL CNdisApi::GetHwPacketFilter(HANDLE hAdapter, PDWORD pFilter) const
  */
 BOOL CNdisApi::SetHwPacketFilterEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
+#ifndef _WIN64
+    ULONGLONG adapter64 = 0;
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        reinterpret_cast<ULONG_PTR>(hAdapter), adapter64))
+        return FALSE;
+#endif
+
     HANDLE hRing0Event;
     ADAPTER_EVENT AdapterEvent;
 
@@ -1780,7 +1992,7 @@ BOOL CNdisApi::SetHwPacketFilterEvent(HANDLE hAdapter, HANDLE hWin32Event) const
     if (m_bIsWow64Process)
     {
         ADAPTER_EVENT_WOW64 AdapterEvent64;
-        AdapterEvent64.hAdapterHandle.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)AdapterEvent.hAdapterHandle);
+        AdapterEvent64.hAdapterHandle.QuadPart = adapter64;
         AdapterEvent64.hEvent.HighPart = 0;
         AdapterEvent64.hEvent.LowPart = (ULONG_PTR)AdapterEvent.hEvent;
 
@@ -1828,34 +2040,45 @@ BOOL CNdisApi::SetHwPacketFilterEvent(HANDLE hAdapter, HANDLE hWin32Event) const
  */
 BOOL CNdisApi::SetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 {
-    BOOL bIOResult = FALSE;
+    if (pFilterList == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    const DWORD count = pFilterList->m_TableSize;
+    int bytes;
+    if (!SdkStaticTableBytes(count, bytes))
+        return FALSE;
+    if (count == 0)
+    {
+        // Empty SET is refused by the driver; ResetPacketFilterTable clears it.
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
 
+    SdkByteBuffer storage;
+    if (!storage.Allocate(bytes))
+        return FALSE;
+    const PSTATIC_FILTER_TABLE table = static_cast<PSTATIC_FILTER_TABLE>(storage.Get());
+    memmove(table, pFilterList, bytes);
+    table->m_TableSize = count;
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        // Adapter handle values in the table contain values which are not valid for the driver
-        // and we need to pre-process filter table before passing it to the driver
-
-        for (unsigned i = 0; i < pFilterList->m_TableSize; ++i)
+        for (DWORD i = 0; i < count; ++i)
         {
-            if (pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
-                pFilterList->m_StaticFilters[i].m_Adapter.QuadPart =
-                m_Wow64Helper.From32to64Handle((unsigned)pFilterList->m_StaticFilters[i].m_Adapter.LowPart);
+            if (!m_Wow64Helper.From32to64Handle(
+                table->m_StaticFilters[i].m_Adapter.QuadPart,
+                table->m_StaticFilters[i].m_Adapter.QuadPart))
+                return FALSE;
         }
     }
-#endif //_WIN64
-
-    bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_SET_PACKET_FILTERS,
-        pFilterList,
-        sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
-        NULL,
-        0,
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    return bIOResult;
+#endif
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkSynchronousIoControl(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_SET_PACKET_FILTERS), table, bytes, NULL, 0, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    return result;
 }
 
 /**
@@ -1875,30 +2098,22 @@ BOOL CNdisApi::SetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
  */
 BOOL CNdisApi::AddStaticFilterFront(PSTATIC_FILTER pFilter) const
 {
-    BOOL bIOResult = FALSE;
-
-#ifndef _WIN64
-    if (m_bIsWow64Process)
+    if (pFilter == NULL)
     {
-        // Adapter handle values in the filter contain values which are not valid for the driver
-        // and we need to pre-process filter before passing it to the driver
-
-        if (pFilter->m_Adapter.QuadPart)
-            pFilter->m_Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pFilter->m_Adapter.LowPart);
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
-#endif //_WIN64
-
-    bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_ADD_PACKET_FILTER_FRONT,
-        pFilter,
-        sizeof(STATIC_FILTER),
-        NULL,
-        0,
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    return bIOResult;
+    STATIC_FILTER filter = *pFilter;
+#ifndef _WIN64
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        filter.m_Adapter.QuadPart, filter.m_Adapter.QuadPart))
+        return FALSE;
+#endif
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkSynchronousIoControl(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_ADD_PACKET_FILTER_FRONT), &filter, sizeof(filter), NULL, 0, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    return result;
 }
 
 /**
@@ -1915,30 +2130,22 @@ BOOL CNdisApi::AddStaticFilterFront(PSTATIC_FILTER pFilter) const
  */
 BOOL CNdisApi::AddStaticFilterBack(PSTATIC_FILTER pFilter) const
 {
-    BOOL bIOResult = FALSE;
-
-#ifndef _WIN64
-    if (m_bIsWow64Process)
+    if (pFilter == NULL)
     {
-        // Adapter handle values in the filter contain values which are not valid for the driver
-        // and we need to pre-process filter before passing it to the driver
-
-        if (pFilter->m_Adapter.QuadPart)
-            pFilter->m_Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pFilter->m_Adapter.LowPart);
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
-#endif //_WIN64
-
-    bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_ADD_PACKET_FILTER_BACK,
-        pFilter,
-        sizeof(STATIC_FILTER),
-        NULL,
-        0,
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    return bIOResult;
+    STATIC_FILTER filter = *pFilter;
+#ifndef _WIN64
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        filter.m_Adapter.QuadPart, filter.m_Adapter.QuadPart))
+        return FALSE;
+#endif
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkSynchronousIoControl(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_ADD_PACKET_FILTER_BACK), &filter, sizeof(filter), NULL, 0, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    return result;
 }
 
 /**
@@ -1957,33 +2164,24 @@ BOOL CNdisApi::AddStaticFilterBack(PSTATIC_FILTER pFilter) const
  */
 BOOL CNdisApi::InsertStaticFilter(PSTATIC_FILTER pFilter, unsigned long Position) const
 {
-    BOOL bIOResult = FALSE;
-
-#ifndef _WIN64
-    if (m_bIsWow64Process) {
-        // Adapter handle values in the filter contain values which are not valid for the driver
-        // and we need to pre-process filter before passing it to the driver
-
-        if (pFilter->m_Adapter.QuadPart)
-            pFilter->m_Adapter.QuadPart = m_Wow64Helper.From32to64Handle((unsigned)pFilter->m_Adapter.LowPart);
+    if (pFilter == NULL)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
-#endif //_WIN64
-
-    STATIC_FILTER_WITH_POSITION DriverData;
-    DriverData.m_StaticFilter = *pFilter;
-    DriverData.m_Position = Position;
-
-    bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_INSERT_FILTER_BY_INDEX,
-        &DriverData,
-        sizeof(STATIC_FILTER_WITH_POSITION),
-        NULL,
-        0,
-        NULL,   // Bytes Returned
-        NULL
-    );
-
-    return bIOResult;
+    STATIC_FILTER_WITH_POSITION data = { 0 };
+    data.m_StaticFilter = *pFilter;
+    data.m_Position = Position;
+#ifndef _WIN64
+    if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
+        data.m_StaticFilter.m_Adapter.QuadPart, data.m_StaticFilter.m_Adapter.QuadPart))
+        return FALSE;
+#endif
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkSynchronousIoControl(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_INSERT_FILTER_BY_INDEX), &data, sizeof(data), NULL, 0, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    return result;
 }
 
 /**
@@ -2078,30 +2276,30 @@ BOOL CNdisApi::GetPacketFilterTableSize(PDWORD pdwTableSize) const
  */
 BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 {
-    BOOL bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_GET_PACKET_FILTERS,
-        NULL,
-        0,
-        pFilterList,
-        sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
-        NULL, // Bytes Returned
-        NULL
-    );
-#ifndef _WIN64
-    if (bIOResult && m_bIsWow64Process)
-    {
-        // Adapter handle values in the table contain values which are not valid for the client
-        // and we need to post-process filter table before passing it to the client
+    SdkByteBuffer storage;
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkReadStaticTable(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_GET_PACKET_FILTERS), pFilterList, storage, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    if (!result)
+        return FALSE;
 
-        for (unsigned i = 0; i < pFilterList->m_TableSize; ++i)
+    const PSTATIC_FILTER_TABLE table = static_cast<PSTATIC_FILTER_TABLE>(storage.Get());
+#ifndef _WIN64
+    if (m_bIsWow64Process)
+    {
+        for (DWORD i = 0; i < table->m_TableSize; ++i)
         {
-            pFilterList->m_StaticFilters[i].m_Adapter.QuadPart =
-                m_Wow64Helper.From64to32Handle(pFilterList->m_StaticFilters[i].m_Adapter.QuadPart);
+            unsigned int handle32;
+            if (!m_Wow64Helper.From64to32Handle(table->m_StaticFilters[i].m_Adapter.QuadPart, handle32))
+                return FALSE;
+            table->m_StaticFilters[i].m_Adapter.QuadPart = handle32;
         }
     }
-#endif //_WIN64
-
-    return bIOResult;
+#endif
+    // Publish only after the complete returned table has passed conversion.
+    memmove(pFilterList, table, bytesReturned);
+    return TRUE;
 }
 
 /**
@@ -2122,31 +2320,30 @@ BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
  */
 BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) const
 {
-    BOOL bIOResult = DeviceIoControl(
-        IOCTL_NDISRD_GET_PACKET_FILTERS_RESET_STATS,
-        NULL,
-        0,
-        pFilterList,
-        sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
-        NULL, // Bytes Returned
-        NULL
-    );
+    SdkByteBuffer storage;
+    DWORD bytesReturned = 0;
+    const BOOL result = SdkReadStaticTable(*this,
+        static_cast<DWORD>(IOCTL_NDISRD_GET_PACKET_FILTERS_RESET_STATS), pFilterList, storage, bytesReturned);
+    m_BytesReturned = bytesReturned;
+    if (!result)
+        return FALSE;
 
+    const PSTATIC_FILTER_TABLE table = static_cast<PSTATIC_FILTER_TABLE>(storage.Get());
 #ifndef _WIN64
-    if (bIOResult && m_bIsWow64Process)
+    if (m_bIsWow64Process)
     {
-        // Adapter handle values in the table contain values which are not valid for the client
-        // and we need to post-process filter table before passing it to the client
-
-        for (unsigned i = 0; i < pFilterList->m_TableSize; ++i)
+        for (DWORD i = 0; i < table->m_TableSize; ++i)
         {
-            pFilterList->m_StaticFilters[i].m_Adapter.QuadPart =
-                m_Wow64Helper.From64to32Handle(pFilterList->m_StaticFilters[i].m_Adapter.QuadPart);
+            unsigned int handle32;
+            if (!m_Wow64Helper.From64to32Handle(table->m_StaticFilters[i].m_Adapter.QuadPart, handle32))
+                return FALSE;
+            table->m_StaticFilters[i].m_Adapter.QuadPart = handle32;
         }
     }
-#endif //_WIN64
-
-    return bIOResult;
+#endif
+    // Publish only after the complete returned table has passed conversion.
+    memmove(pFilterList, table, bytesReturned);
+    return TRUE;
 }
 
 /**

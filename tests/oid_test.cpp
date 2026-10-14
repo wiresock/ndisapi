@@ -42,6 +42,7 @@ namespace {
 
 int g_failures = 0;
 int g_checks = 0;
+HANDLE g_adapterHandle = NULL;
 
 void check(bool ok, const std::string& what, const std::string& detail = "")
 {
@@ -95,7 +96,7 @@ struct Request
     explicit Request(DWORD capacity)
     {
         buffer.assign(sizeof(PACKET_OID_DATA) + capacity, 0);
-        oid()->hAdapterHandle = (HANDLE)(ULONG_PTR)1;
+        oid()->hAdapterHandle = g_adapterHandle;
         oid()->Oid = 0x0001010E;  // OID_GEN_CURRENT_PACKET_FILTER
         oid()->Length = capacity;
     }
@@ -108,6 +109,8 @@ struct Case
 {
     SHIM_IOCTL_MODE mode = ShimIoImmediateSuccess;
     DWORD immediateError = ERROR_INVALID_FUNCTION;
+    DWORD immediateBytes = 0;
+    DWORD terminalBytes = 0;
     BOOL  terminalSuccess = TRUE;
     DWORD terminalError = ERROR_GEN_FAILURE;
     bool  writeBack = false;       // the driver writes a Length into the buffer before completing
@@ -119,6 +122,8 @@ BOOL Run(const CNdisApi& api, Request& req, BOOL set, const Case& c)
     ShimReset();
     g_ShimIoMode = c.mode;
     g_ShimIoImmediateError = c.immediateError;
+    g_ShimIoImmediateBytes = c.immediateBytes;
+    g_ShimTerminalBytes = c.terminalBytes;
     g_ShimTerminalSuccess = c.terminalSuccess;
     g_ShimTerminalError = c.terminalError;
     g_ShimWriteBackLength = c.writeBack ? TRUE : FALSE;
@@ -356,6 +361,15 @@ int main()
         printf("FATAL: the shimmed device did not open; nothing below would be meaningful\n");
         return 2;
     }
+
+    TCP_AdapterList adapters = {};
+    if (!api.GetTcpipBoundAdaptersInfo(&adapters) || adapters.m_nAdapterCount != 1 ||
+        adapters.m_nAdapterHandle[0] == NULL)
+    {
+        printf("FATAL: genuine adapter enumeration did not establish the OID fixture identity\n");
+        return 2;
+    }
+    g_adapterHandle = adapters.m_nAdapterHandle[0];
 
     BranchIdentity(api);
     SynchronousAnswers(api);
