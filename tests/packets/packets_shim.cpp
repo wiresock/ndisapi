@@ -27,6 +27,7 @@ void PacketReset() {
     SetLastError(ERROR_SUCCESS);
 }
 HANDLE WINAPI PacketCreateFile(LPCTSTR,DWORD,DWORD,LPSECURITY_ATTRIBUTES,DWORD,DWORD,HANDLE) {
+    if(g_Packet.failCreateFile) {SetLastError(ERROR_FILE_NOT_FOUND);return INVALID_HANDLE_VALUE;}
     WCHAR dir[MAX_PATH],path[MAX_PATH];
     if (!GetTempPathW(MAX_PATH,dir)||!GetTempFileNameW(dir,L"npb",0,path)) return INVALID_HANDLE_VALUE;
     return CreateFileW(path,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_EXISTING,

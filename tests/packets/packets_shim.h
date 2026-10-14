@@ -20,7 +20,7 @@ enum PACKET_IO_MODE { PacketImmediate, PacketFailure, PacketPending };
 struct PACKET_SHIM_STATE {
     PACKET_IO_MODE mode;
     DWORD immediateError, immediateBytes, terminalError, terminalBytes;
-    BOOL terminalSuccess, delayResponse, cleanupClobbersError, writePackets, writeCount;
+    BOOL terminalSuccess, delayResponse, cleanupClobbersError, writePackets, writeCount, failCreateFile;
     DWORD resultCount, lengths[4], packetWrites;
     DWORD submittedLengths[4], submittedHashes[4];
     DWORD code, inLength, outLength, submittedCount, ioctlCalls, completions, waits;

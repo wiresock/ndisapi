@@ -237,6 +237,53 @@ static void PublicAsyncControl(const CNdisApi& api) {
     CloseHandle(overlap.hEvent);
     printf("CONTROL public_async_wrapper checks=%u failures=%u\n",checks-controlChecks,failures-controlFailures);
 }
+static void SeedCompletedPendingError(const CNdisApi& api,const std::string& label) {
+    // Execute a real convenience-helper pending path before testing the invalid
+    // instance. The I/O mock completes safely and leaves ERROR_IO_PENDING stale.
+    g_Packet.mode=PacketPending;g_Packet.terminalSuccess=TRUE;
+    STATIC_FILTER filter={};filter.m_FilterAction=FILTER_PACKET_PASS;
+    const BOOL completed=api.AddStaticFilterFront(&filter);
+    const DWORD error=GetLastError();
+    Check(completed!=FALSE,label+": valid pending request reaches success");
+    Check(g_Packet.ioctlCalls==1&&g_Packet.completions==1&&g_Packet.waits==1&&!g_Packet.pending,label+": valid request submits and waits exactly once");
+    Check(error==ERROR_IO_PENDING,label+": successful pending call leaves the stale error");
+}
+static void InvalidHandle(const CNdisApi& validApi) {
+    const unsigned controlChecks=checks,controlFailures=failures;
+    PacketReset();g_Packet.failCreateFile=TRUE;CNdisApi invalidApi;
+    Check(!invalidApi.IsDriverLoaded(),"invalid handle: constructor reports failed driver open");
+    g_Packet.failCreateFile=FALSE;
+    for(unsigned callerOverlap=0;callerOverlap!=2;++callerOverlap) {
+        PacketReset();const std::string label=std::string("invalid handle/direct-wrapper/")+std::to_string(callerOverlap);
+        SeedCompletedPendingError(validApi,label);
+        DWORD value=0,bytes=0xCCCCCCCC;OVERLAPPED overlap={};
+        const BOOL result=invalidApi.DeviceIoControl(0x12345678UL,&value,sizeof(value),&value,sizeof(value),&bytes,callerOverlap?&overlap:NULL);
+        const DWORD error=GetLastError();
+        Check(!result,label+": invalid handle remains FALSE");
+        Check(error==ERROR_INVALID_HANDLE,label+": exact invalid-handle error replaces stale pending");
+        Check(g_Packet.ioctlCalls==1&&g_Packet.completions==1&&g_Packet.waits==1&&!g_Packet.pending,label+": no invalid submission or completion/wait");
+    }
+    for(unsigned value=0;value!=9;++value) {
+        const OP op=static_cast<OP>(value);if(Unsorted(op)&&PacketWow64())continue;
+        Fixture f;Setup(op,f.capacity);const std::string label=std::string("invalid handle/")+Name(op);
+        SeedCompletedPendingError(validApi,label);
+        g_Packet.cleanupClobbersError=TRUE;
+        CALL c={&invalidApi,op,&f,0,FALSE,FALSE};
+        Check(!Run(c,label),label+": no bogus successful completion");
+        Check(c.error==ERROR_INVALID_HANDLE,label+": exact error survives staging/event cleanup");
+        Check(g_Packet.ioctlCalls==1&&g_Packet.completions==1&&g_Packet.waits==1&&!g_Packet.pending,label+": no invalid submission or completion/wait");
+        Check(invalidApi.GetBytesReturned()==0,label+": no fabricated returned bytes");
+        if(CountOutput(op))Check(f.Result(op)==0,label+": failed count remains zero");
+        Check(g_Packet.outstandingAllocations==0,label+": staging allocations balanced");
+    }
+    PacketReset();SeedCompletedPendingError(validApi,"invalid handle/static-filter");
+    STATIC_FILTER filter={};filter.m_FilterAction=FILTER_PACKET_PASS;
+    const BOOL result=invalidApi.AddStaticFilterFront(&filter);const DWORD error=GetLastError();
+    Check(!result,"invalid handle/static-filter: no bogus successful completion");
+    Check(error==ERROR_INVALID_HANDLE,"invalid handle/static-filter: exact invalid-handle error");
+    Check(g_Packet.ioctlCalls==1&&g_Packet.completions==1&&g_Packet.waits==1&&!g_Packet.pending,"invalid handle/static-filter: no invalid submission or completion/wait");
+    printf("CONTROL invalid_handle_after_pending checks=%u failures=%u\n",checks-controlChecks,failures-controlFailures);
+}
 int main() {
     setvbuf(stdout,NULL,_IONBF,0);
     PacketReset();CNdisApi api;TCP_AdapterList adapters={};
@@ -250,6 +297,7 @@ int main() {
     printf("CONTROL enumeration_and_real_arch checks=%u failures=%u\n",checks,failures);
     PublicAsyncControl(api);
     const unsigned start=checks;
+    InvalidHandle(api);
     Modes(api);printf("GROUP modes cumulative_checks=%u cumulative_failures=%u\n",checks,failures);
     Counts(api);printf("GROUP counts cumulative_checks=%u cumulative_failures=%u\n",checks,failures);
     Lengths(api);printf("GROUP lengths cumulative_checks=%u cumulative_failures=%u\n",checks,failures);
