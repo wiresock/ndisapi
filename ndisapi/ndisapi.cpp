@@ -843,6 +843,10 @@ BOOL CNdisApi::DeviceIoControl(DWORD dwService, void* BuffIn, int SizeIn, void* 
             Ret = ::DeviceIoControl(m_hFileHandle, dwService, BuffIn, SizeIn, BuffOut, SizeOut, SizeRet, povlp);
 
     }
+    else
+    {
+        ::SetLastError(ERROR_INVALID_HANDLE);
+    }
 
     return Ret;
 }
