@@ -206,6 +206,11 @@ public:
     BOOL    InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
     BOOL    AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
     BOOL    ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const;
+    // Unsorted send success reports the total accepted packets, which may be
+    // less than dwPacketsNum. It does not identify a completed input prefix or
+    // individual packets; never use *pdwPacketSuccess as a retry-array offset.
+    // Acceptance is not delivery confirmation. Exactly-once delivery requires
+    // application acknowledgements and duplicate handling, even with one adapter.
     BOOL    SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
     BOOL    SendPacketsToMstcpUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const;
     BOOL    GetIntermediateBufferPoolSize(PDWORD pdwSize) const;
@@ -340,6 +345,11 @@ extern "C"
     BOOL    __stdcall        InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
     BOOL    __stdcall        AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
     BOOL    __stdcall        ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess);
+    // Unsorted send success reports the total accepted packets, which may be
+    // less than dwPacketsNum. It does not identify a completed input prefix or
+    // individual packets; never use *pdwPacketSuccess as a retry-array offset.
+    // Acceptance is not delivery confirmation. Exactly-once delivery requires
+    // application acknowledgements and duplicate handling, even with one adapter.
     BOOL    __stdcall        SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
     BOOL    __stdcall        SendPacketsToMstcpUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess);
     BOOL    __stdcall        GetIntermediateBufferPoolSize(HANDLE hOpen, PDWORD pdwSize);

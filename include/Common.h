@@ -905,7 +905,11 @@ typedef struct _INITIALIZE_FAST_IO_PARAMS
  *
  * @param packets This field is a pointer to an array of PINTERMEDIATE_BUFFER structures. Each PINTERMEDIATE_BUFFER structure contains the
  * packet data and related information.
- * @param packets_num This field stores the number of packets in the array.
+ * @param packets_num Input packet count for sends or array capacity for reads; on a successful
+ * read, the number of packets read.
+ * On a successful unsorted send, the output is the
+ * total accepted-packet tally, which may be partial and does not identify a prefix or individual
+ * packet indices. It must not be used as a retry-array offset or as delivery confirmation.
  */
 typedef struct _UNSORTED_READ_SEND_REQUEST
 {
