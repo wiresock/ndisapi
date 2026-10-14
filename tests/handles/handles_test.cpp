@@ -446,6 +446,125 @@ static void StableAndFullMappings(const CNdisApi& api) {
     Refresh(api, 2);
     printf("CONTROL stable/full mappings checks=%u failures=%u\n", checks - beforeChecks, failures - beforeFailures);
 }
+static void StaleTableRefresh(const CNdisApi& api) {
+    const unsigned beforeChecks = checks, beforeFailures = failures;
+    for (unsigned opValue = GetTable; opValue <= GetReset; ++opValue) {
+        const OP op = static_cast<OP>(opValue);
+        for (unsigned scenario = 0; scenario != 12; ++scenario) {
+            Refresh(api, scenario == 10 ? 2 : 1);
+            const HANDLE retainedA = handleA;
+            TestReset();
+            g_AdapterCount = 2; g_Adapters[0] = rawA; g_Adapters[1] = rawB;
+            if (scenario == 2) { g_Adapters[0] = rawB; g_Adapters[1] = rawA; }
+            if (scenario == 11) g_AdapterCount = 0;
+            const DWORD count = scenario == 0 ? 1 : 3;
+            Table caller(3); const std::vector<unsigned char> before = caller.bytes;
+            Response(count, TableBytes(count), 3, scenario == 0 ? rawB : rawA,
+                scenario == 5 || scenario == 11 ? unknownRaw : rawB);
+            if (scenario == 6)
+                reinterpret_cast<PSTATIC_FILTER_TABLE>(g_Test.response)->m_StaticFilters[2].m_Adapter.QuadPart = unknownRaw;
+            if (scenario == 3) g_Test.enumerationMode = TestFailure;
+            if (scenario == 4 || scenario == 7) g_Test.enumerationMode = TestPending;
+            if (scenario == 4) g_Test.enumerationTerminalSuccess = FALSE;
+            if (scenario == 8) { g_Test.mode = TestPending; g_Test.delayResponse = TRUE; g_Test.immediateBytes = 0; }
+            if (scenario == 9) g_Test.enumerationBytes = 0;
+            g_Test.cleanupClobbersError = TRUE;
+            Call c = { &api, op, caller.get(), NULL, 0 };
+            const std::string label = std::string(OpName(op)) + "/stale-map" + std::to_string(scenario);
+            const BOOL ok = Run(c, label);
+            const bool success = !TestWow64() || scenario == 0 || scenario == 1 || scenario == 2 ||
+                scenario == 7 || scenario == 8 || scenario == 10;
+            Check((ok != FALSE) == success, label + ": expected conversion outcome");
+            Check(g_Test.ioctlCalls == 1, label + ": table IOCTL submitted exactly once");
+            Check(g_Test.enumerationCalls == (TestWow64() && scenario != 10 ? 1U : 0U),
+                label + ": one refresh only for a WOW64 miss");
+            Check(api.GetBytesReturned() == TableBytes(count), label + ": original table byte accounting survives refresh");
+            Check(g_Test.resetStatsSideEffects == (op == GetReset ? 1U : 0U), label + ": RESET side effect occurs exactly once");
+            if (success) {
+                std::vector<unsigned char> expected(g_Test.response, g_Test.response + TableBytes(count));
+                PSTATIC_FILTER_TABLE expectedTable = reinterpret_cast<PSTATIC_FILTER_TABLE>(&expected[0]);
+                if (TestWow64()) {
+                    if (scenario == 0) expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = 2;
+                    else {
+                        expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = reinterpret_cast<ULONG_PTR>(retainedA);
+                        expectedTable->m_StaticFilters[1].m_Adapter.QuadPart = 2;
+                    }
+                }
+                Check(memcmp(&caller.bytes[0], &expected[0], expected.size()) == 0,
+                    label + ": mixed raw identities and all other fields publish correctly");
+                Check(memcmp(&caller.bytes[TableBytes(count)], &before[TableBytes(count)], before.size() - TableBytes(count)) == 0,
+                    label + ": bytes beyond original table result remain unchanged");
+                if (count > 2 && scenario != 6)
+                    Check(caller.get()->m_StaticFilters[2].m_Adapter.QuadPart == 0, label + ": wildcard remains zero");
+            } else {
+                const DWORD expectedError = scenario == 3 ? ERROR_DEVICE_NOT_CONNECTED : scenario == 4 ? ERROR_ACCESS_DENIED :
+                    scenario == 9 ? ERROR_INVALID_DATA : ERROR_INVALID_HANDLE;
+                Check(c.error == expectedError, label + ": refresh/conversion error survives cleanup");
+                Check(caller.bytes == before, label + ": failed conversion never publishes any row");
+            }
+            if (TestWow64() && (scenario == 4 || scenario == 7))
+                Check(g_Test.enumerationCompletions == 1 && !g_Test.enumerationPending,
+                    label + ": refresh reaches terminal completion exactly once");
+            if (scenario == 8)
+                Check(g_Test.completions == 1 && !g_Test.pending, label + ": table reaches terminal completion exactly once");
+            Check(g_Test.outstandingAllocations == 0 && g_Test.freedWhilePending == 0 && g_Test.closedWhilePending == 0,
+                label + ": staging remains live until completion and is released");
+        }
+    }
+    Refresh(api, 2);
+    printf("CONTROL stale table refresh checks=%u failures=%u\n", checks - beforeChecks, failures - beforeFailures);
+}
+#if defined(_USING_V110_SDK71_)
+static const CNdisApi* concurrentApi = NULL;
+static BOOL concurrentEnumeration = FALSE;
+static DWORD concurrentWait = WAIT_FAILED;
+static DWORD WINAPI ConcurrentRefreshWorker(void*) {
+    TCP_AdapterList adapters = {};
+    concurrentEnumeration = concurrentApi->GetTcpipBoundAdaptersInfo(&adapters);
+    return 0;
+}
+static void FinishConcurrentMapUpdate() {
+    HANDLE worker = CreateThread(NULL, 0, ConcurrentRefreshWorker, NULL, 0, NULL);
+    if (!worker) { concurrentWait = WAIT_FAILED; return; }
+    concurrentWait = WaitForSingleObject(worker, 5000);
+    CloseHandle(worker);
+    if (concurrentWait != WAIT_OBJECT_0) {
+        printf("SETUP_FAILED: concurrent map update did not finish within five seconds\n");
+        ExitProcess(2);
+    }
+}
+static void ConsistentSnapshot(const CNdisApi& api) {
+    if (!TestWow64()) return;
+    CNdisApi updateApi;
+    concurrentApi = &updateApi;
+    const unsigned beforeChecks = checks, beforeFailures = failures;
+    for (unsigned opValue = GetTable; opValue <= GetReset; ++opValue) {
+        Refresh(api, 2);
+        const HANDLE originalA = handleA, originalB = handleB;
+        TestReset(); g_AdapterCount = 1; g_Adapters[0] = rawA;
+        Table caller(2); Response(2, TableBytes(2), 2, rawA, rawB);
+        g_AfterMapUnlock = FinishConcurrentMapUpdate;
+        concurrentEnumeration = FALSE; concurrentWait = WAIT_FAILED;
+        Call c = { &api, static_cast<OP>(opValue), caller.get(), NULL, 0 };
+        const std::string label = std::string(OpName(c.op)) + "/concurrent map snapshot";
+        const BOOL ok = Run(c, label);
+        g_AfterMapUnlock = NULL;
+        Check(concurrentWait == WAIT_OBJECT_0 && concurrentEnumeration, label + ": actual concurrent enumeration finishes at unlock");
+        Check(ok && caller.get()->m_StaticFilters[0].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalA) &&
+            caller.get()->m_StaticFilters[1].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalB),
+            label + ": both rows use the same original snapshot despite removing B");
+        Check(g_Test.enumerationCalls == 1 && g_Test.ioctlCalls == 1, label + ": no refresh or table IOCTL is duplicated");
+        Check(api.GetBytesReturned() == TableBytes(2), label + ": updater instance cannot change caller byte accounting");
+        Check(g_Test.resetStatsSideEffects == (c.op == GetReset ? 1U : 0U), label + ": reset is issued once");
+        TestReset();
+        Call removed = { &api, FlushQueue, NULL, originalB, 0 };
+        Check(!Run(removed, label + "/removed mapping") && removed.error == ERROR_INVALID_HANDLE && g_Test.ioctlCalls == 0,
+            label + ": concurrent update really removed B from live map");
+    }
+    Refresh(api, 2);
+    printf("CONTROL consistent snapshot checks=%u failures=%u\n", checks - beforeChecks, failures - beforeFailures);
+}
+#endif
 int main() {
     setvbuf(stdout, NULL, _IONBF, 0);
     TestReset();
@@ -466,6 +585,10 @@ int main() {
     ArithmeticAndAllocation(api);
     RoundTripAndRefresh(api);
     StableAndFullMappings(api);
+    StaleTableRefresh(api);
+#if defined(_USING_V110_SDK71_)
+    ConsistentSnapshot(api);
+#endif
     TestAbandonPending();
     printf("checks=%u failures=%u guarded_baseline_faults=%u\nRESULT=%u\n", checks, failures, guardedFaults, failures ? 1U : 0U);
     return failures ? 1 : 0;

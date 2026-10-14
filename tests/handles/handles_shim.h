@@ -28,7 +28,11 @@ struct TEST_SHIM_STATE {
     DWORD capturedInput, code, inLength, outLength, ioctlCalls, completions, waits;
     DWORD pendingReturns, freedWhilePending, closedWhilePending, completionInputChanged;
     DWORD allocationCalls, freeCalls, outstandingAllocations, failAllocationAt;
-    DWORD resetStatsSideEffects, enumerationCalls;
+    DWORD resetStatsSideEffects, enumerationCalls, enumerationCompletions;
+    TEST_IO_MODE enumerationMode;
+    DWORD enumerationBytes, enumerationError, enumerationTerminalError;
+    BOOL enumerationTerminalSuccess, enumerationPending;
+    OVERLAPPED* enumerationOverlap;
     BOOL pending, validServiceResponse;
     void* inputPointer;
     void* outputPointer;
@@ -47,6 +51,8 @@ BOOL WINAPI TestCompletion(HANDLE, OVERLAPPED*, DWORD*, BOOL);
 BOOL WINAPI TestCloseHandle(HANDLE);
 void* TestMalloc(size_t);
 void TestFree(void*);
+extern void (*g_AfterMapUnlock)();
+BOOL WINAPI TestReleaseMutex(HANDLE);
 
 #ifndef SDK_HANDLES_SHIM_IMPL
 #undef CreateFile
@@ -57,6 +63,7 @@ void TestFree(void*);
 #ifdef SDK_HANDLES_SOURCE
 #define malloc TestMalloc
 #define free TestFree
+#define ReleaseMutex TestReleaseMutex
 #endif
 #endif
 #endif
