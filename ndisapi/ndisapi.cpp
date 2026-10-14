@@ -1643,6 +1643,26 @@ BOOL CNdisApi::CompleteOverlappedRequest(BOOL bIoResult, LPOVERLAPPED pOverlap, 
 }
 BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 {
+    const DWORD dwLength = OidData->Length;
+    DWORD headerBytes = static_cast<DWORD>(sizeof(PACKET_OID_DATA) - 1);
+#ifndef _WIN64
+    if (m_bIsWow64Process)
+        headerBytes = static_cast<DWORD>(sizeof(PACKET_OID_DATA_WOW64) - 1);
+#endif
+    if (dwLength == 0)
+    {
+        ::SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    // The SDK DeviceIoControl wrapper takes signed int extents. Check the wire layout
+    // before creating events, staging metadata/payload, or submitting any request.
+    if (dwLength > static_cast<DWORD>(INT_MAX) - headerBytes)
+    {
+        ::SetLastError(ERROR_ARITHMETIC_OVERFLOW);
+        return FALSE;
+    }
+    const int requestBytes = static_cast<int>(headerBytes + dwLength);
+
 #ifndef _WIN64
     ULONGLONG adapter64 = 0;
     if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
@@ -1651,7 +1671,6 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 #endif
 
     OVERLAPPED Overlap;
-    const DWORD dwLength = OidData->Length;
 
     Overlap.Offset = 0;
     Overlap.OffsetHigh = 0;
@@ -1678,21 +1697,21 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        PPACKET_OID_DATA_WOW64 OidData64 = (PPACKET_OID_DATA_WOW64)malloc(sizeof(PACKET_OID_DATA_WOW64) + OidData->Length - 1);
+        PPACKET_OID_DATA_WOW64 OidData64 = (PPACKET_OID_DATA_WOW64)malloc(requestBytes);
         if (OidData64)
         {
             OidData64->hAdapterHandle.QuadPart = adapter64;
             OidData64->Oid = OidData->Oid;
-            OidData64->Length = OidData->Length;
+            OidData64->Length = dwLength;
             if (Set)
-                memmove(OidData64->Data, OidData->Data, OidData->Length);
+                memmove(OidData64->Data, OidData->Data, dwLength);
 
             bIOResult = DeviceIoControl(
                 (DWORD)Set ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
                 OidData64,
-                sizeof(PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
+                requestBytes,
                 OidData64,
-                sizeof(PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
+                requestBytes,
                 NULL,   // Bytes Returned
                 &Overlap
             );
@@ -1725,9 +1744,9 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
         bIOResult = DeviceIoControl(
             static_cast<DWORD>(Set) ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
             OidData,
-            sizeof(PACKET_OID_DATA) - 1 + OidData->Length,
+            requestBytes,
             OidData,
-            sizeof(PACKET_OID_DATA) - 1 + OidData->Length,
+            requestBytes,
             NULL,   // Bytes Returned
             &Overlap
         );
@@ -1744,7 +1763,6 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
     // request that transferred fewer bytes than the caller offered was reported as a
     // failure.
     //
-    UNREFERENCED_PARAMETER(dwLength);
 
     return bIOResult;
 }
