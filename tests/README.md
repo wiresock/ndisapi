@@ -106,3 +106,7 @@ standard/jumbo frames and both checksum compatibility branches. All eight runs
 require guarded oversized rejection and unchanged valid golden checksums. The
 optional ablation uses the exact accepted pre-ceiling SDK and requires its named
 66 failures; crashes or unrelated failures cannot satisfy it.
+
+## Maintained safe negative gates
+
+Run `run_all.cmd safe-gates [fresh-output-directory]` for current-source handle/packet negative gates and positive handles, packets and event controls on x64 and WOW64 x86. This selection exits before historical OID and ablation suites. Outputs use a unique directory by default and an existing explicit directory is rejected. The handle mutation applies only to WOW64 conversion (x64 gets a positive control); packet published-count mutations run on both ABIs. All guards and copying loops remain intact. Gates require ordinary exit 1, complete valid receipt/footer, zero guarded faults and a relevant identity/count assertion. No historical source is executed.

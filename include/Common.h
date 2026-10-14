@@ -750,8 +750,8 @@ typedef struct _STATIC_FILTER
 #define FILTER_PACKET_PASS      0x00000001 // Pass packet if it matches the filter
 #define FILTER_PACKET_DROP      0x00000002 // Drop packet if it matches the filter
 #define FILTER_PACKET_REDIRECT  0x00000003 // Redirect packet to WinpkFilter client application
-#define FILTER_PACKET_PASS_RDR  0x00000004 // Redirect packet to WinpkFilter client application and pass over network (listen mode)
-#define FILTER_PACKET_DROP_RDR  0x00000005 // Redirect packet to WinpkFilter client application and drop it, e.g. log but remove from the flow (listen mode)
+#define FILTER_PACKET_PASS_RDR  0x00000004 // Explicitly pass original and deliver one observation copy in every supported mode, including TUNNEL; do not reinject the copy as ordinary diverted traffic.
+#define FILTER_PACKET_DROP_RDR  0x00000005 // Explicitly drop original and deliver one observation copy in every supported mode, including TUNNEL; do not reinject the copy as ordinary diverted traffic.
 
 #define DATA_LINK_LAYER_VALID   0x00000001 // Match packet against data link layer filter
 #define NETWORK_LAYER_VALID     0x00000002 // Match packet against network layer filter
