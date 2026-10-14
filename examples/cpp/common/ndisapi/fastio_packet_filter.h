@@ -10,9 +10,14 @@
 namespace ndisapi
 {
 	inline constexpr size_t fast_io_size = 0x300000;
-	inline constexpr uint32_t fast_io_packets_num = (fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(
-		INTERMEDIATE_BUFFER);
-	inline constexpr size_t maximum_packet_block = 2048 * 3;
+	inline constexpr size_t fast_io_section_count = 4;
+	inline constexpr size_t fast_io_physical_packets =
+		(fast_io_size - sizeof(FAST_IO_SECTION_HEADER)) / sizeof(INTERMEDIATE_BUFFER);
+	inline constexpr uint32_t fast_io_packets_num = static_cast<uint32_t>(
+		fast_io_physical_packets < 65535 ? fast_io_physical_packets : 65535);
+	// The worker can consume every section before routing the collected packets.
+	// Packet storage and both send-pointer arrays must use this same bound.
+	inline constexpr size_t maximum_packet_block = fast_io_section_count * fast_io_packets_num;
 
 	// --------------------------------------------------------------------------------
 	/// <summary>
@@ -128,6 +133,9 @@ namespace ndisapi
 		/// </summary>
 		// ********************************************************************************
 		void filter_working_thread();
+		// Consume one section only after copying a complete, bounded snapshot.
+		// A zero result leaves any unconsumed write state intact.
+		DWORD read_fast_io_section(PFAST_IO_SECTION section, PINTERMEDIATE_BUFFER packets, size_t capacity);
 		// ********************************************************************************
 		/// <summary>
 		/// Initializes available network interface list
@@ -181,7 +189,7 @@ namespace ndisapi
 
 			write_adapter_request_ptr_ = std::make_unique<request_storage_type_t>();
 			write_mstcp_request_ptr_ = std::make_unique<request_storage_type_t>();
-			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t[]>(4);
+			fast_io_ptr_ = std::make_unique<fast_io_storage_type_t[]>(fast_io_section_count);
 		}
 		catch (const std::bad_alloc&)
 		{
@@ -216,7 +224,7 @@ namespace ndisapi
 			return false;
 		}
 
-		for (auto i = 1; i < 4; ++i)
+		for (size_t i = 1; i < fast_io_section_count; ++i)
 		{
 			fast_io_section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[i]);
 
@@ -336,6 +344,51 @@ namespace ndisapi
 		}
 	}
 
+	inline DWORD fastio_packet_filter::read_fast_io_section(
+		PFAST_IO_SECTION section, PINTERMEDIATE_BUFFER packets, const size_t capacity)
+	{
+		auto& header = section->fast_io_header;
+		if (filter_state_ != filter_state::running ||
+			!InterlockedCompareExchange(&header.fast_io_write_union.union_.join, 0, 0))
+			return 0;
+
+		InterlockedExchange(&header.read_in_progress_flag, 1);
+		struct reader_claim_guard
+		{
+			volatile DWORD& flag;
+			~reader_claim_guard() { InterlockedExchange(&flag, 0); }
+		} claim{header.read_in_progress_flag};
+
+		size_t copied = 0;
+		while (filter_state_ == filter_state::running)
+		{
+			FAST_IO_WRITE_UNION snapshot{};
+			snapshot.union_.join = InterlockedCompareExchange(&header.fast_io_write_union.union_.join, 0, 0);
+			const size_t count = snapshot.union_.split.number_of_packets;
+			// Repeat all bounds after a failed reset CAS: its successor may have grown.
+			if (count > fast_io_packets_num || count > capacity || count < copied)
+				return 0;
+			if (snapshot.union_.split.write_in_progress_flag)
+				continue;
+
+			if (count > copied)
+			{
+				memmove(packets + copied, &section->fast_io_packets[copied],
+					sizeof(INTERMEDIATE_BUFFER) * (count - copied));
+				copied = count;
+			}
+			if (filter_state_ != filter_state::running)
+				return 0;
+
+			// A writer may have passed its reader-flag check before our claim.
+			// On contention, wait for completion and copy its entire new tail.
+			if (InterlockedCompareExchange(&header.fast_io_write_union.union_.join, 0,
+				snapshot.union_.join) == snapshot.union_.join)
+				return static_cast<DWORD>(copied);
+		}
+		return 0;
+	}
+
 	inline void fastio_packet_filter::filter_working_thread()
 	{
 		using namespace std::chrono_literals;
@@ -348,12 +401,6 @@ namespace ndisapi
 		auto* const write_adapter_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_adapter_request_ptr_.get());
 		auto* const write_mstcp_request = reinterpret_cast<PINTERMEDIATE_BUFFER*>(write_mstcp_request_ptr_.get());
 
-		const PFAST_IO_SECTION fast_io_section[] = {
-			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[0]),
-			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[1]),
-			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[2]),
-			reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[3]),
-		};
 
 #ifdef FAST_IO_MEASURE_STATS
 		uint64_t fast_io_packets_total = 0;
@@ -368,54 +415,11 @@ namespace ndisapi
 			// Fast I/O processing section
 			//
 
-			for (auto i : fast_io_section)
+			for (size_t i = 0; i < fast_io_section_count; ++i)
 			{
-				if (InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0))
-				{
-					InterlockedExchange(&i->fast_io_header.read_in_progress_flag, 1);
-
-					auto write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0,
-					                                              0);
-
-					auto current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
-						number_of_packets;
-
-					//
-					// Copy packets and reset section
-					//
-
-					memmove(&packet_buffer_[fast_io_packets_success], &i->fast_io_packets[0],
-					        sizeof(INTERMEDIATE_BUFFER) * (current_packets_success - 1));
-
-					// For the last packet(s) wait the write completion if in progress
-					write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0, 0);
-
-					while (reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.write_in_progress_flag)
-					{
-						write_union = InterlockedCompareExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0,
-						                                         0);
-					}
-
-					// Copy the last packet(s)
-					memmove(
-						&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success - 1], &
-						i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
-					if (current_packets_success < reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
-						number_of_packets)
-					{
-						current_packets_success = reinterpret_cast<PFAST_IO_WRITE_UNION>(&write_union)->union_.split.
-							number_of_packets;
-						memmove(
-							&packet_buffer_[static_cast<uint64_t>(fast_io_packets_success) + current_packets_success -
-								1], &
-							i->fast_io_packets[current_packets_success - 1], sizeof(INTERMEDIATE_BUFFER));
-					}
-
-					InterlockedExchange(&i->fast_io_header.fast_io_write_union.union_.join, 0);
-					InterlockedExchange(&i->fast_io_header.read_in_progress_flag, 0);
-
-					fast_io_packets_success += current_packets_success;
-				}
+				auto* section = reinterpret_cast<PFAST_IO_SECTION>(&fast_io_ptr_.get()[i]);
+				fast_io_packets_success += read_fast_io_section(section,
+					&packet_buffer_[fast_io_packets_success], maximum_packet_block - fast_io_packets_success);
 			}
 
 			auto send_to_adapter_num = 0;

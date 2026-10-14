@@ -85,3 +85,7 @@ are preserved byte-for-byte. The historical 20aa90f ablation above is specific t
 The maintained [packets fixture](packets/README.md) also runs on x64 and genuine WOW64.
 It exercises all nine single, sorted and unsorted convenience APIs, pending ownership, validated
 metadata/counts, independent staging arithmetic, and transactional WOW64 frame copy-back.
+
+## FastIO example reader
+
+`fastio_reader/Run-Reader.ps1` compiles the actual example class/header for x86/x64 and standard/jumbo layouts, including its worker and private section-drain helper. All four configurations run from `run_all.cmd`; `ablation` also requires exact pre-fix worker and targeted remaining-capacity failure contracts. See `fastio_reader/README.md` for schedules, substituted boundaries, counts, and runtime/evidence safeguards. No driver is used.

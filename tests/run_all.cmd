@@ -2,7 +2,7 @@
 rem run_all.cmd - build and run the SDK's offline regressions.
 rem
 rem   run_all.cmd                 build + run for x64 and x86; exit code 0 iff every test passed
-rem   run_all.cmd ablation        additionally compile the SAME OID tests against the PRE-FIX SDK and
+rem   run_all.cmd ablation        additionally run exact FastIO ablations and the SAME historical OID tests and
 rem                               require them to FAIL, which is what makes them a regression
 rem                               rather than a description of the current code
 rem   run_all.cmd ablation <rev>  use <rev> instead of the default pre-fix commit
@@ -41,8 +41,16 @@ call :handles x64
 call :handles x86
 call :packets x64
 call :packets x86
+call :fastio x64 standard
+call :fastio x64 jumbo
+call :fastio x86 standard
+call :fastio x86 jumbo
 
 if "%ABLATION%"=="1" (
+    call :fastio_ablate x64 standard
+    call :fastio_ablate x64 jumbo
+    call :fastio_ablate x86 standard
+    call :fastio_ablate x86 jumbo
     call :stage_prefix
     if not "!ERRORLEVEL!"=="0" (
         echo ABLATION RESULT: SETUP_FAILED - the pre-fix sources could not be staged
@@ -78,6 +86,21 @@ rem ---------------------------------------------------------------- packet resu
 echo.
 echo === packets_test %~1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\packets\Run-Packets.ps1" -Arch "%~1"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+rem ---------------------------------------------------------------- actual FastIO header/worker/helper
+:fastio
+echo.
+echo === fastio_reader %~1 %~2
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\fastio_reader\Run-Reader.ps1" -Arch "%~1" -Layout "%~2"
+if not "!ERRORLEVEL!"=="0" set RESULT=1
+goto :eof
+
+:fastio_ablate
+echo.
+echo === fastio_reader ablation %~1 %~2
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TESTS%\fastio_reader\Run-Ablation.ps1" -Arch "%~1" -Layout "%~2"
 if not "!ERRORLEVEL!"=="0" set RESULT=1
 goto :eof
 
