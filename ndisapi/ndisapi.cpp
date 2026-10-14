@@ -46,6 +46,101 @@
 #define OID_GEN_CURRENT_PACKET_FILTER            0x0001010E
 
 
+// Shared by convenience calls across all CNdisApi instances without changing
+// their public layout. Plain static storage is zero-initialized before calls;
+// there is no function-local constructor or newer synchronization API.
+struct SdkEventSlot
+{
+    LONG Claimed;
+    HANDLE Event;
+};
+static SdkEventSlot g_SdkEventSlots[16] = { 0 };
+
+class SdkEventPoolCleanup
+{
+public:
+    ~SdkEventPoolCleanup()
+    {
+        // Module/static teardown requires quiescent callers, as does unloading
+        // the SDK itself. Never close an event still leased by a pending call.
+        const DWORD error = ::GetLastError();
+        for (unsigned i = 0; i < 16; ++i)
+        {
+            SdkEventSlot& slot = g_SdkEventSlots[i];
+            if (::InterlockedExchange(&slot.Claimed, 1) == 0)
+            {
+                if (slot.Event != NULL)
+                {
+                    ::CloseHandle(slot.Event);
+                    slot.Event = NULL;
+                }
+                ::InterlockedExchange(&slot.Claimed, 0);
+            }
+        }
+        ::SetLastError(error);
+    }
+};
+static SdkEventPoolCleanup g_SdkEventPoolCleanup;
+
+class SdkEventLease
+{
+public:
+    SdkEventLease() : m_Slot(NULL), m_Event(NULL)
+    {
+        for (unsigned i = 0; i < 16; ++i)
+        {
+            SdkEventSlot& slot = g_SdkEventSlots[i];
+            // Only the thread changing zero to one owns this slot. Exchange
+            // is supported by the legacy compiler/Win32 targets as well.
+            if (::InterlockedExchange(&slot.Claimed, 1) != 0)
+                continue;
+
+            m_Slot = &slot;
+            if (slot.Event == NULL)
+                slot.Event = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+            else if (!::ResetEvent(slot.Event))
+            {
+                const DWORD error = ::GetLastError();
+                ::CloseHandle(slot.Event);
+                slot.Event = NULL;
+                ::SetLastError(error);
+            }
+
+            m_Event = slot.Event;
+            if (m_Event == NULL)
+            {
+                const DWORD error = ::GetLastError();
+                ::InterlockedExchange(&slot.Claimed, 0);
+                m_Slot = NULL;
+                ::SetLastError(error);
+            }
+            return;
+        }
+
+        // Contention never waits for another call's lease. This event belongs
+        // solely to the current call and is closed after terminal completion.
+        m_Event = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+    }
+
+    ~SdkEventLease()
+    {
+        const DWORD error = ::GetLastError();
+        if (m_Slot != NULL)
+            ::InterlockedExchange(&m_Slot->Claimed, 0);
+        else if (m_Event != NULL)
+            ::CloseHandle(m_Event);
+        ::SetLastError(error);
+    }
+
+    HANDLE Get() const { return m_Event; }
+
+private:
+    SdkEventLease(const SdkEventLease&);
+    SdkEventLease& operator=(const SdkEventLease&);
+    SdkEventSlot* m_Slot;
+    HANDLE m_Event;
+};
+
 // Synchronous convenience methods must own their OVERLAPPED and request storage
 // until terminal completion. The public DeviceIoControl wrapper remains async.
 static BOOL SdkSynchronousIoControl(const CNdisApi& api, DWORD service,
@@ -53,7 +148,8 @@ static BOOL SdkSynchronousIoControl(const CNdisApi& api, DWORD service,
 {
     OVERLAPPED overlap = { 0 };
     bytesReturned = 0;
-    overlap.hEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+    SdkEventLease event;
+    overlap.hEvent = event.Get();
     if (overlap.hEvent == NULL)
         return FALSE;
 
@@ -66,10 +162,6 @@ static BOOL SdkSynchronousIoControl(const CNdisApi& api, DWORD service,
         result = api.CompleteOverlappedRequest(result, &overlap, &bytesReturned);
     }
 
-    const DWORD error = ::GetLastError();
-    ::CloseHandle(overlap.hEvent);
-    if (!result)
-        ::SetLastError(error);
     return result;
 }
 

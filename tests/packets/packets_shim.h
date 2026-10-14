@@ -15,6 +15,7 @@
 #include <string>
 #include <algorithm>
 #include "Common.h"
+#include "packets_events_shim.h"
 enum PACKET_IO_MODE { PacketImmediate, PacketFailure, PacketPending };
 struct PACKET_SHIM_STATE {
     PACKET_IO_MODE mode;
@@ -51,6 +52,9 @@ void* PacketMemmove(void*, const void*, size_t);
 #define DeviceIoControl PacketIoctl
 #define GetOverlappedResult PacketCompletion
 #define CloseHandle PacketCloseHandle
+#undef CreateEvent
+#define CreateEvent PacketCreateEvent
+#define ResetEvent PacketResetEvent
 #ifdef SDK_PACKETS_SOURCE
 #define malloc PacketMalloc
 #define free PacketFree

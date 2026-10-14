@@ -1,4 +1,4 @@
-param([ValidateSet('x64','x86')][string]$Arch, [string]$SourceRoot, [string]$OutputDirectory)
+param([ValidateSet('x64','x86')][string]$Arch, [string]$SourceRoot, [string]$OutputDirectory, [ValidateSet('All','Packets','Events')][string]$Suite='All')
 $ErrorActionPreference = 'Stop'
 function SourceHash([string]$Path) {
     $algorithm = [Security.Cryptography.SHA256]::Create()
@@ -9,12 +9,23 @@ function SourceHash([string]$Path) {
 $testRoot = $PSScriptRoot
 if (-not $SourceRoot) { $SourceRoot = [IO.Path]::GetFullPath((Join-Path $testRoot '..\..')) }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $SourceRoot "tests\bin\packets\$Arch" }
+if ($Suite -eq 'All') {
+    $shell = (Get-Process -Id $PID).Path
+    $overall = 0
+    foreach ($childSuite in @('Packets','Events')) {
+        & $shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Arch $Arch -SourceRoot $SourceRoot -OutputDirectory (Join-Path $OutputDirectory $childSuite.ToLowerInvariant()) -Suite $childSuite
+        $childExit = $LASTEXITCODE
+        if (-not ($childExit -is [int]) -or $childExit -notin @(0,1,2)) { $childExit = 2 }
+        if ($childExit -gt $overall) { $overall = $childExit }
+    }
+    exit $overall
+}
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $inputPaths = @(
     'ndisapi\ndisapi.cpp', 'ndisapi\precomp.h', 'ndisapi\inet_checksum.h',
     'ndisapi\iphlp.h', 'ndisapi\resource.h', 'include\Common.h', 'include\ndisapi.h'
 ) | ForEach-Object { Join-Path $SourceRoot $_ }
-$inputPaths += @('packets_test.cpp', 'packets_shim.cpp', 'packets_shim.h', 'build_packets.cmd', 'Run-Packets.ps1') |
+$inputPaths += @('packets_test.cpp', 'packets_shim.cpp', 'packets_shim.h', 'packets_events_test.cpp', 'packets_events_shim.cpp', 'packets_events_shim.h', 'build_packets.cmd', 'Run-Packets.ps1') |
     ForEach-Object { Join-Path $testRoot $_ }
 $before = [ordered]@{}
 foreach ($path in $inputPaths) { $before[$path] = SourceHash $path }
@@ -26,7 +37,8 @@ if (-not ($buildExit -is [int]) -or $buildExit -ne 0) {
 }
 $logPath = Join-Path $OutputDirectory 'run.log'
 $startInfo = New-Object Diagnostics.ProcessStartInfo
-$startInfo.FileName = Join-Path $OutputDirectory 'packets_test.exe'
+$executable = if ($Suite -eq 'Events') { 'packets_events_test.exe' } else { 'packets_test.exe' }
+$startInfo.FileName = Join-Path $OutputDirectory $executable
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
@@ -92,7 +104,7 @@ else {
 }
 Get-Content -LiteralPath $logPath -Tail 5
 [pscustomobject]@{
-    architecture=$Arch; source_root=$SourceRoot; build_exit=$buildExit; run_exit=$runExit
+    architecture=$Arch; suite=$Suite; source_root=$SourceRoot; build_exit=$buildExit; run_exit=$runExit
     input_sha256_before=$before; input_sha256_after=$after
     valid_test_evidence=($invalidReason -eq ''); invalid_reason=$invalidReason
     summary_count=$summaryCount; verdict_count=$verdictCount; failed_assertions=$failureLines; guarded_faults=$faultLines

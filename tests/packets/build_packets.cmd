@@ -19,9 +19,11 @@ call "%VCVARSALL%" %ARCH% > "%OUT%\environment.log" 2>&1
 if errorlevel 1 exit /b 2
 cl /nologo /c /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /DSDK_PACKETS_SOURCE /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIpackets_shim.h /Fo"%OUT%\sdk.obj" "%SRC%\ndisapi\ndisapi.cpp" > "%OUT%\build.log" 2>&1
 if errorlevel 1 exit /b 2
-cl /nologo /c /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\include" /Fo"%OUT%\\" "%TESTS%\packets_test.cpp" "%TESTS%\packets_shim.cpp" >> "%OUT%\build.log" 2>&1
+cl /nologo /c /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\include" /Fo"%OUT%\\" "%TESTS%\packets_test.cpp" "%TESTS%\packets_shim.cpp" "%TESTS%\packets_events_test.cpp" "%TESTS%\packets_events_shim.cpp" >> "%OUT%\build.log" 2>&1
 if errorlevel 1 exit /b 2
-link /nologo /out:"%OUT%\packets_test.exe" "%OUT%\sdk.obj" "%OUT%\packets_test.obj" "%OUT%\packets_shim.obj" ws2_32.lib iphlpapi.lib advapi32.lib >> "%OUT%\build.log" 2>&1
+link /nologo /out:"%OUT%\packets_test.exe" "%OUT%\sdk.obj" "%OUT%\packets_test.obj" "%OUT%\packets_shim.obj" "%OUT%\packets_events_shim.obj" ws2_32.lib iphlpapi.lib advapi32.lib >> "%OUT%\build.log" 2>&1
+if errorlevel 1 exit /b 2
+link /nologo /out:"%OUT%\packets_events_test.exe" "%OUT%\sdk.obj" "%OUT%\packets_events_test.obj" "%OUT%\packets_shim.obj" "%OUT%\packets_events_shim.obj" ws2_32.lib iphlpapi.lib advapi32.lib >> "%OUT%\build.log" 2>&1
 if errorlevel 1 exit /b 2
 exit /b 0
 :find_vcvarsall
