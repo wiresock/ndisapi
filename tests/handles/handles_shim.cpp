@@ -1,6 +1,7 @@
 #define SDK_HANDLES_SHIM_IMPL
 #include "handles_shim.h"
 TEST_SHIM_STATE g_Test = {};
+void (*g_AfterMapUnlock)() = NULL;
 ULONGLONG g_Adapters[ADAPTER_LIST_SIZE] = { 0x1234567887650000ULL, 0x2345678998760000ULL };
 unsigned g_AdapterCount = 2;
 struct ALLOCATION { void* p; size_t bytes; };
@@ -29,6 +30,12 @@ void TestReset() {
     g_Test.terminalSuccess = TRUE;
     g_Test.terminalError = ERROR_ACCESS_DENIED;
     g_Test.captureInputLimit = sizeof(g_Test.input);
+    g_Test.enumerationMode = TestImmediate;
+    g_Test.enumerationBytes = TestWow64() ? sizeof(TCP_AdapterList_WOW64) : sizeof(TCP_AdapterList);
+    g_Test.enumerationError = ERROR_DEVICE_NOT_CONNECTED;
+    g_Test.enumerationTerminalError = ERROR_ACCESS_DENIED;
+    g_Test.enumerationTerminalSuccess = TRUE;
+    g_AfterMapUnlock = NULL;
     SetLastError(ERROR_SUCCESS);
 }
 HANDLE WINAPI TestCreateFile(LPCTSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE) {
@@ -37,7 +44,7 @@ HANDLE WINAPI TestCreateFile(LPCTSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD
     return CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
         FILE_FLAG_OVERLAPPED | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
 }
-static BOOL Enumerate(void* out, DWORD outLen, DWORD* bytes) {
+static BOOL Enumerate(void* out, DWORD outLen, DWORD* bytes, OVERLAPPED* ov) {
     ++g_Test.enumerationCalls;
     if (TestWow64()) {
         if (outLen != sizeof(TCP_AdapterList_WOW64)) { SetLastError(ERROR_BAD_LENGTH); return FALSE; }
@@ -56,7 +63,15 @@ static BOOL Enumerate(void* out, DWORD outLen, DWORD* bytes) {
             a->m_usMTU[i] = 1500;
         }
     }
-    if (bytes) *bytes = outLen;
+    if (bytes) *bytes = g_Test.enumerationBytes;
+    if (g_Test.enumerationMode == TestFailure) {
+        SetLastError(g_Test.enumerationError); return FALSE;
+    }
+    if (g_Test.enumerationMode == TestPending) {
+        g_Test.enumerationPending = TRUE; g_Test.enumerationOverlap = ov;
+        if (bytes) *bytes = 0;
+        SetLastError(ERROR_IO_PENDING); return FALSE;
+    }
     return TRUE;
 }
 static void WriteValidServiceResponse() {
@@ -106,7 +121,7 @@ static void WriteResponse() {
 }
 BOOL WINAPI TestIoctl(HANDLE, DWORD code, void* in, DWORD inLen, void* out, DWORD outLen,
                       DWORD* bytes, OVERLAPPED* ov) {
-    if (code == IOCTL_NDISRD_GET_TCPIP_INTERFACES) return Enumerate(out, outLen, bytes);
+    if (code == IOCTL_NDISRD_GET_TCPIP_INTERFACES) return Enumerate(out, outLen, bytes, ov);
     ++g_Test.ioctlCalls;
     g_Test.code = code; g_Test.inLength = inLen; g_Test.outLength = outLen;
     g_Test.inputPointer = in; g_Test.outputPointer = out; g_Test.overlap = ov;
@@ -129,6 +144,14 @@ BOOL WINAPI TestIoctl(HANDLE, DWORD code, void* in, DWORD inLen, void* out, DWOR
     return TRUE;
 }
 BOOL WINAPI TestCompletion(HANDLE, OVERLAPPED* ov, DWORD* bytes, BOOL wait) {
+    if (g_Test.enumerationPending) {
+        ++g_Test.enumerationCompletions;
+        if (!wait || ov != g_Test.enumerationOverlap) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        g_Test.enumerationPending = FALSE;
+        if (bytes) *bytes = g_Test.enumerationBytes;
+        if (!g_Test.enumerationTerminalSuccess) { SetLastError(g_Test.enumerationTerminalError); return FALSE; }
+        return TRUE;
+    }
     ++g_Test.completions;
     if (wait) ++g_Test.waits;
     if (g_Test.pending && ov != g_Test.overlap) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
@@ -174,4 +197,13 @@ void TestFree(void* p) {
         ++g_Test.freeCalls; ::free(p);
     }
     if (g_Test.cleanupClobbersError) SetLastError(ERROR_INVALID_DATA);
+}
+// The older lock branch has a deterministic test-only scheduling boundary:
+// release the real mutex, then finish a concurrent map update before returning.
+BOOL WINAPI TestReleaseMutex(HANDLE mutex) {
+    const BOOL result = ::ReleaseMutex(mutex);
+    void (*afterUnlock)() = g_AfterMapUnlock;
+    g_AfterMapUnlock = NULL;
+    if (afterUnlock) afterUnlock();
+    return result;
 }

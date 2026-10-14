@@ -277,7 +277,8 @@ static BOOL SdkReadPacketsWow64(const CNdisApi& api, ULONGLONG adapter,
     int requestBytes;
     if (!SdkPreparePacketBatchWow64(capacity, adapter, requestStorage, packetStorage, requestBytes))
         return FALSE;
-    for (DWORD i = 0; i < capacity; ++i)
+    DWORD i;
+    for (i = 0; i < capacity; ++i)
     {
         if (caller->EthPacket[i].Buffer == NULL)
         {
@@ -297,12 +298,12 @@ static BOOL SdkReadPacketsWow64(const CNdisApi& api, ULONGLONG adapter,
     }
     const DWORD count = request->dwPacketsSuccess;
     PINTERMEDIATE_BUFFER_WOW64 packets = static_cast<PINTERMEDIATE_BUFFER_WOW64>(packetStorage.Get());
-    for (DWORD i = 0; i < count; ++i)
+    for (i = 0; i < count; ++i)
     {
         if (!SdkValidatePacketFromWow64(packets[i]))
             return FALSE;
     }
-    for (DWORD i = 0; i < count; ++i)
+    for (i = 0; i < count; ++i)
         SdkCopyPacketFromWow64(packets[i], *caller->EthPacket[i].Buffer);
     caller->dwPacketsSuccess = count;
     return TRUE;
@@ -469,7 +470,51 @@ public:
         return TRUE;
     }
 
+    // Validate and translate against one map snapshot. A miss must leave every
+    // raw identity intact so the caller can refresh and retry the whole table.
+    BOOL From64to32Table(PSTATIC_FILTER_TABLE table)
+    {
+        ULONGLONG snapshot[ADAPTER_LIST_SIZE + 1];
+        {
+#if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
+            std::shared_lock <std::shared_mutex> lock(m_SharedLock);
+#else
+            InternalLock();
+#endif
+            memcpy(snapshot, m_Handle32to64, sizeof(snapshot));
+#if _MSC_VER < 1800 || defined(_USING_V110_SDK71_)
+            InternalUnlock();
+#endif
+        }
+
+        DWORD row;
+        for (row = 0; row < table->m_TableSize; ++row)
+        {
+            const ULONGLONG handle = table->m_StaticFilters[row].m_Adapter.QuadPart;
+            if (handle != 0 && Find32Handle(snapshot, handle) == 0)
+            {
+                ::SetLastError(ERROR_INVALID_HANDLE);
+                return FALSE;
+            }
+        }
+        for (row = 0; row < table->m_TableSize; ++row)
+        {
+            const ULONGLONG handle = table->m_StaticFilters[row].m_Adapter.QuadPart;
+            table->m_StaticFilters[row].m_Adapter.QuadPart =
+                handle == 0 ? 0 : Find32Handle(snapshot, handle);
+        }
+        return TRUE;
+    }
+
 private:
+    static unsigned int Find32Handle(const ULONGLONG* snapshot, ULONGLONG handle)
+    {
+        for (unsigned int slot = 1; slot <= ADAPTER_LIST_SIZE; ++slot)
+            if (snapshot[slot] == handle)
+                return slot;
+        return 0;
+    }
+
 #if _MSC_VER >= 1800 && !defined(_USING_V110_SDK71_)
     CWow64Helper() = default;
 #else
@@ -2280,12 +2325,15 @@ BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        for (DWORD i = 0; i < table->m_TableSize; ++i)
+        if (!m_Wow64Helper.From64to32Table(table))
         {
-            unsigned int handle32;
-            if (!m_Wow64Helper.From64to32Handle(table->m_StaticFilters[i].m_Adapter.QuadPart, handle32))
+            // Refresh only the map, outside its lock. The table (and RESET side
+            // effect) is read once; enumeration must not replace its byte count.
+            TCP_AdapterList adapters = { 0 };
+            const BOOL refreshed = GetTcpipBoundAdaptersInfo(&adapters);
+            m_BytesReturned = bytesReturned;
+            if (!refreshed || !m_Wow64Helper.From64to32Table(table))
                 return FALSE;
-            table->m_StaticFilters[i].m_Adapter.QuadPart = handle32;
         }
     }
 #endif
@@ -2324,12 +2372,15 @@ BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) 
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        for (DWORD i = 0; i < table->m_TableSize; ++i)
+        if (!m_Wow64Helper.From64to32Table(table))
         {
-            unsigned int handle32;
-            if (!m_Wow64Helper.From64to32Handle(table->m_StaticFilters[i].m_Adapter.QuadPart, handle32))
+            // Refresh only the map, outside its lock. The table (and RESET side
+            // effect) is read once; enumeration must not replace its byte count.
+            TCP_AdapterList adapters = { 0 };
+            const BOOL refreshed = GetTcpipBoundAdaptersInfo(&adapters);
+            m_BytesReturned = bytesReturned;
+            if (!refreshed || !m_Wow64Helper.From64to32Table(table))
                 return FALSE;
-            table->m_StaticFilters[i].m_Adapter.QuadPart = handle32;
         }
     }
 #endif
