@@ -177,6 +177,9 @@ public:
     BOOL    GetAdapterMode(PADAPTER_MODE pMode) const;
     BOOL    FlushAdapterPacketQueue(HANDLE hAdapter) const;
     BOOL    GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const;
+    // Non-NULL Windows event handles registered by these event APIs must grant
+    // EVENT_MODIFY_STATE; SYNCHRONIZE alone is insufficient. A reference/access
+    // failure leaves the previous registration unchanged.
     BOOL    SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const;
     BOOL    SetWANEvent(HANDLE hWin32Event) const;
     BOOL    SetAdapterListChangeEvent(HANDLE hWin32Event) const;
@@ -187,6 +190,7 @@ public:
     BOOL    GetRasLinks(HANDLE hAdapter, PRAS_LINKS pLinks) const;
     BOOL    SetHwPacketFilter(HANDLE hAdapter, DWORD Filter) const;
     BOOL    GetHwPacketFilter(HANDLE hAdapter, PDWORD pFilter) const;
+    // Same EVENT_MODIFY_STATE and unchanged-on-reference-failure contract as SetPacketEvent.
     BOOL    SetHwPacketFilterEvent(HANDLE hAdapter, HANDLE hWin32Event) const;
     BOOL    SetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const;
     BOOL    AddStaticFilterFront(PSTATIC_FILTER pFilter) const;
@@ -203,6 +207,11 @@ public:
     BOOL    EnablePacketFragmentCache() const;
     BOOL    DisablePacketFragmentCache() const;
     BOOL    IsDriverLoaded() const;
+    // Fast I/O sections have one registering device file-object owner. Add secondary
+    // sections through that same owner; keep every successful section's memory valid
+    // until the owner closes. There is no unregister IOCTL. Stop readers, close the
+    // registering CNdisApi/hOpen, then free storage. Initialize/Add do not support WOW64.
+    // Dedicated-owner example: examples/cpp/common/ndisapi/fastio_packet_filter.h.
     BOOL    InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
     BOOL    AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const;
     BOOL    ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess) const;
@@ -313,6 +322,9 @@ extern "C"
     BOOL    __stdcall        GetAdapterMode(HANDLE hOpen, PADAPTER_MODE pMode);
     BOOL    __stdcall        FlushAdapterPacketQueue(HANDLE hOpen, HANDLE hAdapter);
     BOOL    __stdcall        GetAdapterPacketQueueSize(HANDLE hOpen, HANDLE hAdapter, PDWORD pdwSize);
+    // Non-NULL Windows event handles registered by these event APIs must grant
+    // EVENT_MODIFY_STATE; SYNCHRONIZE alone is insufficient. A reference/access
+    // failure leaves the previous registration unchanged.
     BOOL    __stdcall        SetPacketEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event);
     BOOL    __stdcall        SetWANEvent(HANDLE hOpen, HANDLE hWin32Event);
     BOOL    __stdcall        SetAdapterListChangeEvent(HANDLE hOpen, HANDLE hWin32Event);
@@ -320,6 +332,7 @@ extern "C"
     BOOL    __stdcall        GetRasLinks(HANDLE hOpen, HANDLE hAdapter, PRAS_LINKS pLinks);
     BOOL    __stdcall        SetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, DWORD Filter);
     BOOL    __stdcall        GetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter);
+    // Same EVENT_MODIFY_STATE and unchanged-on-reference-failure contract as SetPacketEvent.
     BOOL    __stdcall        SetHwPacketFilterEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event);
     BOOL    __stdcall        SetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList);
     BOOL    __stdcall        AddStaticFilterFront(HANDLE hOpen, PSTATIC_FILTER pFilter);
@@ -342,6 +355,11 @@ extern "C"
     BOOL    __stdcall        SetPoolSize(DWORD dwPoolSize);
     DWORD   __stdcall        GetPoolSize();
     BOOL    __stdcall        IsDriverLoaded(HANDLE hOpen);
+    // Fast I/O sections have one registering device file-object owner. Add secondary
+    // sections through that same owner; keep every successful section's memory valid
+    // until the owner closes. There is no unregister IOCTL. Stop readers, close the
+    // registering CNdisApi/hOpen, then free storage. Initialize/Add do not support WOW64.
+    // Dedicated-owner example: examples/cpp/common/ndisapi/fastio_packet_filter.h.
     BOOL    __stdcall        InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
     BOOL    __stdcall        AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize);
     BOOL    __stdcall        ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketsSuccess);

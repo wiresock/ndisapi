@@ -16,6 +16,12 @@ The original table IOCTL is issued once. GET_RESET returns its original counters
 
 The marker is output-only: `SetPacketFilterTable`, `AddStaticFilterFront`, `AddStaticFilterBack`, and `InsertStaticFilter` reject it with `ERROR_INVALID_HANDLE` before any IOCTL on both native and WOW64 callers. Do not replace it with zero when reusing a table; that would broaden an adapter-specific rule to every adapter. Resolve a current adapter handle or explicitly remove the row first.
 
+## 3.8.2 event access and Fast I/O lifetime
+
+Non-NULL Windows event handles registered with `SetPacketEvent`, `SetWANEvent`, `SetAdapterListChangeEvent`, or `SetHwPacketFilterEvent` must grant `EVENT_MODIFY_STATE`. A `SYNCHRONIZE`-only handle is denied; a failed event reference/access check leaves the previous registration unchanged. Request modification access when opening or duplicating an event for registration.
+
+Fast I/O has one registering device file-object owner. Initialize the first section and add secondary sections through that same owner. Every successfully registered buffer and its pages must remain valid until that owner closes; there is no unregister IOCTL. Stop readers, close the registering `CNdisApi`/`hOpen` device handle, and only then free its backing storage. `InitializeFastIo` and `AddSecondaryFastIo` remain unavailable to WOW64 callers. The [dedicated-owner example](examples/cpp/common/ndisapi/fastio_packet_filter.h) uses a separate `registration_owner_` and closes it before freeing shared memory.
+
 ## 3.8.2 driver error compatibility
 
 The LWF device boundary preserves meaningful failure statuses instead of converting every failure to `ERROR_INVALID_PARAMETER` (87). Check the API result before interpreting `GetLastError`; errors have no successful output byte count. Examples from the current handlers are `ERROR_GEN_FAILURE` (31) for malformed batch/table extents and empty reads, 87 for invalid OID extents, `ERROR_MORE_DATA` (234) for oversized send frames, and `ERROR_INVALID_USER_BUFFER` (1784) for runt send frames. Registering a packet event against an unknown or unavailable adapter returns `ERROR_INVALID_HANDLE` (6). Callers must not treat all failures as interchangeable or infer a successful read from a count left in their input buffer.
