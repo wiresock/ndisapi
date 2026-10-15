@@ -16,6 +16,12 @@ The original table IOCTL is issued once. GET_RESET returns its original counters
 
 The marker is output-only: `SetPacketFilterTable`, `AddStaticFilterFront`, `AddStaticFilterBack`, and `InsertStaticFilter` reject it with `ERROR_INVALID_HANDLE` before any IOCTL on both native and WOW64 callers. Do not replace it with zero when reusing a table; that would broaden an adapter-specific rule to every adapter. Resolve a current adapter handle or explicitly remove the row first.
 
+## 3.8.2 driver error compatibility
+
+The LWF device boundary preserves meaningful failure statuses instead of converting every failure to `ERROR_INVALID_PARAMETER` (87). Check the API result before interpreting `GetLastError`; errors have no successful output byte count. Examples from the current handlers are `ERROR_GEN_FAILURE` (31) for malformed batch/table extents and empty reads, 87 for invalid OID extents, `ERROR_MORE_DATA` (234) for oversized send frames, and `ERROR_INVALID_USER_BUFFER` (1784) for runt send frames. Registering a packet event against an unknown or unavailable adapter returns `ERROR_INVALID_HANDLE` (6). Callers must not treat all failures as interchangeable or infer a successful read from a count left in their input buffer.
+
+Fast I/O has separate contracts: NDISRD reports `ERROR_NOACCESS` (998) for invalid section mappings and `ERROR_DUP_NAME` (52) when adding a section without an initial owned section. WireSock/kp_pkf LWF builds do not support Fast I/O and return the Win32 mapping of `STATUS_NDIS_NOT_SUPPORTED` (`0x803400BB`). These error distinctions do not change IOCTL numbers or public structure layouts.
+
 ## 3.8.2 unsorted send results
 
 `SendPacketsToAdaptersUnsorted` and `SendPacketsToMstcpUnsorted` return an accepted-packet tally in `*pdwPacketSuccess` on a successful call. `TRUE` can report a partial batch: compare the tally with `dwPacketsNum`. The tally is neither a completed prefix nor a per-packet result; adapter grouping and individual packet rejection can leave gaps anywhere in the input array. Acceptance also does not confirm delivery to a remote peer.
