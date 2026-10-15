@@ -726,10 +726,17 @@ typedef struct _TRANSPORT_LAYER_FILTER
     };
 } TRANSPORT_LAYER_FILTER, * PTRANSPORT_LAYER_FILTER;
 
+// Output-only WOW64 STATIC_FILTER.m_Adapter marker for a nonzero driver identity
+// still unmapped after one enumeration attempt. Not a wildcard or reusable handle.
+#define STATIC_FILTER_ADAPTER_UNMAPPED 0xFFFFFFFFUL
+
 /**
  * @brief STATIC_FILTER structure is used to define a static filter for the network adapter.
  *
- * @param m_Adapter This field is a handle to the adapter. It's used to identify the adapter that the filter is associated with.
+ * @param m_Adapter Adapter handle, or zero for all adapters. WOW64 table reads return
+ * STATIC_FILTER_ADAPTER_UNMAPPED for a nonzero identity that cannot currently be mapped, not necessarily
+ * a detached adapter. SET/ADD/INSERT reject that output-only marker with ERROR_INVALID_HANDLE on every
+ * architecture. The rule and its counters remain readable and may be removed by index or unique filter ID.
  * @param m_dwDirectionFlags This field stores direction flags. These flags can be used to indicate whether the filter applies to sent packets,
  * received packets, or both.
  * @param m_FilterAction This field specifies the action to be taken when the filter conditions are met. It can be one of the following values:

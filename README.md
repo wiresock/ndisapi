@@ -8,6 +8,14 @@ Windows Packet Filter (WinpkFilter) is a robust and efficient packet filtering f
 
 `FILTER_PACKET_PASS_RDR` explicitly passes the original packet and delivers one observation copy; `FILTER_PACKET_DROP_RDR` explicitly drops the original and delivers one observation copy. This applies in every supported adapter mode, including TUNNEL. Observation copies must not be reinjected as ordinary diverted traffic. The existing `m_FilterID` identifies the matched rule; there is no new public observation flag or packet layout. Applications should use the matched rule/action to distinguish these copies.
 
+## 3.8.2 WOW64 static table reads
+
+`GetPacketFilterTable` and `GetPacketFilterTableResetStats` keep every validated row readable when a nonzero adapter identity cannot be mapped in a 32-bit process. The SDK attempts adapter enumeration once, then returns `STATIC_FILTER_ADAPTER_UNMAPPED` (`0xFFFFFFFFUL`) in `STATIC_FILTER.m_Adapter` for identities still unknown, including when enumeration fails. Known identities use their application handles; actual zero remains the all-adapters wildcard. The table is translated against one coherent mapping snapshot.
+
+The original table IOCTL is issued once. GET_RESET returns its original counters and byte count without repeating the driver reset. An unmapped identity does not necessarily mean the adapter detached, and the SDK does not purge the rule. Rules remain removable by `RemoveStaticFilter` index or `DeleteStaticFilterById` unique filter ID.
+
+The marker is output-only: `SetPacketFilterTable`, `AddStaticFilterFront`, `AddStaticFilterBack`, and `InsertStaticFilter` reject it with `ERROR_INVALID_HANDLE` before any IOCTL on both native and WOW64 callers. Do not replace it with zero when reusing a table; that would broaden an adapter-specific rule to every adapter. Resolve a current adapter handle or explicitly remove the row first.
+
 ## 3.8.2 unsorted send results
 
 `SendPacketsToAdaptersUnsorted` and `SendPacketsToMstcpUnsorted` return an accepted-packet tally in `*pdwPacketSuccess` on a successful call. `TRUE` can report a partial batch: compare the tally with `dwPacketsNum`. The tally is neither a completed prefix nor a per-packet result; adapter grouping and individual packet rejection can leave gaps anywhere in the input array. Acceptance also does not confirm delivery to a remote peer.

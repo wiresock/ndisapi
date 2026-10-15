@@ -207,6 +207,30 @@ static void Inputs(const CNdisApi& api) {
         Check(wild && SubmittedAdapter(op) == 0, std::string(OpName(op)) + ": wildcard zero preserved");
     }
 }
+static void UnmappedMarkerInputs(const CNdisApi& api) {
+    const unsigned beforeChecks = checks, beforeFailures = failures;
+    for (unsigned opValue = SetTable; opValue <= Insert; ++opValue) {
+        const OP op = static_cast<OP>(opValue);
+        TestReset(); Table table(op == SetTable ? 2 : 1);
+        table.get()->m_StaticFilters[0].m_Adapter.QuadPart = reinterpret_cast<ULONG_PTR>(handleA);
+        table.get()->m_StaticFilters[op == SetTable ? 1 : 0].m_Adapter.QuadPart = STATIC_FILTER_ADAPTER_UNMAPPED;
+        const std::vector<unsigned char> before = table.bytes;
+        g_Test.cleanupClobbersError = TRUE;
+        Call c = { &api, op, table.get(), NULL, 0 };
+        const std::string label = std::string(OpName(op)) + "/output-only marker";
+        const BOOL ok = Run(c, label);
+        Check(!ok && c.error == ERROR_INVALID_HANDLE, label + ": marker rejected on native and WOW64 callers");
+        Check(g_Test.ioctlCalls == 0 && g_Test.enumerationCalls == 0, label + ": rejected before any IOCTL");
+        Check(table.bytes == before && g_Test.outstandingAllocations == 0, label + ": caller unchanged and no leak");
+        if (!TestWow64()) {
+            TestReset();
+            table.get()->m_StaticFilters[op == SetTable ? 1 : 0].m_Adapter.QuadPart = 0x1FFFFFFFFULL;
+            Check(Run(c, label + "/native full identity") && g_Test.ioctlCalls == 1,
+                label + ": exact marker check preserves other native 64-bit identities");
+        }
+    }
+    printf("CONTROL output-only marker inputs checks=%u failures=%u\n", checks - beforeChecks, failures - beforeFailures);
+}
 static void InvalidIdentities(const CNdisApi& api) {
     if (!TestWow64()) return;
     const ULONGLONG bad[] = {3, 33, 0xFFFFFFFFULL, 0x100000001ULL};
@@ -243,6 +267,11 @@ static void Response(unsigned returnedCount, DWORD returnedBytes, DWORD capacity
     table.get()->Padding = 0;
     table.get()->m_StaticFilters[0].m_Adapter.QuadPart = first;
     table.get()->m_StaticFilters[1].m_Adapter.QuadPart = second;
+    table.get()->m_StaticFilters[0].m_PacketsIn.QuadPart = 101;
+    table.get()->m_StaticFilters[0].m_BytesIn.QuadPart = 10001;
+    table.get()->m_StaticFilters[0].m_PacketsOut.QuadPart = 202;
+    table.get()->m_StaticFilters[0].m_BytesOut.QuadPart = 20002;
+    table.get()->m_StaticFilters[0].m_LastReset = 12345;
     g_Test.writeResponse = TRUE;
     g_Test.responseLength = TableBytes(capacity);
     memcpy(g_Test.response, &table.bytes[0], g_Test.responseLength);
@@ -312,9 +341,14 @@ static void Getters(const CNdisApi& api) {
             Response(2, TableBytes(2), 2, rawA, unknownRaw);
             Call c = { &api, op, unknown.get(), NULL, 0 };
             const BOOL ok = Run(c, std::string(OpName(op)) + "/unknown reverse mapping");
-            Check(!ok && c.error == ERROR_INVALID_HANDLE, std::string(OpName(op)) + ": unknown nonzero adapter rejected");
-            Check(unknown.bytes == before, std::string(OpName(op)) + ": no partially translated table published");
-            if (op == GetReset) Check(g_Test.resetStatsSideEffects == 1, "GET_RESET: driver reset side effect is not rolled back");
+            Check(ok && unknown.get()->m_StaticFilters[0].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(handleA) &&
+                unknown.get()->m_StaticFilters[1].m_Adapter.QuadPart == 0xFFFFFFFFULL,
+                std::string(OpName(op)) + ": known and unmapped nonzero rows remain readable");
+            Check(g_Test.ioctlCalls == 1 && g_Test.enumerationCalls == 1 && api.GetBytesReturned() == TableBytes(2),
+                std::string(OpName(op)) + ": one table request and one refresh preserve bytes");
+            Check(memcmp(&unknown.bytes[TableBytes(2)], &before[TableBytes(2)], before.size() - TableBytes(2)) == 0,
+                std::string(OpName(op)) + ": marker output stays inside returned extent");
+            if (op == GetReset) Check(g_Test.resetStatsSideEffects == 1, "GET_RESET: driver reset side effect occurs once");
         }
     }
 }
@@ -370,12 +404,13 @@ static void RoundTripAndRefresh(const CNdisApi& api) {
     const BOOL staleOk = Run(stale, "mapping/removal");
     Check(!staleOk && stale.error == ERROR_INVALID_HANDLE && g_Test.ioctlCalls == 0,
         "mapping: removed adapter is no longer accepted");
-    TestReset(); Table oldResult(1); const std::vector<unsigned char> beforeOld = oldResult.bytes;
+    TestReset(); Table oldResult(1);
     Response(1, TableBytes(1), 1, rawB, 0);
     Call reverse = { &api, GetTable, oldResult.get(), NULL, 0 };
     const BOOL reverseOk = Run(reverse, "mapping/removed reverse");
-    Check(!reverseOk && reverse.error == ERROR_INVALID_HANDLE && oldResult.bytes == beforeOld,
-        "mapping: removed adapter is not returned as a valid reusable handle");
+    Check(reverseOk && oldResult.get()->m_StaticFilters[0].m_Adapter.QuadPart == 0xFFFFFFFFULL &&
+        g_Test.enumerationCalls == 1 && g_Test.ioctlCalls == 1,
+        "mapping: removed adapter remains readable as an output-only marker");
     const HANDLE retained = handleA;
     Refresh(api, 0);
     TestReset(); stale.adapter = retained;
@@ -472,36 +507,35 @@ static void StaleTableRefresh(const CNdisApi& api) {
             Call c = { &api, op, caller.get(), NULL, 0 };
             const std::string label = std::string(OpName(op)) + "/stale-map" + std::to_string(scenario);
             const BOOL ok = Run(c, label);
-            const bool success = !TestWow64() || scenario == 0 || scenario == 1 || scenario == 2 ||
-                scenario == 7 || scenario == 8 || scenario == 10;
-            Check((ok != FALSE) == success, label + ": expected conversion outcome");
+            Check(ok != FALSE, label + ": table remains readable after refresh attempt");
             Check(g_Test.ioctlCalls == 1, label + ": table IOCTL submitted exactly once");
             Check(g_Test.enumerationCalls == (TestWow64() && scenario != 10 ? 1U : 0U),
                 label + ": one refresh only for a WOW64 miss");
             Check(api.GetBytesReturned() == TableBytes(count), label + ": original table byte accounting survives refresh");
             Check(g_Test.resetStatsSideEffects == (op == GetReset ? 1U : 0U), label + ": RESET side effect occurs exactly once");
-            if (success) {
-                std::vector<unsigned char> expected(g_Test.response, g_Test.response + TableBytes(count));
-                PSTATIC_FILTER_TABLE expectedTable = reinterpret_cast<PSTATIC_FILTER_TABLE>(&expected[0]);
-                if (TestWow64()) {
-                    if (scenario == 0) expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = 2;
-                    else {
-                        expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = reinterpret_cast<ULONG_PTR>(retainedA);
-                        expectedTable->m_StaticFilters[1].m_Adapter.QuadPart = 2;
-                    }
+            std::vector<unsigned char> expected(g_Test.response, g_Test.response + TableBytes(count));
+            PSTATIC_FILTER_TABLE expectedTable = reinterpret_cast<PSTATIC_FILTER_TABLE>(&expected[0]);
+            if (TestWow64()) {
+                if (scenario == 0) expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = 2;
+                else {
+                    expectedTable->m_StaticFilters[0].m_Adapter.QuadPart = scenario == 11 ? 0xFFFFFFFFULL : reinterpret_cast<ULONG_PTR>(retainedA);
+                    expectedTable->m_StaticFilters[1].m_Adapter.QuadPart =
+                        scenario == 3 || scenario == 4 || scenario == 5 || scenario == 9 || scenario == 11 ? 0xFFFFFFFFULL : 2;
+                    if (scenario == 6) expectedTable->m_StaticFilters[2].m_Adapter.QuadPart = 0xFFFFFFFFULL;
                 }
-                Check(memcmp(&caller.bytes[0], &expected[0], expected.size()) == 0,
-                    label + ": mixed raw identities and all other fields publish correctly");
-                Check(memcmp(&caller.bytes[TableBytes(count)], &before[TableBytes(count)], before.size() - TableBytes(count)) == 0,
-                    label + ": bytes beyond original table result remain unchanged");
-                if (count > 2 && scenario != 6)
-                    Check(caller.get()->m_StaticFilters[2].m_Adapter.QuadPart == 0, label + ": wildcard remains zero");
-            } else {
-                const DWORD expectedError = scenario == 3 ? ERROR_DEVICE_NOT_CONNECTED : scenario == 4 ? ERROR_ACCESS_DENIED :
-                    scenario == 9 ? ERROR_INVALID_DATA : ERROR_INVALID_HANDLE;
-                Check(c.error == expectedError, label + ": refresh/conversion error survives cleanup");
-                Check(caller.bytes == before, label + ": failed conversion never publishes any row");
             }
+            Check(memcmp(&caller.bytes[0], &expected[0], expected.size()) == 0,
+                label + ": mixed raw identities and all other fields publish correctly");
+            Check(memcmp(&caller.bytes[TableBytes(count)], &before[TableBytes(count)], before.size() - TableBytes(count)) == 0,
+                label + ": bytes beyond original table result remain unchanged");
+            if (count > 2 && scenario != 6)
+                Check(caller.get()->m_StaticFilters[2].m_Adapter.QuadPart == 0, label + ": wildcard remains zero");
+            Check(caller.get()->m_StaticFilters[0].m_PacketsIn.QuadPart == 101 &&
+                caller.get()->m_StaticFilters[0].m_BytesIn.QuadPart == 10001 &&
+                caller.get()->m_StaticFilters[0].m_PacketsOut.QuadPart == 202 &&
+                caller.get()->m_StaticFilters[0].m_BytesOut.QuadPart == 20002 &&
+                caller.get()->m_StaticFilters[0].m_LastReset == 12345,
+                label + ": original pre-reset counters remain readable");
             if (TestWow64() && (scenario == 4 || scenario == 7))
                 Check(g_Test.enumerationCompletions == 1 && !g_Test.enumerationPending,
                     label + ": refresh reaches terminal completion exactly once");
@@ -533,33 +567,48 @@ static void FinishConcurrentMapUpdate() {
         ExitProcess(2);
     }
 }
+static unsigned snapshotUnlocks = 0;
+static void UpdateAfterSnapshot() {
+    if (--snapshotUnlocks) { g_AfterMapUnlock = UpdateAfterSnapshot; return; }
+    g_AdapterCount = 1; g_Adapters[0] = rawA;
+    FinishConcurrentMapUpdate();
+}
 static void ConsistentSnapshot(const CNdisApi& api) {
     if (!TestWow64()) return;
     CNdisApi updateApi;
     concurrentApi = &updateApi;
     const unsigned beforeChecks = checks, beforeFailures = failures;
     for (unsigned opValue = GetTable; opValue <= GetReset; ++opValue) {
-        Refresh(api, 2);
-        const HANDLE originalA = handleA, originalB = handleB;
-        TestReset(); g_AdapterCount = 1; g_Adapters[0] = rawA;
-        Table caller(2); Response(2, TableBytes(2), 2, rawA, rawB);
-        g_AfterMapUnlock = FinishConcurrentMapUpdate;
-        concurrentEnumeration = FALSE; concurrentWait = WAIT_FAILED;
-        Call c = { &api, static_cast<OP>(opValue), caller.get(), NULL, 0 };
-        const std::string label = std::string(OpName(c.op)) + "/concurrent map snapshot";
-        const BOOL ok = Run(c, label);
-        g_AfterMapUnlock = NULL;
-        Check(concurrentWait == WAIT_OBJECT_0 && concurrentEnumeration, label + ": actual concurrent enumeration finishes at unlock");
-        Check(ok && caller.get()->m_StaticFilters[0].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalA) &&
-            caller.get()->m_StaticFilters[1].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalB),
-            label + ": both rows use the same original snapshot despite removing B");
-        Check(g_Test.enumerationCalls == 1 && g_Test.ioctlCalls == 1, label + ": no refresh or table IOCTL is duplicated");
-        Check(api.GetBytesReturned() == TableBytes(2), label + ": updater instance cannot change caller byte accounting");
-        Check(g_Test.resetStatsSideEffects == (c.op == GetReset ? 1U : 0U), label + ": reset is issued once");
-        TestReset();
-        Call removed = { &api, FlushQueue, NULL, originalB, 0 };
-        Check(!Run(removed, label + "/removed mapping") && removed.error == ERROR_INVALID_HANDLE && g_Test.ioctlCalls == 0,
-            label + ": concurrent update really removed B from live map");
+        for (unsigned fallback = 0; fallback != 2; ++fallback) {
+            Refresh(api, 2);
+            const HANDLE originalA = handleA, originalB = handleB;
+            TestReset(); g_AdapterCount = 2; g_Adapters[0] = rawA; g_Adapters[1] = rawB;
+            const DWORD count = fallback ? 3 : 2;
+            Table caller(count); Response(count, TableBytes(count), count, rawA, rawB);
+            if (fallback) reinterpret_cast<PSTATIC_FILTER_TABLE>(g_Test.response)->m_StaticFilters[2].m_Adapter.QuadPart = unknownRaw;
+            // Fallback unlocks: initial snapshot, map refresh, then final snapshot.
+            snapshotUnlocks = fallback ? 3 : 1;
+            g_AfterMapUnlock = UpdateAfterSnapshot;
+            concurrentEnumeration = FALSE; concurrentWait = WAIT_FAILED;
+            Call c = { &api, static_cast<OP>(opValue), caller.get(), NULL, 0 };
+            const std::string label = std::string(OpName(c.op)) + "/concurrent map snapshot" + (fallback ? "/unmapped" : "/known");
+            const BOOL ok = Run(c, label);
+            g_AfterMapUnlock = NULL;
+            Check(concurrentWait == WAIT_OBJECT_0 && concurrentEnumeration, label + ": actual concurrent enumeration finishes at unlock");
+            Check(ok && caller.get()->m_StaticFilters[0].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalA) &&
+                caller.get()->m_StaticFilters[1].m_Adapter.QuadPart == reinterpret_cast<ULONG_PTR>(originalB),
+                label + ": both known rows use one snapshot despite removing B");
+            if (fallback) Check(caller.get()->m_StaticFilters[2].m_Adapter.QuadPart == 0xFFFFFFFFULL,
+                label + ": unknown row is marked from the same final snapshot");
+            Check(g_Test.enumerationCalls == (fallback ? 2U : 1U) && g_Test.ioctlCalls == 1,
+                label + ": only the expected refresh and concurrent enumeration are issued");
+            Check(api.GetBytesReturned() == TableBytes(count), label + ": updater instance cannot change caller byte accounting");
+            Check(g_Test.resetStatsSideEffects == (c.op == GetReset ? 1U : 0U), label + ": reset is issued once");
+            TestReset();
+            Call removed = { &api, FlushQueue, NULL, originalB, 0 };
+            Check(!Run(removed, label + "/removed mapping") && removed.error == ERROR_INVALID_HANDLE && g_Test.ioctlCalls == 0,
+                label + ": concurrent update really removed B from live map");
+        }
     }
     Refresh(api, 2);
     printf("CONTROL consistent snapshot checks=%u failures=%u\n", checks - beforeChecks, failures - beforeFailures);
@@ -580,6 +629,7 @@ int main() {
         reinterpret_cast<ULONG_PTR>(handleB) <= ADAPTER_LIST_SIZE), "enumeration: real WOW64 map produced indexed handles");
     ValidIdentities(api, handleA, rawA, "initial valid mapping");
     Inputs(api);
+    UnmappedMarkerInputs(api);
     InvalidIdentities(api);
     Getters(api);
     ArithmeticAndAllocation(api);
