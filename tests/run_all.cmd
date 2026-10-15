@@ -35,10 +35,11 @@ if /i "%~1"=="ablation" set ABLATION=1
 if not "%~2"=="" set "PREFIX_REV=%~2"
 
 call :find_vcvarsall
-if not defined VCVARSALL (
-    echo Could not locate vcvarsall.bat; install the C++ build tools or run from a Developer prompt.
-    exit /b 2
-)
+if errorlevel 1 exit /b 2
+echo SDK_TOOLCHAIN vcvarsall="%VCVARSALL%"
+rem Clear an inherited developer environment before children enter the selected toolchain.
+call :clean_vc_environment
+if errorlevel 1 exit /b 2
 
 call :arch x64
 call :arch x86
@@ -183,11 +184,14 @@ set "SRC=%~2"
 set "O=%~3"
 set "EXE=%~4"
 if not exist "%O%" mkdir "%O%"
-cmd /c ""%VCVARSALL%" %A% >nul 2>&1 && cl /nologo /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIoidshim.h /Fo"%O%\\" /Fe"%O%\%EXE%.exe" "%TESTS%\oid_test.cpp" "%TESTS%\oidshim.c" "%SRC%\ndisapi\ndisapi.cpp" /link ws2_32.lib iphlpapi.lib advapi32.lib" > "%O%\build.log" 2>&1
+cmd /c ""%VCVARSALL%" %A% >nul 2>&1 && echo SDK_COMPILER_PATH arch=%A% && where cl && cl /Bv /nologo /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIoidshim.h /Fo"%O%\\" /Fe"%O%\%EXE%.exe" "%TESTS%\oid_test.cpp" "%TESTS%\oidshim.c" "%SRC%\ndisapi\ndisapi.cpp" /link ws2_32.lib iphlpapi.lib advapi32.lib" > "%O%\build.log" 2>&1
 if not "!ERRORLEVEL!"=="0" (
     findstr /C:"error " "%O%\build.log"
     exit /b 2
 )
+echo SDK_COMPILER_RECEIPT arch=%A%
+findstr /C:"SDK_COMPILER_PATH" /C:"cl.exe" /C:"Compiler Version" "%O%\build.log"
+echo SDK_COMPILER_RECEIPT_END arch=%A%
 exit /b 0
 
 rem %1 arch, %2 sdk root, %3 output dir, %4 exe name
@@ -197,12 +201,15 @@ set "SRC=%~2"
 set "O=%~3"
 set "EXE=%~4"
 if not exist "%O%" mkdir "%O%"
-cmd /c ""%VCVARSALL%" %A% >nul 2>&1 && cl /nologo /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIoidshim.h /Fo"%O%\\" /Fe"%O%\%EXE%.exe" "%TESTS%\oid_test.cpp" "%TESTS%\oidshim.c" "%SRC%\ndisapi\ndisapi.cpp" /link ws2_32.lib iphlpapi.lib advapi32.lib" > "%O%\build.log" 2>&1
+cmd /c ""%VCVARSALL%" %A% >nul 2>&1 && echo SDK_COMPILER_PATH arch=%A% && where cl && cl /Bv /nologo /W4 /EHsc /std:c++17 /D_LIB /DUNICODE /D_UNICODE /D_WINSOCK_DEPRECATED_NO_WARNINGS /I"%TESTS%" /I"%SRC%\ndisapi" /I"%SRC%\include" /FIoidshim.h /Fo"%O%\\" /Fe"%O%\%EXE%.exe" "%TESTS%\oid_test.cpp" "%TESTS%\oidshim.c" "%SRC%\ndisapi\ndisapi.cpp" /link ws2_32.lib iphlpapi.lib advapi32.lib" > "%O%\build.log" 2>&1
 if not "!ERRORLEVEL!"=="0" (
     echo BUILD FAILED ^(%A%^); see "%O%\build.log"
     findstr /C:"error " "%O%\build.log"
     exit /b 2
 )
+echo SDK_COMPILER_RECEIPT arch=%A%
+findstr /C:"SDK_COMPILER_PATH" /C:"cl.exe" /C:"Compiler Version" "%O%\build.log"
+echo SDK_COMPILER_RECEIPT_END arch=%A%
 "%O%\%EXE%.exe"
 exit /b !ERRORLEVEL!
 
@@ -225,11 +232,25 @@ exit /b 0
 
 rem ---------------------------------------------------------------- toolchain
 :find_vcvarsall
-set "VCVARSALL="
+if defined VCVARSALL (
+ if exist "%VCVARSALL%" exit /b 0
+ echo Invalid VCVARSALL override: "%VCVARSALL%"
+ exit /b 1
+)
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" goto :eof
-for /f "usebackq tokens=*" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
-    if exist "%%I\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARSALL=%%I\VC\Auxiliary\Build\vcvarsall.bat"
+if exist "%VSWHERE%" for /f "usebackq tokens=*" %%I in (`call "%VSWHERE%" -latest -products * -version "[16.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+ if exist "%%I\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARSALL=%%I\VC\Auxiliary\Build\vcvarsall.bat"
 )
-goto :eof
+if defined VCVARSALL exit /b 0
+echo Could not locate VS2019/2022 C++ tools; set VCVARSALL to a valid vcvarsall.bat.
+exit /b 1
+
+:clean_vc_environment
+if not defined VSCMD_VER exit /b 0
+if not exist "%VSINSTALLDIR%\VC\Auxiliary\Build\vcvarsall.bat" (
+ echo Cannot clean the inherited Visual Studio environment; run from a fresh prompt.
+ exit /b 1
+)
+call "%VSINSTALLDIR%\VC\Auxiliary\Build\vcvarsall.bat" /clean_env
+exit /b %ERRORLEVEL%
