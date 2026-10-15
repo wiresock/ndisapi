@@ -1,0 +1,5 @@
+# Windows batch runners require CRLF; script sources use LF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=lf
+*.py text eol=lf
