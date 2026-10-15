@@ -26,6 +26,7 @@ AddStaticFilterFront
 AddStaticFilterBack
 InsertStaticFilter
 RemoveStaticFilter
+DeleteStaticFilterById
 ResetPacketFilterTable
 GetPacketFilterTableSize
 GetPacketFilterTable
