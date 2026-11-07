@@ -8,6 +8,14 @@ Windows Packet Filter (WinpkFilter) is a robust and efficient packet filtering f
 
 With the v3.6.2 driver, a static rule whose action is `FILTER_PACKET_PASS_RDR` or `FILTER_PACKET_DROP_RDR` is handled exactly like `FILTER_PACKET_REDIRECT`: the adapter mode decides the outcome. In TUNNEL mode the packet is redirected to the application (it is not passed or dropped by the driver); in LISTEN mode the original packet passes and the application receives a copy. `FILTER_PACKET_DROP_RDR` therefore does not drop the original packet on this driver. Use `FILTER_PACKET_DROP` to drop, or `FILTER_PACKET_REDIRECT` and drop in the application. The explicit pass/drop-with-copy semantics in every mode were introduced by the 3.8.2 driver and are not available here.
 
+## Unsorted send results (v3.6.2 driver)
+
+`SendPacketsToAdaptersUnsorted` and `SendPacketsToMstcpUnsorted` return an accepted-packet tally in `*pdwPacketSuccess` on a successful call. `TRUE` can report a partial batch: compare the tally with `dwPacketsNum`. The tally is neither a completed prefix nor a per-packet result; adapter grouping and individual packet rejection can leave gaps anywhere in the input array. Acceptance also does not confirm delivery to a remote peer.
+
+With the v3.6.2 driver a short tally on success comes from packets whose `m_hAdapter` is not a known adapter: they are skipped silently. If any packet for a known adapter is rejected (adapter not running, oversized frame or allocation failure), the whole call returns `FALSE` and `*pdwPacketSuccess` is `0`, although the packets accepted before and after the rejected one have already been sent. A `FALSE` result therefore does not mean that nothing was sent.
+
+Do not retry the suffix starting at `*pdwPacketSuccess`, or infer which packets to retry from this count. Per-adapter batches and the sorted send APIs alone do not provide an exactly-once delivery guarantee. Applications requiring that guarantee need their own per-packet acknowledgement and duplicate-handling protocol.
+
 ## Key Features
 
 - **Network Adapter Management**: Enumerate and manage network adapter properties.

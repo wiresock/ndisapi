@@ -2709,6 +2709,13 @@ BOOL CNdisApi::ReadPacketsUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacket
  * This function sends a bunch of packets to the network adapters. The target adapter handle
  * should be set in the INTERMEDIATE_BUFFER.m_hAdapter field. The function is not available in WOW64 mode.
  *
+ * A successful call may accept only part of the batch. The returned count is a tally, not a
+ * completed input prefix or a per-packet result, and must not be used as a retry-array offset.
+ * Acceptance is not delivery confirmation; exactly-once delivery requires application-level
+ * acknowledgements and duplicate handling, even for a single-adapter batch.
+ * With the v3.6.2 driver, packets for unknown adapters are skipped on success; if any other
+ * packet is rejected the call fails with a zero count although accepted packets were sent.
+ *
  * The function uses DeviceIoControl with the IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER_UNSORTED code to perform the operation.
  */
 BOOL CNdisApi::SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWORD dwPacketsNum, PDWORD pdwPacketSuccess) const
@@ -2731,6 +2738,13 @@ BOOL CNdisApi::SendPacketsToAdaptersUnsorted(PINTERMEDIATE_BUFFER* Packets, DWOR
  *
  * This function Indicates a bunch of packets to the MSTCP (and other upper layer network protocols).
  * The associated adapter handle is stored in the INTERMEDIATE_BUFFER.m_hAdapter field. The function is not available in WOW64 mode.
+ *
+ * A successful call may accept only part of the batch. The returned count is a tally, not a
+ * completed input prefix or a per-packet result, and must not be used as a retry-array offset.
+ * Acceptance is not delivery confirmation; exactly-once delivery requires application-level
+ * acknowledgements and duplicate handling, even for a single-adapter batch.
+ * With the v3.6.2 driver, packets for unknown adapters are skipped on success; if any other
+ * packet is rejected the call fails with a zero count although accepted packets were sent.
  *
  * The function uses DeviceIoControl with the IOCTL_NDISRD_SEND_PACKET_TO_MSTCP_UNSORTED code to perform the operation.
  */
@@ -4531,6 +4545,13 @@ BOOL __stdcall ReadPacketsUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER* Packets, 
  * @param pdwPacketSuccess Pointer to a DWORD that will receive the number of successfully sent packets.
  * @return TRUE if the function is successful, or FALSE if the operation fails or the handle is invalid.
  *
+ * A successful call may accept only part of the batch. The returned count is a tally, not a
+ * completed input prefix or a per-packet result, and must not be used as a retry-array offset.
+ * Acceptance is not delivery confirmation; exactly-once delivery requires application-level
+ * acknowledgements and duplicate handling, even for a single-adapter batch.
+ * With the v3.6.2 driver, packets for unknown adapters are skipped on success; if any other
+ * packet is rejected the call fails with a zero count although accepted packets were sent.
+ *
  * This function sends unsorted packets to the network adapters by calling the SendPacketsToAdaptersUnsorted() method of
  * the CNdisApi class. It returns FALSE if the handle provided is invalid.
  */
@@ -4551,6 +4572,13 @@ BOOL __stdcall SendPacketsToAdaptersUnsorted(HANDLE hOpen, PINTERMEDIATE_BUFFER*
  * @param dwPacketsNum The number of packets to send.
  * @param pdwPacketSuccess Pointer to a DWORD that will receive the number of successfully sent packets.
  * @return TRUE if the function is successful, or FALSE if the operation fails or the handle is invalid.
+ *
+ * A successful call may accept only part of the batch. The returned count is a tally, not a
+ * completed input prefix or a per-packet result, and must not be used as a retry-array offset.
+ * Acceptance is not delivery confirmation; exactly-once delivery requires application-level
+ * acknowledgements and duplicate handling, even for a single-adapter batch.
+ * With the v3.6.2 driver, packets for unknown adapters are skipped on success; if any other
+ * packet is rejected the call fails with a zero count although accepted packets were sent.
  *
  * This function sends unsorted packets to the MSTCP (and other upper layer network protocols) by calling
  * the SendPacketsToMstcpUnsorted() method of the CNdisApi class. It returns FALSE if the handle provided is invalid.
