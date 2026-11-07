@@ -17,7 +17,7 @@ Use it to build packet inspection tools, traffic filters, transparent proxies, t
 1. Install the [WinpkFilter driver](https://www.ntkernel.com/windows-packet-filter/download/) appropriate for your Windows version and architecture.
 2. Clone this repository and open [ndisapi.sln](ndisapi.sln) in Visual Studio 2022. Install the **Desktop development with C++** workload, the v143 toolset, a Windows SDK, and configure vcpkg MSBuild integration as described below.
 3. Select **Release / x64** and build the **capture** project with its **ndisapi.lib** dependency. You do not need to build every example or the .NET projects to try it.
-4. Run `bin\examples\native\x64\Release\capture.exe` from an elevated terminal. Select a network interface and a filename for the PCAP capture; press any key to stop.
+4. Run `bin\examples\native\x64\Release\capture.exe` from a terminal. Select a network interface and a filename for the PCAP capture; press any key to stop.
 
 The [capture example](examples/cpp/capture) records packets and forwards them. Use a test environment when trying examples that modify, redirect, or drop traffic.
 
