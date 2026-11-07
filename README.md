@@ -4,6 +4,10 @@ NDISAPI is a comprehensive user-mode interface library designed for seamless int
 
 Windows Packet Filter (WinpkFilter) is a robust and efficient packet filtering framework tailored for Windows environments. It empowers developers to handle raw network packets at the NDIS level with ease, providing capabilities for packet inspection, modification, and control. WinpkFilter boasts user-friendly APIs, compatibility across various Windows versions, and streamlines network packet manipulation without the need for kernel-mode programming skills.
 
+## v3.6.2 driver: observation actions
+
+With the v3.6.2 driver, a static rule whose action is `FILTER_PACKET_PASS_RDR` or `FILTER_PACKET_DROP_RDR` is handled exactly like `FILTER_PACKET_REDIRECT`: the adapter mode decides the outcome. In TUNNEL mode the packet is redirected to the application (it is not passed or dropped by the driver); in LISTEN mode the original packet passes and the application receives a copy. `FILTER_PACKET_DROP_RDR` therefore does not drop the original packet on this driver. Use `FILTER_PACKET_DROP` to drop, or `FILTER_PACKET_REDIRECT` and drop in the application. The explicit pass/drop-with-copy semantics in every mode were introduced by the 3.8.2 driver and are not available here.
+
 ## Key Features
 
 - **Network Adapter Management**: Enumerate and manage network adapter properties.

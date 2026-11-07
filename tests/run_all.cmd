@@ -14,6 +14,11 @@ rem
 rem Every exit code is captured the moment the child returns, and any nonzero value - including an
 rem access violation's 0xC0000005 - fails the run. No output is filtered before a status is read.
 setlocal EnableDelayedExpansion
+rem Explicit maintained selection exits before every historical suite.
+if /i "%~1"=="safe-gates" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0handles\Run-SafeGates.ps1" -OutputDirectory "%~2"
+    exit /b !ERRORLEVEL!
+)
 
 set "TESTS=%~dp0"
 set "TESTS=%TESTS:~0,-1%"
