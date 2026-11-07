@@ -8,6 +8,14 @@ Windows Packet Filter (WinpkFilter) is a robust and efficient packet filtering f
 
 With the v3.6.2 driver, a static rule whose action is `FILTER_PACKET_PASS_RDR` or `FILTER_PACKET_DROP_RDR` is handled exactly like `FILTER_PACKET_REDIRECT`: the adapter mode decides the outcome. In TUNNEL mode the packet is redirected to the application (it is not passed or dropped by the driver); in LISTEN mode the original packet passes and the application receives a copy. `FILTER_PACKET_DROP_RDR` therefore does not drop the original packet on this driver. Use `FILTER_PACKET_DROP` to drop, or `FILTER_PACKET_REDIRECT` and drop in the application. The explicit pass/drop-with-copy semantics in every mode were introduced by the 3.8.2 driver and are not available here.
 
+## WOW64 static table reads
+
+`GetPacketFilterTable` and `GetPacketFilterTableResetStats` keep every validated row readable when a nonzero adapter identity cannot be mapped in a 32-bit process. The SDK attempts adapter enumeration once, then returns `STATIC_FILTER_ADAPTER_UNMAPPED` (`0xFFFFFFFFUL`) in `STATIC_FILTER.m_Adapter` for identities still unknown, including when enumeration fails. Known identities use their application handles; actual zero remains the all-adapters wildcard. The table is translated against one coherent mapping snapshot.
+
+The original table IOCTL is issued once. GET_RESET returns its original counters and byte count without repeating the driver reset. An unmapped identity does not necessarily mean the adapter detached, and the SDK does not purge the rule. Rules remain removable by `RemoveStaticFilter` index, or by replacing the table with `SetPacketFilterTable` / clearing it with `ResetPacketFilterTable`. (Removal by unique filter ID requires the 3.7.1+ driver and is not part of this SDK line.)
+
+The marker is output-only: `SetPacketFilterTable`, `AddStaticFilterFront`, `AddStaticFilterBack`, and `InsertStaticFilter` reject it with `ERROR_INVALID_HANDLE` before any IOCTL on both native and WOW64 callers. Do not replace it with zero when reusing a table; that would broaden an adapter-specific rule to every adapter. Resolve a current adapter handle or explicitly remove the row first.
+
 ## Unsorted send results (v3.6.2 driver)
 
 `SendPacketsToAdaptersUnsorted` and `SendPacketsToMstcpUnsorted` return an accepted-packet tally in `*pdwPacketSuccess` on a successful call. `TRUE` can report a partial batch: compare the tally with `dwPacketsNum`. The tally is neither a completed prefix nor a per-packet result; adapter grouping and individual packet rejection can leave gaps anywhere in the input array. Acceptance also does not confirm delivery to a remote peer.

@@ -208,6 +208,18 @@ private:
     void* m_Data;
 };
 
+// The WOW64 output marker is reserved only for static rows, on every caller
+// architecture. It must never become an adapter selector sent to the driver.
+static BOOL SdkValidateStaticAdapter(ULONGLONG adapter)
+{
+    if (adapter == STATIC_FILTER_ADAPTER_UNMAPPED)
+    {
+        ::SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static BOOL SdkReadStaticTable(const CNdisApi& api, DWORD service,
     PSTATIC_FILTER_TABLE caller, SdkByteBuffer& buffer, DWORD& bytesReturned)
 {
@@ -562,9 +574,9 @@ public:
         return TRUE;
     }
 
-    // Validate and translate against one map snapshot. A miss must leave every
-    // raw identity intact so the caller can refresh and retry the whole table.
-    BOOL From64to32Table(PSTATIC_FILTER_TABLE table)
+    // Validate and translate against one map snapshot. The first miss leaves
+    // all raw identities intact for one refresh; the final pass marks unknowns.
+    BOOL From64to32Table(PSTATIC_FILTER_TABLE table, BOOL allowUnmapped = FALSE)
     {
         ULONGLONG snapshot[ADAPTER_LIST_SIZE + 1];
         {
@@ -583,7 +595,7 @@ public:
         for (row = 0; row < table->m_TableSize; ++row)
         {
             const ULONGLONG handle = table->m_StaticFilters[row].m_Adapter.QuadPart;
-            if (handle != 0 && Find32Handle(snapshot, handle) == 0)
+            if (!allowUnmapped && handle != 0 && Find32Handle(snapshot, handle) == 0)
             {
                 ::SetLastError(ERROR_INVALID_HANDLE);
                 return FALSE;
@@ -592,8 +604,9 @@ public:
         for (row = 0; row < table->m_TableSize; ++row)
         {
             const ULONGLONG handle = table->m_StaticFilters[row].m_Adapter.QuadPart;
+            const unsigned int translated = Find32Handle(snapshot, handle);
             table->m_StaticFilters[row].m_Adapter.QuadPart =
-                handle == 0 ? 0 : Find32Handle(snapshot, handle);
+                handle == 0 ? 0 : (translated != 0 ? translated : STATIC_FILTER_ADAPTER_UNMAPPED);
         }
         return TRUE;
     }
@@ -2195,10 +2208,16 @@ BOOL CNdisApi::SetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
     const PSTATIC_FILTER_TABLE table = static_cast<PSTATIC_FILTER_TABLE>(storage.Get());
     memmove(table, pFilterList, bytes);
     table->m_TableSize = count;
+    DWORD i;
+    for (i = 0; i < count; ++i)
+    {
+        if (!SdkValidateStaticAdapter(table->m_StaticFilters[i].m_Adapter.QuadPart))
+            return FALSE;
+    }
 #ifndef _WIN64
     if (m_bIsWow64Process)
     {
-        for (DWORD i = 0; i < count; ++i)
+        for (i = 0; i < count; ++i)
         {
             if (!m_Wow64Helper.From32to64Handle(
                 table->m_StaticFilters[i].m_Adapter.QuadPart,
@@ -2237,6 +2256,8 @@ BOOL CNdisApi::AddStaticFilterFront(PSTATIC_FILTER pFilter) const
         return FALSE;
     }
     STATIC_FILTER filter = *pFilter;
+    if (!SdkValidateStaticAdapter(filter.m_Adapter.QuadPart))
+        return FALSE;
 #ifndef _WIN64
     if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
         filter.m_Adapter.QuadPart, filter.m_Adapter.QuadPart))
@@ -2269,6 +2290,8 @@ BOOL CNdisApi::AddStaticFilterBack(PSTATIC_FILTER pFilter) const
         return FALSE;
     }
     STATIC_FILTER filter = *pFilter;
+    if (!SdkValidateStaticAdapter(filter.m_Adapter.QuadPart))
+        return FALSE;
 #ifndef _WIN64
     if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
         filter.m_Adapter.QuadPart, filter.m_Adapter.QuadPart))
@@ -2304,6 +2327,8 @@ BOOL CNdisApi::InsertStaticFilter(PSTATIC_FILTER pFilter, unsigned long Position
     }
     STATIC_FILTER_WITH_POSITION data = { 0 };
     data.m_StaticFilter = *pFilter;
+    if (!SdkValidateStaticAdapter(data.m_StaticFilter.m_Adapter.QuadPart))
+        return FALSE;
     data.m_Position = Position;
 #ifndef _WIN64
     if (m_bIsWow64Process && !m_Wow64Helper.From32to64Handle(
@@ -2403,9 +2428,11 @@ BOOL CNdisApi::GetPacketFilterTableSize(PDWORD pdwTableSize) const
  * e.g. passed, dropped or redirected to user-mode application for further processing.
  * It uses DeviceIoControl with the IOCTL_NDISRD_GET_PACKET_FILTERS code to perform the operation.
  *
- * For 32-bit processes running on a 64-bit operating system (WOW64), the function iterates through the
- * filter list and updates the adapter handle values using the From64to32Handle method from the WOW64 helper
- * after receiving the filter list from the driver.
+ * In WOW64, known adapter identities are translated to application handles. On a mapping miss,
+ * adapter enumeration is attempted once without repeating the table IOCTL. Remaining unknown nonzero
+ * identities become STATIC_FILTER_ADAPTER_UNMAPPED, even if enumeration fails; zero remains wildcard.
+ * All rows and counters from the original validated response remain readable. The marker is output-only
+ * and does not establish that an adapter detached; rows are not automatically removed.
  */
 BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 {
@@ -2426,9 +2453,10 @@ BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
             // Refresh only the map, outside its lock. The table (and RESET side
             // effect) is read once; enumeration must not replace its byte count.
             TCP_AdapterList adapters = { 0 };
-            const BOOL refreshed = GetTcpipBoundAdaptersInfo(&adapters);
+            GetTcpipBoundAdaptersInfo(&adapters);
             m_BytesReturned = bytesReturned;
-            if (!refreshed || !m_Wow64Helper.From64to32Table(table))
+            // A failed refresh cannot make an otherwise valid table unreadable.
+            if (!m_Wow64Helper.From64to32Table(table, TRUE))
                 return FALSE;
         }
     }
@@ -2450,9 +2478,11 @@ BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
  * for further processing. It uses DeviceIoControl with the IOCTL_NDISRD_GET_PACKET_FILTERS_RESET_STATS code
  * to perform the operation.
  *
- * For 32-bit processes running on a 64-bit operating system (WOW64), the function iterates through the
- * filter list and updates the adapter handle values using the From64to32Handle method from the WOW64 helper
- * after receiving the filter list from the driver.
+ * In WOW64, known adapter identities are translated to application handles. On a mapping miss,
+ * adapter enumeration is attempted once without repeating the table IOCTL. Remaining unknown nonzero
+ * identities become STATIC_FILTER_ADAPTER_UNMAPPED, even if enumeration fails; zero remains wildcard.
+ * All rows and counters from the original validated response remain readable. The marker is output-only
+ * and does not establish that an adapter detached; rows are not automatically removed.
  */
 BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) const
 {
@@ -2473,9 +2503,10 @@ BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) 
             // Refresh only the map, outside its lock. The table (and RESET side
             // effect) is read once; enumeration must not replace its byte count.
             TCP_AdapterList adapters = { 0 };
-            const BOOL refreshed = GetTcpipBoundAdaptersInfo(&adapters);
+            GetTcpipBoundAdaptersInfo(&adapters);
             m_BytesReturned = bytesReturned;
-            if (!refreshed || !m_Wow64Helper.From64to32Table(table))
+            // A failed refresh cannot make an otherwise valid table unreadable.
+            if (!m_Wow64Helper.From64to32Table(table, TRUE))
                 return FALSE;
         }
     }
