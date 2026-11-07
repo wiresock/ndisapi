@@ -4,7 +4,7 @@ param([Parameter(Mandatory=$true)][ValidateSet('x64','x86')][string]$Arch,
 $ErrorActionPreference = 'Stop'
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $sourceRoot "tests\bin\checksum\ablation\$Arch-$Layout-$Codec" }
-$baseline = '3281bcfe15080e4e8c927ea98663751a3430a317'
+$baseline = 'd5ffa791639a7ca3674d5bb4ffd1b2260f90360f'
 function SourceHash([string]$Path) {
     $algorithm = [Security.Cryptography.SHA256]::Create()
     $stream = [IO.File]::OpenRead($Path)
@@ -32,13 +32,13 @@ function Export-GitBlob([string]$RelativePath, [string]$Destination) {
     } finally { $process.Dispose() }
 }
 $expectedHashes = @{
-        'ndisapi/ndisapi.cpp'='13F49E06F49D519DFE7FB3B18F450246BF379126588A4148AA46D134BD21FF63'
+        'ndisapi/ndisapi.cpp'='81172DE55D19ECE860D8D0371FE5EF44ECBC3A93C573AD6D6D7DBC68334B0C1A'
         'ndisapi/precomp.h'='F35E0858303B86602E8417C8AF9F6021EBA5452D6BF762FFE2F352B9A893BCFE'
         'ndisapi/iphlp.h'='878AB7871CF4D1679ED74513BF9FDD334EEC5079FF13CD77904EA16F5522C6C7'
         'ndisapi/resource.h'='01604134C55938C4DE1CDDBF1198C96E7BF6C1C3DE2921F654E9C7038F0291E4'
         'ndisapi/inet_checksum.h'='8A3D6BC7F2E59E9586BD399EDC7B302CFF4C8F1BAD55AF58D04D89B5CC707310'
-        'include/Common.h'='020DB86AE6433CFF112C93F1DDE3DB2FA526EB5A8CB6EC431EC9FE2A7FCD8BAB'
-        'include/ndisapi.h'='83F408994603CD2892065C6B022499F72FE79A30BC5A420D41FBCA26CBCE3FAF'
+        'include/Common.h'='9FA76D0C32774C387DDC4ADC368DFB565BF6472A592B282E79DD4C1BE013892E'
+        'include/ndisapi.h'='F0BE9279706767F5370CDD3C35AF397C2CF468F7D94A7DAD70A2CF11ED994886'
 }
 $frozen = Join-Path $OutputDirectory 'baseline-source'
 foreach ($relative in $expectedHashes.Keys) {

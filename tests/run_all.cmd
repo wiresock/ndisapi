@@ -27,7 +27,7 @@ set "OUT=%TESTS%\bin"
 if not exist "%OUT%" mkdir "%OUT%"
 
 rem the SDK commit that still had the defect; see tests\README.md
-set "PREFIX_REV=20aa90f"
+set "PREFIX_REV=f731624"
 
 set RESULT=0
 set ABLATION=0

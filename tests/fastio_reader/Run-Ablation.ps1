@@ -12,7 +12,7 @@ function SourceHash([string]$Path) {
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $sourceRoot "tests\bin\fastio_reader\ablation\$Arch-$Layout" }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$baseline = '0b0f21fddd0032b0b236b01d35ea4145bec4d0e7'
+$baseline = 'b056d5fcefa9fdfef7f9d13a958b4f93bab67500'
 function Export-GitBlob([string]$RelativePath, [string]$Destination) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
     $process = New-Object Diagnostics.Process
@@ -55,7 +55,7 @@ $results = @()
 if ($Kind -eq 'all' -or $Kind -eq 'baseline') {
     $frozen = Join-Path $OutputDirectory 'baseline-source'
     $expectedHashes = @{
-        'include/Common.h'='020DB86AE6433CFF112C93F1DDE3DB2FA526EB5A8CB6EC431EC9FE2A7FCD8BAB'
+        'include/Common.h'='9FA76D0C32774C387DDC4ADC368DFB565BF6472A592B282E79DD4C1BE013892E'
         'examples/cpp/common/ndisapi/fastio_packet_filter.h'='93EB2AAF046F449526C63A03BE5A3785981B30651F4A77D5D1FD67F15559F7DC'
     }
     foreach ($relative in $expectedHashes.Keys) {

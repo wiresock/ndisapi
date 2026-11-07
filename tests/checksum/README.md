@@ -23,7 +23,7 @@ unchanged. These tests do not claim a new NULL-pointer contract or comprehensive
 validation of malformed short captures or every invalid IPv4 header.
 
 `run_all.cmd ablation` additionally exports all seven SDK source/header Git blobs
-from accepted pre-ceiling commit `3281bcfe15080e4e8c927ea98663751a3430a317`, verifies
+from accepted pre-ceiling commit `d5ffa791639a7ca3674d5bb4ffd1b2260f90360f`, verifies
 their pinned SHA-256 hashes and compiles this same oracle. The only accepted RED
 result is exactly 181 cases / 775 checks / 66 named failures / 42 caught access
 violations with numeric process exit 1. Valid golden and accumulator controls must

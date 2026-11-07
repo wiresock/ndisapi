@@ -1,5 +1,7 @@
 # Offline regressions for the SDK
 
+Backported to the v3.6.2 SDK line from 3.8.2. Ablation baselines name the backport-branch equivalents of the 3.8.2 commits (f731624 = 20aa90f, b056d5f = 0b0f21f, d5ffa79 = 3281bcf), so frozen pre-fix sources keep the v3.6.2 `STATIC_FILTER` layout. The suites are offline: they substitute `DeviceIoControl` and do not load a driver.
+
 No driver, no adapter, no administrator rights. `run_all.cmd` builds and runs everything.
 
 ```
@@ -58,7 +60,7 @@ architecture.
 ### Ablation
 
 `run_all.cmd ablation` compiles the same tests against `ndisapi/ndisapi.cpp` and `include/ndisapi.h`
-as they were at **20aa90f**, the last commit with the defect, and requires the run to fail. It does: 11
+as they were at **f731624**, the last commit with the defect, and requires the run to fail. It does: 11
 failures on x64 and 10 on x86 - the extra one is the short SET, whose old WOW64
 behaviour happened to be right for the wrong reason. The first is
 
@@ -86,7 +88,7 @@ The maintained [handles fixture](handles/README.md) is also run on x64 and genui
 It covers checked mapping at all callers, stable enumeration identities, immutable input staging,
 transactional table outputs, terminal completion storage lifetime, byte extents and overflow.
 Its pre-implementation oracle was frozen before the Task12a change; the three C++ fixture files
-are preserved byte-for-byte. The historical 20aa90f ablation above is specific to the OID suite.
+are preserved byte-for-byte. The historical f731624 ablation above is specific to the OID suite.
 
 ## Packet result and staging regressions
 
