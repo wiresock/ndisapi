@@ -1476,6 +1476,10 @@ BOOL CNdisApi::GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const
  *
  * For 32-bit processes running on a 64-bit operating system (WOW64), the function initializes an ADAPTER_EVENT_WOW64
  * structure with the converted adapter and event handles using Wow64Helper before sending the IOCTL.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
@@ -1574,6 +1578,10 @@ BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
  *
  * For 32-bit processes running on a 64-bit operating system (WOW64), the function initializes an ULARGE_INTEGER
  * structure with the converted event handle before sending the IOCTL.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL CNdisApi::SetWANEvent(HANDLE hWin32Event) const
 {
@@ -1655,6 +1663,10 @@ BOOL CNdisApi::SetWANEvent(HANDLE hWin32Event) const
  *
  * For 32-bit processes running on a 64-bit operating system (WOW64), the function initializes an ULARGE_INTEGER
  * structure with the converted event handle before sending the IOCTL.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL CNdisApi::SetAdapterListChangeEvent(HANDLE hWin32Event) const
 {
@@ -2089,6 +2101,10 @@ BOOL CNdisApi::GetHwPacketFilter(HANDLE hAdapter, PDWORD pFilter) const
  * For 32-bit processes running on a 64-bit operating system (WOW64), the function initializes an
  * ADAPTER_EVENT_WOW64 structure with the original ADAPTER_EVENT structure's data, and sends the IOCTL
  * using the ADAPTER_EVENT_WOW64 structure.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL CNdisApi::SetHwPacketFilterEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
@@ -2650,6 +2666,13 @@ BOOL CNdisApi::IsDriverLoaded() const
  * and not available in WOW64 mode.
  *
  * The function uses DeviceIoControl with the IOCTL_NDISRD_INITIALIZE_FAST_IO code to perform the operation.
+ *
+ * All sections belong to one registering device file object; secondary sections
+ * must use that same owner. Successfully registered buffers/pages remain registered
+ * until the owner closes. No unregister IOCTL exists: stop readers, close the
+ * registering CNdisApi/hOpen device handle, then release the backing memory.
+ * Initialize/Add are unavailable in WOW64. See the dedicated registration_owner_
+ * in examples/cpp/common/ndisapi/fastio_packet_filter.h.
  */
 BOOL CNdisApi::InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
 {
@@ -2686,6 +2709,13 @@ BOOL CNdisApi::InitializeFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
  *
  * The function uses DeviceIoControl with the IOCTL_NDISRD_ADD_SECOND_FAST_IO_SECTION code to
  * perform the operation.
+ *
+ * All sections belong to one registering device file object; secondary sections
+ * must use that same owner. Successfully registered buffers/pages remain registered
+ * until the owner closes. No unregister IOCTL exists: stop readers, close the
+ * registering CNdisApi/hOpen device handle, then release the backing memory.
+ * Initialize/Add are unavailable in WOW64. See the dedicated registration_owner_
+ * in examples/cpp/common/ndisapi/fastio_packet_filter.h.
  */
 BOOL CNdisApi::AddSecondaryFastIo(PFAST_IO_SECTION pFastIo, DWORD dwSize) const
 {
@@ -4021,6 +4051,10 @@ BOOL __stdcall GetAdapterPacketQueueSize(HANDLE hOpen, HANDLE hAdapter, PDWORD p
  *
  * This function associates a Win32 event with the packet queue of the network adapter using the provided filter driver handle
  * by calling the SetPacketEvent() method of the CNdisApi object.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL __stdcall SetPacketEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event) {
     if (!hOpen) {
@@ -4040,6 +4074,10 @@ BOOL __stdcall SetPacketEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event)
  *
  * This function associates a Win32 event with the WAN events of the network adapters using the provided filter driver handle
  * by calling the SetWANEvent() method of the CNdisApi object.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL __stdcall SetWANEvent(HANDLE hOpen, HANDLE hWin32Event) {
     if (!hOpen) {
@@ -4059,6 +4097,10 @@ BOOL __stdcall SetWANEvent(HANDLE hOpen, HANDLE hWin32Event) {
  *
  * This function associates a Win32 event with the network adapter list change events associated with the provided filter driver handle
  * by calling the SetAdapterListChangeEvent() method of the CNdisApi object.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL __stdcall SetAdapterListChangeEvent(HANDLE hOpen, HANDLE hWin32Event) {
     if (!hOpen) {
@@ -4159,6 +4201,10 @@ BOOL __stdcall GetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter) 
  *
  * This function sets a hardware packet filter event for the network adapter using the provided filter driver handle
  * by calling the SetHwPacketFilterEvent() method of the CNdisApi object.
+ *
+ * On Windows NT with the v3.6.2 driver, a non-NULL event handle must grant
+ * SYNCHRONIZE. If the driver cannot reference the event the call fails and the
+ * previously registered event is released, leaving no event registered.
  */
 BOOL __stdcall SetHwPacketFilterEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event) {
     if (!hOpen) {
@@ -4521,6 +4567,13 @@ BOOL __stdcall IsDriverLoaded(HANDLE hOpen) {
  *
  * This function initializes the Fast I/O section by calling the InitializeFastIo() method of the CNdisApi class.
  * It returns FALSE if the handle provided is invalid.
+ *
+ * All sections belong to one registering device file object; secondary sections
+ * must use that same owner. Successfully registered buffers/pages remain registered
+ * until the owner closes. No unregister IOCTL exists: stop readers, close the
+ * registering CNdisApi/hOpen device handle, then release the backing memory.
+ * Initialize/Add are unavailable in WOW64. See the dedicated registration_owner_
+ * in examples/cpp/common/ndisapi/fastio_packet_filter.h.
  */
 BOOL __stdcall InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize) {
     if (!hOpen)
@@ -4540,6 +4593,13 @@ BOOL __stdcall InitializeFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dw
  *
  * This function adds a secondary Fast I/O section by calling the AddSecondaryFastIo() method of the CNdisApi class.
  * It returns FALSE if the handle provided is invalid.
+ *
+ * All sections belong to one registering device file object; secondary sections
+ * must use that same owner. Successfully registered buffers/pages remain registered
+ * until the owner closes. No unregister IOCTL exists: stop readers, close the
+ * registering CNdisApi/hOpen device handle, then release the backing memory.
+ * Initialize/Add are unavailable in WOW64. See the dedicated registration_owner_
+ * in examples/cpp/common/ndisapi/fastio_packet_filter.h.
  */
 BOOL __stdcall AddSecondaryFastIo(HANDLE hOpen, PFAST_IO_SECTION pFastIo, DWORD dwSize) {
     if (!hOpen)

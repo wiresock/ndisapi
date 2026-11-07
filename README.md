@@ -16,6 +16,12 @@ The original table IOCTL is issued once. GET_RESET returns its original counters
 
 The marker is output-only: `SetPacketFilterTable`, `AddStaticFilterFront`, `AddStaticFilterBack`, and `InsertStaticFilter` reject it with `ERROR_INVALID_HANDLE` before any IOCTL on both native and WOW64 callers. Do not replace it with zero when reusing a table; that would broaden an adapter-specific rule to every adapter. Resolve a current adapter handle or explicitly remove the row first.
 
+## Event access and Fast I/O lifetime (v3.6.2 driver)
+
+The v3.6.2 driver references a non-NULL Windows event handle registered with `SetPacketEvent`, `SetWANEvent`, `SetAdapterListChangeEvent`, or `SetHwPacketFilterEvent` with `SYNCHRONIZE` access, so the handle must grant `SYNCHRONIZE`; `EVENT_MODIFY_STATE` alone is not sufficient. If the reference fails (invalid handle, wrong object type or missing access), the call fails and the previously registered event is released: the slot is left with no event, not with the old registration. Re-register a valid event after such a failure. Passing NULL unregisters the event.
+
+Fast I/O has one registering device file-object owner. Initialize the first section and add secondary sections through that same owner. Every successfully registered buffer and its pages must remain valid until that owner closes; there is no unregister IOCTL, and the driver releases the mappings only when the owning handle is closed. Stop readers, close the registering `CNdisApi`/`hOpen` device handle, and only then free its backing storage. `InitializeFastIo` and `AddSecondaryFastIo` are not available to WOW64 callers. The [dedicated-owner example](examples/cpp/common/ndisapi/fastio_packet_filter.h) uses a separate `registration_owner_` and closes it before freeing shared memory.
+
 ## Unsorted send results (v3.6.2 driver)
 
 `SendPacketsToAdaptersUnsorted` and `SendPacketsToMstcpUnsorted` return an accepted-packet tally in `*pdwPacketSuccess` on a successful call. `TRUE` can report a partial batch: compare the tally with `dwPacketsNum`. The tally is neither a completed prefix nor a per-packet result; adapter grouping and individual packet rejection can leave gaps anywhere in the input array. Acceptance also does not confirm delivery to a remote peer.
