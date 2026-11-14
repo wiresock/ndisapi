@@ -72,6 +72,7 @@ These are separate from the modern solution. Running on an older Windows release
 - **[sni_inspector](examples/cpp/sni_inspector)**: Extract TLS SNI and HTTP Host headers.
 - **[pcapplusplus](examples/cpp/pcapplusplus)**: Parse packets and perform TLS fingerprinting with PcapPlusPlus.
 - **[hyperscan](examples/cpp/hyperscan)**: Detect HTTP sessions with Hyperscan and parse HTTP with llhttp.
+- **[packet_owner](examples/cpp/packet_owner)**: Attribute outbound UDP datagrams and TCP SYNs to processes with ETW events and compare the result with the IP Helper API.
 
 ### Proxies, Tunnels, and Bridging
 
