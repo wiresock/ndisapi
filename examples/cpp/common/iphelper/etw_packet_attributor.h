@@ -127,11 +127,13 @@ namespace iphelper
 		//   TCPIP 1396 UdpBindEndpointComplete v1: Pid + ProcessStartKey, local address
 		//     only. Misses sockets bound before the session [M19045]. Enrichment only.
 		//
-		// TCP (from manifests, NOT measured yet; the TDH gate decides at run time):
+		// TCP (manifests, plus packet_owner measurements where marked; the TDH gate
+		// decides at run time):
 		//   Kernel-Network 12 (TCPv4 "Connection attempted") / 28 (TCPv6), v0, same
 		//     address/port layout as 42/58 plus mss/sackopt/...; present in every dump
-		//     from 1511 to 25H2 [V-manifest]. Whether it is written before the SYN or only
-		//     after the handshake is [U] (design doc 5: WhoYouCalling suggests after).
+		//     from 1511 to 25H2 [V-manifest]. Written with 1033 after the handshake, about
+		//     one RTT after the SYN, and not at all for a connect aborted before it was
+		//     established [M26300]. KN 28 not observed yet.
 		//   Kernel-Network 15 (TCPv4 "Connection accepted") / 31 (TCPv6), v0 [V-manifest].
 		//     saddr/daddr orientation for accepted connections is [U]; both orientations
 		//     are cached.
@@ -139,16 +141,23 @@ namespace iphelper
 		//     RemoteAddressLength, RemoteAddress, Status, ProcessId, Compartment, Tcb;
 		//     v1 adds ProcessStartKey (the Win10 18990 XML names it ProcessSequenceNumber).
 		//     v0 in Win7 7600 XML and 1511+ dumps, v1 from 2004 [V-manifest]. Keywords
-		//     ut:TcpipTcb|ut:ConnectPath. Expected to be written before the SYN leaves [U].
-		//   TCPIP 1033 TcpConnectTcbComplete (same template): handshake completed [V-manifest].
-		//   TCPIP 1034 TcpConnectTcbFailure (same template): e.g. RST from a closed port [V-manifest].
+		//     ut:TcpipTcb|ut:ConnectPath. Written at SYN send (0.4 us after TCPIP 1004
+		//     TcpTcbSynSend), 0.03-0.17 ms before WinpkFilter reads the SYN. Payload
+		//     ProcessId and ProcessStartKey are 0; the header PID is the connecting
+		//     process [M26300][M19045].
+		//   TCPIP 1033 TcpConnectTcbComplete (same template): handshake completed; header
+		//     PID 4, payload ProcessId real, start key nonzero [M26300].
+		//   TCPIP 1034 TcpConnectTcbFailure (same template): e.g. RST from a closed port
+		//     [V-manifest]; local abort (0xC0000120) measured with the real PID in header
+		//     and payload [M26300]; remote RST not measured.
 		//   TCPIP 1017 TcpAcceptListenerComplete (same template): inbound accept [V-manifest].
 		//   TCPIP 1300 TcpConnectionRundown: Tcb, LocalAddress(+Length), RemoteAddress(+Length),
 		//     State, Pid (+ ProcessStartKey v1+). Expected on EVENT_CONTROL_CODE_CAPTURE_STATE
 		//     for connections that already exist [U]; v0 7600..1809, v1 2004+, v2 21H2+,
 		//     v3 24H2+ [V-manifest]. Used for "connection" lookups only.
-		//   The TCPIP LocalAddress/RemoteAddress blobs are assumed to be SOCKADDR like 1169's
-		//   LocalSockAddr [U]; the parser checks family and length and rejects anything else.
+		//   The TCPIP LocalAddress/RemoteAddress blobs are SOCKADDR: length 28, AF_INET6,
+		//   IPv4-mapped ::ffff: for IPv4 connections [M26300]; the parser checks family and
+		//   length, folds v4-mapped addresses to IPv4 and rejects anything else.
 		//
 		// DNS-Client (keyword mask 0) [V-manifest][M19045][M26300]:
 		//   3006 "query called" v0: QueryName, QueryType, ...; header PID = caller.
@@ -414,8 +423,12 @@ namespace iphelper
 		// ------------------------------------------------------------------------
 		struct owner_info
 		{
-			/// <summary>Owner PID from the event payload (not the header)</summary>
+			/// <summary>Owner PID. Taken from the event payload, except for TCPIP 1031 whose
+			/// payload ProcessId is 0: there the event header PID is used (see pid_policy in
+			/// etw_packet_attributor::on_event). 0 means unknown, never "Idle".</summary>
 			uint32_t pid{};
+			/// <summary>true if pid came from EVENT_HEADER.ProcessId instead of the payload</summary>
+			bool pid_from_header{};
 			/// <summary>ProcessStartKey (TCPIP v1 events), 0 if unknown</summary>
 			uint64_t process_start_key{};
 			/// <summary>Full image path, resolved on the consumer thread when the event
@@ -437,17 +450,29 @@ namespace iphelper
 			/// <summary>Bit mask (1 << event_source) of every source that produced a matching
 			/// record for this lookup (lets callers compare 42 vs 1169, 1031 vs KN12, ...)</summary>
 			uint32_t sources_seen{};
-			/// <summary>true if matching records named different PIDs</summary>
+			/// <summary>true if matching records named different (known, nonzero) PIDs</summary>
 			bool conflict{};
+			/// <summary>TCP only, filled by etw_packet_attributor::tcp_outcome(): a TCPIP 1034
+			/// (connect failed) record exists for this connection attempt</summary>
+			bool connect_failed{};
+			/// <summary>Status of that TCPIP 1034 record (e.g. 0xC0000120 STATUS_CANCELLED for a
+			/// local abort), 0 if none</summary>
+			uint32_t connect_status{};
+			/// <summary>TCP only: TCPIP 1033 or Kernel-Network 12/28 (connected) was seen</summary>
+			bool connect_completed{};
 
-			[[nodiscard]] bool is_system() const noexcept { return pid == 0 || pid == 4; }
+			/// <summary>PID 4 (System). PID 0 is "unknown", not a system owner.</summary>
+			[[nodiscard]] bool is_system() const noexcept { return pid == 4; }
+			/// <summary>No event named a real PID (e.g. TCPIP 1031 payload ProcessId 0 with a
+			/// header PID of 0 or 4)</summary>
+			[[nodiscard]] bool is_unknown() const noexcept { return pid == 0; }
 
 			[[nodiscard]] std::wstring image_name() const
 			{
 				if (pid == 4)
 					return L"System";
 				if (pid == 0)
-					return L"Idle";
+					return L"unknown";
 				const auto pos = image_path.find_last_of(L"\\/");
 				return pos == std::wstring::npos ? image_path : image_path.substr(pos + 1);
 			}
@@ -543,15 +568,30 @@ namespace iphelper
 			bool ipv6_ok{};
 			/// <summary>Worst delivery latency with an immediate EVENT_TRACE_CONTROL_FLUSH, ms (-1 = none)</summary>
 			double on_demand_ms{-1};
-			/// <summary>Worst delivery latency with no flush call (session timer only), ms (-1 = none)</summary>
+			/// <summary>Median delivery latency with no flush call (session timer only), ms
+			/// (-1 = none). One slow sample on a loaded 2-vCPU VM must not decide [M19045].</summary>
 			double timer_ms{-1};
+			/// <summary>Every timer probe sample, ms, in the order taken</summary>
+			std::vector<double> timer_samples;
+			/// <summary>Every on-demand IPv4 probe sample, ms</summary>
+			std::vector<double> on_demand_samples;
+			/// <summary>timer_ms (median) is <= 50 ms</summary>
 			bool timer_ok{};
 			uint32_t ipv4_sources{};
 			uint32_t ipv6_sources{};
 			bool tcp_attempted{};
+			/// <summary>true only if the loopback connect was attributed to this process
+			/// (find_owner on the connect tuple returned our own PID)</summary>
 			bool tcp_ok{};
 			double tcp_on_demand_ms{-1};
 			uint32_t tcp_sources{};
+			/// <summary>PID that the attributor chose for the loopback connect (0 = unknown)</summary>
+			uint32_t tcp_owner_pid{};
+			/// <summary>Event that decided tcp_owner_pid</summary>
+			event_source tcp_owner_source{event_source::none};
+			bool tcp_owner_from_header{};
+			/// <summary>GetCurrentProcessId() of the attributor</summary>
+			uint32_t own_pid{};
 			uint64_t runs{};
 			uint64_t failures{};
 			std::string detail;
@@ -563,6 +603,7 @@ namespace iphelper
 			bool elevated{};
 			bool session_started{};
 			ULONG start_status{ERROR_SUCCESS};
+			std::string session_name;
 			ULONG requested_log_file_mode{};
 			ULONG actual_log_file_mode{};
 			ULONG flush_timer{};
@@ -589,7 +630,7 @@ namespace iphelper
 					os << " (" << failure << ")";
 				os << "\n  elevated=" << (elevated ? "yes" : "no")
 					<< " session_started=" << (session_started ? "yes" : "no")
-					<< " StartTrace=" << start_status;
+					<< " StartTrace=" << start_status << " session=" << session_name;
 				std::snprintf(hex, sizeof(hex), "0x%08lX", static_cast<unsigned long>(requested_log_file_mode));
 				os << "\n  LogFileMode requested=" << hex;
 				std::snprintf(hex, sizeof(hex), "0x%08lX", static_cast<unsigned long>(actual_log_file_mode));
@@ -628,7 +669,25 @@ namespace iphelper
 					<< " timer=" << self_test.timer_ms << "ms"
 					<< " timer_ok=" << (self_test.timer_ok ? "yes" : "no")
 					<< " tcp-on-demand=" << self_test.tcp_on_demand_ms << "ms"
-					<< " runs=" << self_test.runs << " failures=" << self_test.failures
+					<< " runs=" << self_test.runs << " failures=" << self_test.failures;
+				auto samples = [&os](const char* name, const std::vector<double>& v)
+				{
+					os << " " << name << "={";
+					for (size_t i = 0; i < v.size(); ++i)
+						os << (i ? "," : "") << v[i];
+					os << "}";
+				};
+				os << "\n   ";
+				samples("timer-samples-ms", self_test.timer_samples);
+				samples("on-demand-samples-ms", self_test.on_demand_samples);
+				if (self_test.tcp_attempted)
+				{
+					os << "\n    tcp-owner=" << self_test.tcp_owner_pid
+						<< (self_test.tcp_owner_pid == self_test.own_pid && self_test.own_pid != 0 ? " (self)" : " (NOT self)")
+						<< " own-pid=" << self_test.own_pid << " via " << etw::to_string(self_test.tcp_owner_source)
+						<< (self_test.tcp_owner_from_header ? " (header PID)" : "");
+				}
+				os
 					<< "\n    v4-sources={" << sources_to_string(self_test.ipv4_sources) << "}"
 					<< " v6-sources={" << sources_to_string(self_test.ipv6_sources) << "}"
 					<< " tcp-sources={" << sources_to_string(self_test.tcp_sources) << "}";
@@ -653,6 +712,8 @@ namespace iphelper
 			uint64_t events_schema_rejected{};
 			uint64_t events_parse_failed{};
 			uint64_t events_own_process{};
+			/// <summary>Finished lookups: matches + timeouts. A caller that polls lookup()
+			/// for one packet counts once (when it matches or calls record_timeout()).</summary>
 			uint64_t lookups{};
 			uint64_t matches{};
 			uint64_t timeouts{};
@@ -675,8 +736,15 @@ namespace iphelper
 		/// <summary>Configuration</summary>
 		struct attributor_config
 		{
-			/// <summary>Real-time session name; must be unique per product</summary>
-			std::wstring session_name = L"NdisApi-PacketOwner";
+			/// <summary>Real-time session name. Empty (default): session_name_prefix + "-" +
+			/// GetCurrentProcessId(), so concurrent instances never share (and never stop)
+			/// each other's session. A non-empty name is used verbatim; if a session with
+			/// that name already exists, start() fails instead of stopping it.</summary>
+			std::wstring session_name;
+			/// <summary>Prefix of the per-process session name. At start, sessions named
+			/// "<prefix>-<pid>" whose pid is no longer running (left behind by a crashed or
+			/// killed instance) are stopped; sessions of live processes are never touched.</summary>
+			std::wstring session_name_prefix = L"NdisApi-PacketOwner";
 			/// <summary>Enable TCP connection events (UDP is always enabled: it is the
 			/// liveness source of the loopback self-test)</summary>
 			bool enable_tcp = true;
@@ -726,6 +794,9 @@ namespace iphelper
 			QueryPerformanceFrequency(&f);
 			qpc_frequency_ = f.QuadPart;
 			own_pid_ = GetCurrentProcessId();
+			session_name_ = config_.session_name.empty()
+				                ? config_.session_name_prefix + L"-" + std::to_wstring(own_pid_)
+				                : config_.session_name;
 			init_provider_table();
 		}
 
@@ -788,6 +859,7 @@ namespace iphelper
 
 			stopping_ = false;
 			live_ = false;
+			gate_final_ = false;
 			calibrate_clock();
 
 			// Gate 1: elevation. Real-time sessions with kernel providers need admin.
@@ -822,6 +894,7 @@ namespace iphelper
 				log("TCPIP capture-state (1300 rundown) request status=" + std::to_string(status));
 			}
 
+			gate_final_ = true;
 			refresh_availability();
 			if (!available_.load())
 			{
@@ -886,19 +959,59 @@ namespace iphelper
 		/// Non-blocking lookup. Returns the owner if an event for this tuple has already
 		/// been consumed. packet_qpc is QueryPerformanceCounter() at packet read.
 		/// Each successful call counts as one match: callers that poll should stop after
-		/// the first match.
+		/// the first match, and call record_timeout() when they give up.
+		/// Records whose PID is unknown (0) never outrank a record with a real PID. If only
+		/// unknown-PID records match, nullopt is returned unless accept_unknown is true
+		/// (pass true on the last attempt to report "an event was seen, owner unknown").
 		/// </summary>
 		// ****************************************************************************
 		std::optional<etw::owner_info> lookup(const etw::packet_tuple& tuple, const int64_t packet_qpc,
-		                                      const etw::match_kind kind = etw::match_kind::datagram)
+		                                      const etw::match_kind kind = etw::match_kind::datagram,
+		                                      const bool accept_unknown = false)
 		{
-			++lookups_;
 			if (!available_.load())
 				return std::nullopt;
 			auto result = find_owner(tuple, packet_qpc, kind);
+			if (result && result->is_unknown() && !accept_unknown)
+				return std::nullopt;
 			if (result)
 				count_match(*result, packet_qpc);
 			return result;
+		}
+
+		// ****************************************************************************
+		/// <summary>
+		/// TCP connect outcome for a SYN read at packet_qpc: scans every record of the
+		/// tuple written from window_before ahead of the SYN onwards (1033/1034 and KN 12
+		/// come about one RTT later, a local abort much later [M26300]) and fills
+		/// connect_completed / connect_failed / connect_status of owner. Does not count as
+		/// a lookup. Returns true if the outcome (completed or failed) is known.
+		/// </summary>
+		// ****************************************************************************
+		bool tcp_outcome(const etw::packet_tuple& tuple, const int64_t packet_qpc, etw::owner_info& owner) const
+		{
+			const auto before = us_to_qpc(config_.window_before.count());
+			std::shared_lock<std::shared_mutex> lock(cache_mutex_);
+			const auto it = cache_.find(tuple);
+			if (it == cache_.end())
+				return owner.connect_completed || owner.connect_failed;
+			for (const auto& r : it->second)
+			{
+				if (r.event_qpc < packet_qpc - before)
+					continue;
+				owner.sources_seen |= 1u << static_cast<unsigned>(r.source);
+				if (r.pid != 0 && owner.pid != 0 && r.pid != owner.pid)
+					owner.conflict = true;
+				if (r.source == etw::event_source::tcpip_tcp_failed)
+				{
+					owner.connect_failed = true;
+					owner.connect_status = r.status;
+				}
+				else if (r.source == etw::event_source::tcpip_tcp_connected ||
+					r.source == etw::event_source::kn_tcp_connect)
+					owner.connect_completed = true;
+			}
+			return owner.connect_completed || owner.connect_failed;
 		}
 
 		// ****************************************************************************
@@ -911,14 +1024,13 @@ namespace iphelper
 		                                        const clock::time_point deadline,
 		                                        const etw::match_kind kind = etw::match_kind::datagram)
 		{
-			++lookups_;
 			waiter_scope scope(waiters_);
 			for (;;)
 			{
 				const auto seen = generation();
 				if (!available_.load() || stopping_.load())
 					break;
-				if (auto r = find_owner(tuple, packet_qpc, kind))
+				if (auto r = find_owner(tuple, packet_qpc, kind); r && !r->is_unknown())
 				{
 					count_match(*r, packet_qpc);
 					return r;
@@ -1124,9 +1236,9 @@ namespace iphelper
 			c.events_schema_rejected = events_schema_rejected_.load();
 			c.events_parse_failed = events_parse_failed_.load();
 			c.events_own_process = events_own_process_.load();
-			c.lookups = lookups_.load();
 			c.matches = matches_.load();
 			c.timeouts = timeouts_.load();
+			c.lookups = c.matches + c.timeouts;
 			c.conflicts = conflicts_.load();
 			c.flush_calls = flush_calls_.load();
 			c.flush_call_max_us = flush_call_max_us_.load();
@@ -1356,7 +1468,7 @@ namespace iphelper
 
 		[[nodiscard]] properties_ptr make_properties() const
 		{
-			const size_t name_bytes = (config_.session_name.size() + 1) * sizeof(wchar_t);
+			const size_t name_bytes = (session_name_.size() + 1) * sizeof(wchar_t);
 			const size_t size = sizeof(EVENT_TRACE_PROPERTIES) + name_bytes + 1024 * sizeof(wchar_t);
 			auto* p = static_cast<EVENT_TRACE_PROPERTIES*>(std::calloc(1, size));
 			if (!p)
@@ -1367,13 +1479,89 @@ namespace iphelper
 			return properties_ptr(p);
 		}
 
+		/// <summary>true if a process with this PID is running now</summary>
+		static bool process_alive(const uint32_t pid)
+		{
+			if (pid == 0)
+				return false;
+			const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+			if (!process)
+				return GetLastError() == ERROR_ACCESS_DENIED; // exists, but we may not open it
+			DWORD code = 0;
+			const bool alive = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+			CloseHandle(process);
+			return alive;
+		}
+
+		/// <summary>
+		/// Stops sessions named "<session_name_prefix>-<pid>" whose pid is not running: they
+		/// were left behind by an instance that was killed (a real-time session outlives its
+		/// process). Sessions of live processes, including other running instances, and the
+		/// legacy fixed name without a pid suffix are never stopped. A PID that was reused
+		/// by an unrelated live process keeps its stale session until that process exits;
+		/// if it is our own PID, start_session() replaces it.
+		/// </summary>
+		void stop_stale_sessions()
+		{
+			constexpr size_t name_chars = 1024;
+			constexpr size_t entry_size = sizeof(EVENT_TRACE_PROPERTIES) + 2 * name_chars * sizeof(wchar_t);
+			ULONG max_sessions = 256;
+			std::vector<std::unique_ptr<uint8_t[]>> storage;
+			std::vector<EVENT_TRACE_PROPERTIES*> array;
+			ULONG count = 0;
+			ULONG status = ERROR_SUCCESS;
+			for (int attempt = 0; attempt < 2; ++attempt)
+			{
+				storage.clear();
+				array.clear();
+				for (ULONG i = 0; i < max_sessions; ++i)
+				{
+					storage.push_back(std::make_unique<uint8_t[]>(entry_size));
+					std::memset(storage.back().get(), 0, entry_size);
+					auto* p = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(storage.back().get());
+					p->Wnode.BufferSize = static_cast<ULONG>(entry_size);
+					p->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+					p->LogFileNameOffset = static_cast<ULONG>(sizeof(EVENT_TRACE_PROPERTIES) + name_chars * sizeof(wchar_t));
+					array.push_back(p);
+				}
+				count = 0;
+				status = QueryAllTracesW(array.data(), max_sessions, &count);
+				if (status != ERROR_INVALID_PARAMETER)
+					break;
+				max_sessions = 64; // documented maximum on older systems [V-doc]
+			}
+			if (status != ERROR_SUCCESS && status != ERROR_MORE_DATA)
+			{
+				log("QueryAllTracesW returned " + std::to_string(status) + ": stale session cleanup skipped");
+				return;
+			}
+			const std::wstring prefix = config_.session_name_prefix + L"-";
+			for (ULONG i = 0; i < count && i < max_sessions; ++i)
+			{
+				const auto* p = array[i];
+				if (p->LoggerNameOffset == 0)
+					continue;
+				const std::wstring name(reinterpret_cast<const wchar_t*>(
+					reinterpret_cast<const char*>(p) + p->LoggerNameOffset));
+				if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0)
+					continue;
+				const auto digits = name.substr(prefix.size());
+				if (digits.size() > 10 || digits.find_first_not_of(L"0123456789") != std::wstring::npos)
+					continue;
+				const auto pid = static_cast<uint32_t>(std::wcstoul(digits.c_str(), nullptr, 10));
+				if (pid == own_pid_ || process_alive(pid))
+					continue;
+				auto props = make_properties();
+				const auto stop_status = ControlTraceW(0, name.c_str(), props.get(), EVENT_TRACE_CONTROL_STOP);
+				log("stopped stale ETW session of exited pid " + std::to_string(pid) + ", status=" +
+					std::to_string(stop_status));
+			}
+		}
+
 		bool start_session(const bool ms_timer)
 		{
-			// Clear a session left behind by a crash (fixed name).
-			{
-				auto props = make_properties();
-				ControlTraceW(0, config_.session_name.c_str(), props.get(), EVENT_TRACE_CONTROL_STOP);
-			}
+			if (config_.session_name.empty())
+				stop_stale_sessions();
 
 			auto props = make_properties();
 			SYSTEM_INFO si{};
@@ -1392,20 +1580,33 @@ namespace iphelper
 			std::lock_guard<std::mutex> lock(report_mutex_);
 			report_.requested_log_file_mode = props->LogFileMode;
 			report_.flush_timer = props->FlushTimer;
+			report_.session_name = narrow(session_name_);
 
 			TRACEHANDLE handle = 0;
-			auto status = StartTraceW(&handle, config_.session_name.c_str(), props.get());
+			auto status = StartTraceW(&handle, session_name_.c_str(), props.get());
+			if (status == ERROR_ALREADY_EXISTS && config_.session_name.empty())
+			{
+				// The name carries our own PID, so the existing session belongs to an exited
+				// process that had the same PID: it cannot be a live instance.
+				auto stop = make_properties();
+				ControlTraceW(0, session_name_.c_str(), stop.get(), EVENT_TRACE_CONTROL_STOP);
+				auto retry = make_properties();
+				std::memcpy(retry.get(), props.get(), props->Wnode.BufferSize);
+				status = StartTraceW(&handle, session_name_.c_str(), retry.get());
+			}
 			report_.start_status = status;
 			if (status != ERROR_SUCCESS)
 			{
-				report_.failure = "StartTraceW returned " + std::to_string(status);
+				report_.failure = "StartTraceW returned " + std::to_string(status) +
+					(status == ERROR_ALREADY_EXISTS ? " (a session with this name is running; not stopped)" : "");
 				return false;
 			}
 			session_handle_ = handle;
 			report_.session_started = true;
 
 			// Read back. Windows 7 returns 0 from StartTrace and silently clears the
-			// INDEPENDENT bit (0x00000100) [M7601]: never trust the return code alone.
+			// INDEPENDENT bit (EVENT_TRACE_INDEPENDENT_SESSION_MODE, 0x08000000) [M7601]:
+			// never trust the return code alone.
 			// Extra bits the OS adds (0x00800000 on 19045, 0x00400000 on 26300) are ignored.
 			auto query = make_properties();
 			status = ControlTraceW(session_handle_, nullptr, query.get(), EVENT_TRACE_CONTROL_QUERY);
@@ -1479,7 +1680,7 @@ namespace iphelper
 		bool start_consumer()
 		{
 			EVENT_TRACE_LOGFILEW logfile{};
-			logfile.LoggerName = const_cast<LPWSTR>(config_.session_name.c_str());
+			logfile.LoggerName = const_cast<LPWSTR>(session_name_.c_str());
 			logfile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD |
 				etw::process_trace_mode_raw_timestamp;
 			logfile.EventRecordCallback = &etw_packet_attributor::event_record_callback;
@@ -2093,7 +2294,7 @@ namespace iphelper
 		};
 
 		/// <summary>SOCKADDR blob: family @0, port (network order) @+2, IPv4 @+4, IPv6 @+8
-		/// [M26300 for 1169; assumed for the TCP events]. IPv4-mapped IPv6 addresses
+		/// [M26300 for 1169 and the TCPIP TCP events]. IPv4-mapped IPv6 addresses
 		/// (dual-mode sockets) are folded to IPv4 so they match the IPv4 packet.</summary>
 		static bool parse_sockaddr(const uint8_t* p, const uint32_t len, uint16_t& family,
 		                           std::array<uint8_t, 16>& ip, uint16_t& port_host) noexcept
@@ -2365,7 +2566,29 @@ namespace iphelper
 				tuple.remote_port = ev.addr_port[f_remote_sockaddr];
 			}
 
-			const auto pid = static_cast<uint32_t>(ev.num[f_pid]);
+			// PID policy, per event id [M26300, M19045]:
+			//   TCPIP 1031 (connect proceeding, written at SYN send in the connecting
+			//     thread): payload ProcessId and ProcessStartKey are 0; the event header PID
+			//     is the connecting process. Use the header PID unless it is 0 or 4.
+			//   TCPIP 1033 (connected): header PID is 4 (System), payload ProcessId is the
+			//     owner. Payload only.
+			//   TCPIP 1034 (connect failed): header and payload both named the owner after a
+			//     local abort; a remote RST is processed in an arbitrary context, so payload
+			//     only.
+			//   Every other source (KN 12/15/28/31/42/58, TCPIP 1017/1169/1300): payload only.
+			// A remaining PID of 0 means "unknown": such a record never outranks one with a
+			// real PID (find_owner) and is not reported as Idle.
+			auto pid = static_cast<uint32_t>(ev.num[f_pid]);
+			bool pid_from_header = false;
+			if (pid == 0 && source == etw::event_source::tcpip_tcp_connect)
+			{
+				const auto header_pid = static_cast<uint32_t>(record->EventHeader.ProcessId);
+				if (header_pid != 0 && header_pid != 4 && header_pid != 0xFFFFFFFFu)
+				{
+					pid = header_pid;
+					pid_from_header = true;
+				}
+			}
 			if (pid == own_pid_ && config_.ignore_own_process && !is_self_test_tuple(tuple))
 			{
 				++events_own_process_;
@@ -2374,6 +2597,7 @@ namespace iphelper
 
 			etw::owner_info owner;
 			owner.pid = pid;
+			owner.pid_from_header = pid_from_header;
 			owner.process_start_key = ev.has[f_start_key] ? ev.num[f_start_key] : 0;
 			owner.source = source;
 			owner.event_id = id;
@@ -2478,7 +2702,9 @@ namespace iphelper
 		void resolve_image(etw::owner_info& owner)
 		{
 			owner.image_verified = false;
-			if (owner.pid == 0 || owner.pid == 4)
+			if (owner.pid == 0)
+				return; // unknown owner: nothing to verify (not "Idle")
+			if (owner.pid == 4)
 			{
 				owner.image_verified = true;
 				return;
@@ -2605,6 +2831,7 @@ namespace iphelper
 		{
 			// Lower is preferred. UDP: 1169 (start key, written earlier) over 42/58 (plan 3.1).
 			// TCP: 1031 (connect proceeding) over KN 12/28, then completion, failure, accept.
+			// find_owner() ranks known PIDs above unknown (0) ones before applying this.
 			switch (s)
 			{
 			case etw::event_source::tcpip_udp_send: return 0;
@@ -2634,9 +2861,26 @@ namespace iphelper
 			if (it == cache_.end())
 				return std::nullopt;
 
+			// Preference: a known PID first (a pid-0 record never outranks a real one, so a
+			// pid-0 1031 falls back to the next ranked record, e.g. 1033 or KN 12), then
+			// source_rank, then distance from the packet.
+			auto better = [](const etw::owner_info& a, const int64_t a_distance, const etw::owner_info& b,
+			                 const int64_t b_distance)
+			{
+				if ((a.pid == 0) != (b.pid == 0))
+					return a.pid != 0;
+				const auto ra = source_rank(a.source), rb = source_rank(b.source);
+				if (ra != rb)
+					return ra < rb;
+				return a_distance < b_distance;
+			};
 			const etw::owner_info* best = nullptr;
 			uint32_t seen = 0;
+			uint32_t known_pid = 0;
 			bool conflict = false;
+			bool failed = false;
+			bool completed = false;
+			uint32_t failed_status = 0;
 			int64_t best_distance = 0;
 			for (const auto& r : it->second)
 			{
@@ -2655,12 +2899,23 @@ namespace iphelper
 				if (!in_window)
 					continue;
 				seen |= 1u << static_cast<unsigned>(r.source);
-				if (best && best->pid != r.pid)
-					conflict = true;
+				if (r.pid != 0)
+				{
+					// Unknown (0) is not a different owner: only known PIDs can conflict.
+					if (known_pid != 0 && known_pid != r.pid)
+						conflict = true;
+					known_pid = r.pid;
+				}
+				if (tcp && r.source == etw::event_source::tcpip_tcp_failed)
+				{
+					failed = true;
+					failed_status = r.status;
+				}
+				else if (tcp && (r.source == etw::event_source::tcpip_tcp_connected ||
+					r.source == etw::event_source::kn_tcp_connect))
+					completed = true;
 				const auto distance = r.event_qpc > packet_qpc ? r.event_qpc - packet_qpc : packet_qpc - r.event_qpc;
-				const auto rank = source_rank(r.source);
-				if (!best || rank < source_rank(best->source) ||
-					(rank == source_rank(best->source) && distance < best_distance))
+				if (!best || better(r, distance, *best, best_distance))
 				{
 					best = &r;
 					best_distance = distance;
@@ -2672,6 +2927,12 @@ namespace iphelper
 			etw::owner_info result = *best;
 			result.sources_seen = seen;
 			result.conflict = conflict;
+			result.connect_completed = completed;
+			if (failed)
+			{
+				result.connect_failed = true;
+				result.connect_status = failed_status;
+			}
 
 			if (result.process_start_key == 0 && !tcp)
 			{
@@ -2886,6 +3147,10 @@ namespace iphelper
 			double ms{-1};
 			uint32_t sources{};
 			std::string error;
+			/// <summary>TCP: owner chosen by find_owner() for the connect tuple</summary>
+			uint32_t owner_pid{};
+			etw::event_source owner_source{etw::event_source::none};
+			bool owner_from_header{};
 		};
 
 		bool is_self_test_tuple(const etw::packet_tuple& t)
@@ -3072,6 +3337,17 @@ namespace iphelper
 						flush_now();
 					std::this_thread::sleep_for(std::chrono::milliseconds(use_flush ? 20 : 60));
 					slot_state(sources, first);
+					if (tcp)
+					{
+						// The gate is the owner, not the mere arrival of a connect event:
+						// TCPIP 1031 arrives with payload ProcessId 0 [M26300].
+						if (const auto owner = find_owner(tuple, t0, etw::match_kind::datagram))
+						{
+							result.owner_pid = owner->pid;
+							result.owner_source = owner->source;
+							result.owner_from_header = owner->pid_from_header;
+						}
+					}
 				}
 			}
 			else
@@ -3086,7 +3362,13 @@ namespace iphelper
 			--self_test_active_;
 
 			result.sources = sources;
-			if (first != 0)
+			if (first != 0 && tcp && result.owner_pid != own_pid_)
+			{
+				result.ms = qpc_to_ms(first - t0);
+				result.error = "loopback connect attributed to pid " + std::to_string(result.owner_pid) + " via " +
+					etw::to_string(result.owner_source) + ", expected own pid " + std::to_string(own_pid_);
+			}
+			else if (first != 0)
 			{
 				result.ok = true;
 				result.ms = qpc_to_ms(first - t0);
@@ -3100,8 +3382,13 @@ namespace iphelper
 		{
 			bool ok{true};
 			double worst{-1};
+			double median{-1};
+			std::vector<double> samples;
 			uint32_t sources{};
 			std::string error;
+			uint32_t owner_pid{};
+			etw::event_source owner_source{etw::event_source::none};
+			bool owner_from_header{};
 		};
 
 		probe_series probe(const uint16_t family, const bool tcp, const bool use_flush, const int runs,
@@ -3112,6 +3399,14 @@ namespace iphelper
 			{
 				const auto r = self_test_once(family, tcp, use_flush, timeout);
 				s.sources |= r.sources;
+				if (tcp)
+				{
+					s.owner_pid = r.owner_pid;
+					s.owner_source = r.owner_source;
+					s.owner_from_header = r.owner_from_header;
+				}
+				if (r.ms >= 0)
+					s.samples.push_back(r.ms);
 				if (!r.ok)
 				{
 					s.ok = false;
@@ -3119,6 +3414,13 @@ namespace iphelper
 					break;
 				}
 				s.worst = std::max(s.worst, r.ms);
+			}
+			if (!s.samples.empty())
+			{
+				auto sorted = s.samples;
+				std::sort(sorted.begin(), sorted.end());
+				const auto n = sorted.size();
+				s.median = n % 2 ? sorted[n / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
 			}
 			return s;
 		}
@@ -3141,6 +3443,7 @@ namespace iphelper
 			etw::self_test_status st;
 			st.ran = true;
 			std::ostringstream detail;
+			std::string fallback_reason;
 
 			bool ms_bit_kept;
 			{
@@ -3149,16 +3452,21 @@ namespace iphelper
 			}
 
 			// Timer probe first, with no flush at all: only the session timer delivers.
-			// Used only if the 0x10 bit survived the read-back and delivery is <= 50 ms
-			// (10 ms timer measured ~31 ms median on 19045, ~28 ms on 26300; ~1.6 s on 7601).
+			// Used only if the 0x10 bit survived the read-back and the MEDIAN of five
+			// samples is <= 50 ms (10 ms timer measured ~31 ms median on 19045, ~28 ms on
+			// 26300; ~1.6 s on 7601). The worst sample does not decide: single samples of
+			// 69-80 ms next to 32-39 ms ones were seen on a 2-vCPU 19045 VM [M19045].
 			if (ms_bit_kept && config_.flush != etw::flush_mode::on_demand)
 			{
-				const auto t = probe(AF_INET, false, false, 3, std::chrono::milliseconds(500));
-				st.timer_ms = t.ok ? t.worst : -1;
-				st.timer_ok = t.ok && t.worst <= 50.0;
+				const auto t = probe(AF_INET, false, false, 5, std::chrono::milliseconds(500));
+				st.timer_samples = t.samples;
+				st.timer_ms = t.ok ? t.median : -1;
+				st.timer_ok = t.ok && t.median <= 50.0;
 				st.ipv4_sources |= t.sources;
 				if (!t.ok)
 					detail << "timer probe: " << t.error << "; ";
+				else if (!st.timer_ok)
+					detail << "timer probe median " << t.median << " ms exceeds 50 ms; ";
 			}
 			else
 				detail << "timer probe skipped (" << (ms_bit_kept ? "on-demand requested" : "ms-timer bit not kept")
@@ -3167,6 +3475,7 @@ namespace iphelper
 			const auto od = probe(AF_INET, false, true, 3, std::chrono::milliseconds(1500));
 			st.ipv4_ok = od.ok;
 			st.on_demand_ms = od.ok ? od.worst : -1;
+			st.on_demand_samples = od.samples;
 			st.ipv4_sources |= od.sources;
 			if (!od.ok)
 				detail << "ipv4: " << od.error << "; ";
@@ -3188,6 +3497,9 @@ namespace iphelper
 				st.tcp_ok = t.ok;
 				st.tcp_on_demand_ms = t.ok ? t.worst : -1;
 				st.tcp_sources = t.sources;
+				st.tcp_owner_pid = t.owner_pid;
+				st.tcp_owner_source = t.owner_source;
+				st.tcp_owner_from_header = t.owner_from_header;
 				if (!t.ok)
 					detail << "tcp: " << t.error << "; ";
 			}
@@ -3208,9 +3520,24 @@ namespace iphelper
 					}
 					break;
 				case etw::flush_mode::automatic:
-					mode = st.timer_ok
-						       ? etw::effective_flush::timer_and_light_on_demand
-						       : etw::effective_flush::on_demand;
+					// Prefer the ms timer whenever it is confirmed: under sustained load on a
+					// 2-vCPU VM the timer held while on-demand flushing degraded [M19045].
+					if (st.timer_ok)
+						mode = etw::effective_flush::timer_and_light_on_demand;
+					else
+					{
+						mode = etw::effective_flush::on_demand;
+						std::ostringstream why;
+						why << "auto: falling back to on-demand flushes because ";
+						if (!ms_bit_kept)
+							why << "the ms-timer bit was not kept in the read-back";
+						else if (st.timer_ms < 0)
+							why << "the timer probe got no event";
+						else
+							why << "the timer probe median " << st.timer_ms << " ms exceeds 50 ms";
+						detail << why.str() << "; ";
+						fallback_reason = why.str();
+					}
 					break;
 				case etw::flush_mode::on_demand:
 					mode = etw::effective_flush::on_demand;
@@ -3223,6 +3550,9 @@ namespace iphelper
 			st.runs = 1;
 			st.failures = mode == etw::effective_flush::none ? 1 : 0;
 			st.detail = detail.str();
+			st.own_pid = own_pid_;
+			if (!fallback_reason.empty())
+				log(fallback_reason);
 			effective_flush_ = mode;
 			live_ = mode != etw::effective_flush::none;
 			{
@@ -3341,6 +3671,10 @@ namespace iphelper
 				report_.available = available;
 			}
 			const bool was = available_.exchange(available);
+			// While start() runs its gates, schemas arrive one by one and the verdict is not
+			// final yet ("no accepted UDP send schema" before the first 42/1169): stay quiet.
+			if (!gate_final_.load())
+				return;
 			if (was != available || !log_line.empty())
 				log(std::string("ETW attribution ") + (available ? "available" : "unavailable") +
 					(log_line.empty() ? "" : ": " + log_line));
@@ -3409,8 +3743,13 @@ namespace iphelper
 		// State
 		// ------------------------------------------------------------------------
 		etw::attributor_config config_;
+		/// <summary>Effective session name (config_.session_name or prefix-pid)</summary>
+		std::wstring session_name_;
 		int64_t qpc_frequency_{1};
 		uint32_t own_pid_{};
+		/// <summary>false while start() is still running its gates: intermediate
+		/// availability changes are not logged, only the final verdict is</summary>
+		std::atomic<bool> gate_final_{false};
 
 		std::mutex lifecycle_mutex_;
 		mutable std::mutex report_mutex_;
@@ -3486,7 +3825,6 @@ namespace iphelper
 		std::atomic<uint64_t> events_schema_rejected_{0};
 		std::atomic<uint64_t> events_parse_failed_{0};
 		std::atomic<uint64_t> events_own_process_{0};
-		std::atomic<uint64_t> lookups_{0};
 		std::atomic<uint64_t> matches_{0};
 		std::atomic<uint64_t> timeouts_{0};
 		std::atomic<uint64_t> conflicts_{0};
