@@ -5,7 +5,9 @@ TCP connection attempts (SYN) seen by the Windows Packet Filter, in two ways at 
 
 * **IP Helper** – the owner tables (`GetExtendedUdpTable` / `GetExtendedTcpTable`) used by
   most WinpkFilter based tools (see `common/iphelper/process_lookup.h`). First the cached
-  table is checked at packet time, then the table is refreshed and checked again.
+  table is checked at packet time; on a miss a table refresh is requested from a
+  background thread (coalesced, at most one per `--iph-refresh-ms` per table) and the
+  lookup is retried when that refresh has completed.
 * **ETW** – `common/iphelper/etw_packet_attributor.h`, a header-only class that consumes
   the kernel's own network events (Microsoft-Windows-Kernel-Network, Microsoft-Windows-TCPIP
   and optionally Microsoft-Windows-DNS-Client). These events carry the owner PID and are
@@ -40,13 +42,29 @@ Win32/x64/ARM64). Like the other C++ examples it uses a vcpkg manifest (`ms-gsl`
 `ws2_32.lib` and `iphlpapi.lib`. The binary goes to
 `bin\examples\native\<platform>\<configuration>\packet_owner.exe`.
 
+From a Developer Command Prompt, `msbuild ndisapi.sln /t:packet_owner` fails with MSB4057:
+in the solution the project sits in the solution folder `examples\C++`, and MSBuild names
+solution targets after the folder path, so the target should be
+`examples\C++\packet_owner` (for example
+`msbuild ndisapi.sln /t:examples\C++\packet_owner /p:Configuration=Release /p:Platform=x64`;
+not verified yet). Building the two project files directly is known to work; `SolutionDir` (with a trailing
+backslash) must point at the clone root because the output and library paths use it:
+
+```
+msbuild ndisapi.lib\ndisapilib.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=<clone>\ /p:SolutionName=ndisapi
+msbuild examples\cpp\packet_owner\packet_owner.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=<clone>\ /p:SolutionName=ndisapi
+```
+
+`/p:Platform` is `x64`, `ARM64` or `Win32` for the project files (the solution calls Win32
+`x86`).
+
 ## Usage
 
 ```
 packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
              [--flush auto|ondemand|timer] [--hold-ms N] [--late-ms N]
              [--csv file] [--udp-all] [--tcp-existing] [--stats-sec N] [--quiet] [--no-etw]
-             [--gates-only]
+             [--no-iph-refresh] [--iph-refresh-ms N] [--gates-only]
 ```
 
 | Option | Meaning |
@@ -58,11 +76,13 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--hold-ms` | Budget used to classify an ETW answer as `in-budget` or `late`. Default 75 ms. Nothing is actually held. |
 | `--late-ms` | Stop waiting for an ETW owner after this many ms and report `none`. Default 2000. |
 | `--csv` | Write one row per reported packet. |
-| `--udp-all` | Report every datagram. By default a UDP 5-tuple is reported once per 5 s. |
+| `--udp-all` | Report every datagram. By default a UDP 5-tuple is reported once per 5 s. With `--dns`, DNS query datagrams are always reported (Dnscache sends all queries from one socket, so per-5-tuple suppression would hide all but the first). |
 | `--tcp-existing` | Also report the first packet of TCP connections whose SYN was not seen (for example, connections opened before the program started). These are matched against any connection event or the TCPIP rundown. |
 | `--stats-sec` | Print statistics periodically. Final statistics are always printed. |
 | `--quiet` | No per-packet lines. |
 | `--no-etw` | IP Helper only. |
+| `--no-iph-refresh` | Diagnostic: never refresh the IP Helper tables on a miss; the IP Helper column shows only what the cached tables knew. |
+| `--iph-refresh-ms` | Minimum interval between two refreshes of one IP Helper table (IPv4/IPv6 × TCP/UDP). Default 25 ms. Misses that arrive meanwhile share the next refresh. |
 | `--gates-only` | Run only the ETW gates and the loopback self-test, print the report and exit (exit code 0 if ETW attribution is available, 3 if not). Does not need the driver. |
 
 Press **Ctrl+C** to stop. The filter is stopped first (this restores the adapter mode and
@@ -73,7 +93,7 @@ the gate report are printed. Closing the console window does the same.
 
 ```
 +3.214s UDP 192.168.1.10:53122 -> 8.8.8.8:53 | IPH - miss | ETW nslookup.exe(4312) 1169v1 +12.40ms in-budget (event -0.31ms) | etw-only | DNS example.com type 1
-+3.502s TCP SYN 192.168.1.10:50544 -> 93.184.215.14:443 | IPH chrome.exe(9120) hit | ETW chrome.exe(9120) 1031v1 +8.95ms in-budget (event -0.12ms) | agree
++3.502s TCP SYN 192.168.1.10:50544 -> 93.184.215.14:443 | IPH chrome.exe(9120) hit | ETW chrome.exe(9120)[header-pid] 1031v1 +8.95ms in-budget (event -0.12ms) (connected) | agree
 +4.010s UDP 192.168.1.10:61001 -> 192.168.1.1:53 | IPH svchost.exe(1588) hit | ETW svchost.exe(1588) 1169v1 +9.80ms in-budget (event -0.28ms) | agree | DNS www.example.org type 28 via Dnscache: tier2:3006-header-PID callers firefox.exe(7720) (wire-confirmed)
 ```
 
@@ -83,17 +103,36 @@ the gate report are printed. Closing the console window does the same.
   event's own timestamp relative to the packet read: negative means the event was written
   before the driver saw the packet. `[unverified]` means the
   image path could not be proven to belong to that PID (the process exited and its PID may
-  have been reused). `CONFLICT{...}` lists the event sources when they named different PIDs.
+  have been reused). `[header-pid]` means the PID came from the event header (TCPIP 1031,
+  see "Matching"). `no PID` with state `no-pid` means an event matched but none named a
+  real PID; it is not counted as an ETW owner. `CONFLICT{...}` lists the event sources when
+  they named different (nonzero) PIDs.
+* TCP SYN rows end with the connect outcome seen later for the same connection:
+  `(connected)` (TCPIP 1033 or Kernel-Network 12/28), `(connect failed, 1034 status 0x...)`,
+  or `(unknown)` if neither arrived within `--late-ms`. The owner and its latency are
+  still those of the first matching event.
 * Verdict: `agree`, `DISAGREE`, `etw-only`, `iph-only` or `neither`.
+* CSV columns added after `dns_wire_confirmed`: `etw_pid_from_header`, `tcp_outcome`
+  (`connected` / `failed` / `unknown`) and `tcp_connect_status` (the 1034 status).
 * `DNS ... via Dnscache`: the callers of a query sent by Dnscache. `tier1:ClientPID` comes
   from the `ClientPID` field of DNS-Client 3019/3010 (newer builds); `tier2:3006-header-PID`
   matches DNS-Client 3006 events by name and type (including DNS search suffixes).
   Coalesced queries list several callers.
 
-At start-up the gate report is printed: the session `LogFileMode` requested and read back,
-each provider's enable status and event IDs, every event schema seen (by TDH, with its
-fields), and the loopback self-test result. The same report is printed again at exit with
-the schemas that appeared while running.
+At start-up the gate report is printed: the session name and `LogFileMode` requested and
+read back, each provider's enable status and event IDs, every event schema seen (by TDH,
+with its fields), and the loopback self-test result including every timer and on-demand
+sample and the owner chosen for the loopback TCP connect (`tcp-owner=<pid> (self)`). The
+same report is printed again at exit with the schemas that appeared while running. While
+the gates are still running nothing is logged about availability; the first verdict on
+stderr is the final one.
+
+The ETW session is named `NdisApi-PacketOwner-<pid>`, so several instances can run at the
+same time without touching each other's session. At start, sessions with that prefix
+whose PID no longer runs (left behind by a killed instance; a real-time session outlives
+its process) are stopped; sessions of running processes are never stopped. Session
+buffers: 64 KB each, `MinimumBuffers` = 2 × logical CPUs, `MaximumBuffers` = 4 × logical
+CPUs + 16 (12 / 40 on a 6-CPU machine).
 
 ## How it works
 
@@ -104,18 +143,32 @@ the schemas that appeared while running.
    requested marks that provider "filter not honoured" and its events are ignored; each
    (provider, ID, version) schema is read with TDH and the fields are located by name;
    a loopback self-test (127.0.0.1, ::1 and a loopback TCP connection) must come back as
-   events naming this process.
+   events naming this process. For TCP the check is the attributed owner: `tcp=ok` only if
+   the owner chosen for the loopback connect is this process's PID, not merely that some
+   TCP event arrived.
 2. **Flush strategy.** ETW delivers events in buffers; without help a datagram's event
    can take a second or more to arrive. `ondemand` calls `ControlTrace(FLUSH)` at most
    every 10 ms while lookups wait (backing off to 50 ms under load). `timer` starts the
    session with the undocumented millisecond flush timer (`0x10`, FlushTimer=10) and is
-   used only if the self-test confirms delivery within 50 ms. `auto` uses the timer when
-   confirmed, plus light on-demand flushes while few lookups wait; otherwise on-demand.
+   used only if the self-test confirms delivery within 50 ms: the median of five timer
+   samples must be ≤ 50 ms (single samples of 69–80 ms next to 32–39 ms ones were seen on
+   a 2-vCPU VM, so the worst sample does not decide). `auto` uses the timer whenever it is
+   confirmed, plus light on-demand flushes while few lookups wait; otherwise on-demand, and
+   the reason for the fallback is logged and shown in the self-test detail. On the 2-vCPU
+   19045 VM under sustained load the timer held while on-demand flushing degraded; there,
+   `--flush timer` is the safer explicit choice.
 3. **Matching.** Events are cached by 5-tuple. A datagram or SYN matches only events of
    the same 5-tuple whose timestamp lies in [packet − 50 ms, packet + 1 ms] (TCP:
-   + 50 ms, because connection events may be written after the SYN). Preferred sources:
+   + 50 ms, because connection events may be written after the SYN). A record that names
+   a real PID always beats one whose PID is unknown (0); among those, preferred sources are:
    UDP – TCPIP 1169, then Kernel-Network 42/58; TCP – TCPIP 1031, then Kernel-Network
    12/28, then 1033/1034/1017. TCPIP 1396 (UDP bind) only adds a process start key.
+   **PID per event:** the payload PID is used, except for TCPIP 1031, whose payload
+   `ProcessId` (and `ProcessStartKey`) is 0: there the event header PID is used, which is
+   the connecting process because 1031 is written at SYN send in the connecting thread.
+   A header PID of 0 or 4 is not used. 1033 has header PID 4 and the real PID in the
+   payload; 1034 carried the real PID in both after a local abort; both use the payload.
+   PID 0 is shown as "unknown", never as a verified Idle process.
 4. **Image names** are resolved on the ETW consumer thread when the event arrives, and are
    checked against PID reuse with the process start key or the process creation time.
 
@@ -126,11 +179,11 @@ the schemas that appeared while running.
 | Kernel-Network 42 / 58 (UDP send v4/v6), v0 | UDP owner | Measured on 7601, 19045, 26300 |
 | TCPIP 1169 UdpEndpointSendMessages, v0 / v1 (+ProcessStartKey) | UDP owner (preferred) | Measured: v0 on 7601, v1 on 19045 and 26300 |
 | TCPIP 1396 UdpBindEndpointComplete, v1 | Start-key enrichment only | Measured on 19045, 26300 |
-| TCPIP 1031 TcpConnectTcbProceeding, v0 / v1 | TCP SYN owner (preferred) | Manifests only; timing relative to the SYN not yet measured |
-| Kernel-Network 12 / 28 (TCP connect v4/v6), v0 | TCP SYN owner | Manifests only; may be written after the handshake |
-| TCPIP 1033 / 1034 (connect complete / failure) | TCP owner, failed connects | Manifests only |
-| TCPIP 1017 TcpAcceptListenerComplete, Kernel-Network 15 / 31 | Inbound connections | Manifests only |
-| TCPIP 1300 TcpConnectionRundown (capture state) | `--tcp-existing` | Manifests only |
+| TCPIP 1031 TcpConnectTcbProceeding, v1 | TCP SYN owner (preferred), header PID | Measured v1 on 19045 and 26300: written at SYN send, before WinpkFilter reads the SYN; payload ProcessId 0 |
+| Kernel-Network 12 / 28 (TCP connect v4/v6), v0 | TCP owner after the handshake | KN 12 v0 measured on 19045 and 26300 (about one RTT after the SYN; absent for aborted connects); KN 28 not observed |
+| TCPIP 1033 / 1034 (connect complete / failure), v1 | TCP owner (payload PID), connect outcome and 1034 status | Measured v1 on 26300 (1034 also on 19045); a remote RST (1034) is not measured yet |
+| TCPIP 1017 TcpAcceptListenerComplete, Kernel-Network 15 / 31 | Inbound connections | 1017 v1 and KN 15 v0 seen in the loopback self-test |
+| TCPIP 1300 TcpConnectionRundown (capture state) | `--tcp-existing` | Measured: v3 on 26300, v1 on 19045 |
 | DNS-Client 3006 / 3010 / 3019 | Dnscache callers (`--dns`) | Measured on 19045 (no ClientPID) and 26300 (ClientPID) |
 
 Manifest sources: [jdu2600/Windows10EtwEvents](https://github.com/jdu2600/Windows10EtwEvents)
@@ -154,8 +207,30 @@ With a 1 s flush timer and no on-demand flush the median was 0.7–1.6 s, which 
 flush strategy matters. The event is written before WinpkFilter reads the frame (median
 about −0.25 ms on 26300), so the only delay is delivery.
 
-TCP and the `packet_owner` example itself have **not been measured yet**; the README will
-be updated with the results.
+## Measured results (TCP, `packet_owner` on 26300 and 19045)
+
+* TCPIP 1031 v1 fires for an outbound connect at SYN-send time (0.4 µs after TCPIP 1004
+  `TcpTcbSynSend` for the same Tcb in a decoded trace). The event is written about 0.03 to
+  0.17 ms before WinpkFilter reads the SYN (about 0.1 ms typical). Its payload `ProcessId`
+  and `ProcessStartKey` are 0; the event header PID is the connecting process. With the
+  payload PID the first build showed every SYN as Idle (PID 0) and disagreed with IP
+  Helper. A build that used the header PID agreed with IP Helper on all 50 completed
+  connects of one run (latency median 15.8 ms, p95 31.7 ms on the `auto` path).
+* TCPIP 1033 v1 and Kernel-Network 12 v0 arrive with the handshake, about one RTT after
+  the SYN (+8.0 ms to 1.1.1.1). 1033 has header PID 4 and the real PID and a nonzero
+  start key in the payload. KN 12 does not fire for a connect aborted before it was
+  established. KN 28 was not observed (no IPv6 route on the test machines).
+* TCPIP 1034 v1 for a local abort (`STATUS_CANCELLED`, 0xC0000120) carried the real PID
+  in header and payload. A remote RST was not measured (no refusing target was found).
+* Addresses are SOCKADDR, length 28, `AF_INET6` with IPv4-mapped `::ffff:` addresses for
+  IPv4 connections; they are folded to IPv4 and match the packet 5-tuples.
+* TCPIP 1300 (rundown) attributed connections that existed before the start on both
+  systems (v3 on 26300, v1 on 19045). It describes existing flows, not a SYN.
+* Windows 7 SP1: the session read-back clears `0x08000000`
+  (`EVENT_TRACE_INDEPENDENT_SESSION_MODE`), so the gates stop and ETW stays off.
+
+Keep the 75 ms budget for TCP: waiting for 1033 / KN 12 instead of 1031 adds about one RTT
+to the flush delay.
 
 ## Limits
 
@@ -170,10 +245,15 @@ be updated with the results.
   type within the correlation window; the example lists them all.
 * **Loopback traffic** does not pass the driver, so it is never reported (it is used only
   for the self-test).
-* **TCP:** the timing of TCPIP 1031 and Kernel-Network 12 relative to the SYN, the SOCKADDR
-  layout of the TCPIP TCP address fields and the rundown behaviour are taken from the
-  manifests and still need measurement. Retransmitted SYNs are reported again.
+* **TCP:** a connect issued from kernel mode or one whose 1031 header PID is 0 or 4 has no
+  PID at SYN time; the owner then comes from 1033 / KN 12 one RTT later. A remote RST
+  (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again.
 * **Under heavy load on small machines** delivery can exceed the hold budget; such packets
   are reported as `late` (or `none` after `--late-ms`).
-* **One session name** (`NdisApi-PacketOwner`) is used; a second instance stops the first
-  one's session.
+* **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>` session
+  behind until the next instance starts and finds that PID no longer running. If the PID
+  has been reused by an unrelated live process, that session stays until the process exits
+  (stop it with `logman stop NdisApi-PacketOwner-<pid> -ets`). Sessions named only
+  `NdisApi-PacketOwner` (earlier builds) are never stopped automatically.
+* **IP Helper refresh:** refreshes run off the packet path and are coalesced; a socket that
+  is created and closed between two refreshes is still an IP Helper miss.

@@ -39,6 +39,11 @@ namespace
 		int stats_sec = 0;
 		bool no_etw = false;
 		bool gates_only = false;
+		/// <summary>false: never refresh the IP Helper tables on a cache miss (diagnostic;
+		/// the IP Helper column then shows only what the cached tables knew)</summary>
+		bool iph_refresh = true;
+		/// <summary>Minimum interval between two IP Helper table refreshes of one kind</summary>
+		int iph_refresh_ms = 25;
 	};
 
 	void print_usage()
@@ -57,12 +62,16 @@ namespace
 			"  --hold-ms N              latency budget for 'in budget' (default 75)\n"
 			"  --late-ms N              give up waiting for an ETW owner after N ms (default 2000)\n"
 			"  --csv <file>             write one row per attributed packet\n"
-			"  --udp-all                report every UDP datagram (default: one per 5-tuple per 5 s)\n"
+			"  --udp-all                report every UDP datagram (default: one per 5-tuple per 5 s;\n"
+			"                           with --dns every DNS query datagram is reported anyway)\n"
 			"  --tcp-existing           also report the first packet of TCP flows whose SYN was\n"
 			"                           not seen (matched against connection/rundown events)\n"
 			"  --stats-sec N            print statistics every N seconds\n"
 			"  --quiet                  no per-packet lines (statistics only)\n"
 			"  --no-etw                 IP Helper only\n"
+			"  --no-iph-refresh         diagnostic: never refresh the IP Helper tables on a miss\n"
+			"  --iph-refresh-ms N       minimum interval between IP Helper table refreshes, coalesced\n"
+			"                           on a background thread (default 25)\n"
 			"  --gates-only             run the ETW capability gates and self-test, print the\n"
 			"                           report and exit (no driver needed; exit code 0 = available)\n\n"
 			"Run elevated. Press Ctrl+C to stop; the adapter mode is restored on exit.\n";
@@ -121,7 +130,7 @@ namespace
 					return std::nullopt;
 				}
 			}
-			else if (a == "--hold-ms" || a == "--late-ms" || a == "--stats-sec")
+			else if (a == "--hold-ms" || a == "--late-ms" || a == "--stats-sec" || a == "--iph-refresh-ms")
 			{
 				int n = 0;
 				if (!value(v) || !parse_int(v, n) || n < 0)
@@ -129,7 +138,13 @@ namespace
 					std::cerr << a << " needs a non-negative number\n";
 					return std::nullopt;
 				}
-				(a == "--hold-ms" ? o.hold_ms : a == "--late-ms" ? o.late_ms : o.stats_sec) = n;
+				(a == "--hold-ms"
+					 ? o.hold_ms
+					 : a == "--late-ms"
+					 ? o.late_ms
+					 : a == "--stats-sec"
+					 ? o.stats_sec
+					 : o.iph_refresh_ms) = n;
 			}
 			else if (a == "--csv")
 			{
@@ -144,6 +159,8 @@ namespace
 				o.quiet = true;
 			else if (a == "--no-etw")
 				o.no_etw = true;
+			else if (a == "--no-iph-refresh")
+				o.iph_refresh = false;
 			else if (a == "--gates-only")
 				o.gates_only = true;
 			else if (a == "-h" || a == "--help" || a == "/?")
@@ -407,14 +424,145 @@ namespace
 		return iph_lookup_family(t, net::ip_address_v6(src), net::ip_address_v6(dst));
 	}
 
-	void iph_refresh(const packet_tuple& t)
+	// ----------------------------------------------------------------------------
+	// IP Helper table refresh, off the packet path.
+	//
+	// A refresh (GetExtended*Table + GetOwnerModuleFrom*Entry per row) takes milliseconds
+	// to tens of milliseconds. Done per miss on the worker it stalled the worker, and the
+	// exclusive table lock it held stalled the filter callback's cached lookup: at 1000 new
+	// sockets/s about 99% of rows ended with no ETW owner [M26300]. Now refreshes run on
+	// one background thread, at most one per kind (IPv4/IPv6 x TCP/UDP) at a time and at
+	// most one per min_interval; all misses that arrive meanwhile share the next refresh.
+	// process_lookup::actualize builds the new table outside its lookup lock.
+	// ----------------------------------------------------------------------------
+	class iph_refresher
 	{
-		const bool tcp = t.protocol == IPPROTO_TCP;
-		if (t.family == AF_INET)
-			iphelper::process_lookup<net::ip_address_v4>::get_process_helper().actualize(tcp, !tcp);
-		else
-			iphelper::process_lookup<net::ip_address_v6>::get_process_helper().actualize(tcp, !tcp);
-	}
+	public:
+		static constexpr size_t kinds = 4;
+
+		explicit iph_refresher(const std::chrono::milliseconds min_interval) : min_interval_(min_interval)
+		{
+		}
+
+		~iph_refresher() { stop(); }
+
+		iph_refresher(const iph_refresher&) = delete;
+		iph_refresher& operator=(const iph_refresher&) = delete;
+
+		static size_t kind_of(const packet_tuple& t) noexcept
+		{
+			return (t.family == AF_INET6 ? 2u : 0u) + (t.protocol == IPPROTO_TCP ? 1u : 0u);
+		}
+
+		void start() { thread_ = std::thread(&iph_refresher::proc, this); }
+
+		void stop()
+		{
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				stopping_ = true;
+			}
+			cv_.notify_all();
+			if (thread_.joinable())
+				thread_.join();
+		}
+
+		/// <summary>Requests a refresh that starts after this call. Returns the refresh
+		/// number to wait for with done().</summary>
+		uint64_t request(const size_t kind)
+		{
+			uint64_t need;
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				need = started_[kind] + 1;
+				requested_[kind] = std::max(requested_[kind], need);
+				++requests_;
+			}
+			cv_.notify_one();
+			return need;
+		}
+
+		[[nodiscard]] bool done(const size_t kind, const uint64_t need) const noexcept
+		{
+			return completed_[kind].load() >= need;
+		}
+
+		[[nodiscard]] uint64_t refreshes() const noexcept { return refreshes_.load(); }
+		[[nodiscard]] uint64_t max_us() const noexcept { return max_us_.load(); }
+		[[nodiscard]] uint64_t requests()
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			return requests_;
+		}
+
+	private:
+		static void actualize(const size_t kind)
+		{
+			const bool tcp = (kind & 1u) != 0;
+			if (kind < 2)
+				iphelper::process_lookup<net::ip_address_v4>::get_process_helper().actualize(tcp, !tcp);
+			else
+				iphelper::process_lookup<net::ip_address_v6>::get_process_helper().actualize(tcp, !tcp);
+		}
+
+		void proc()
+		{
+			std::unique_lock<std::mutex> lock(mutex_);
+			while (!stopping_)
+			{
+				const auto now = clock_type::now();
+				std::optional<size_t> ready;
+				std::optional<clock_type::time_point> next;
+				for (size_t k = 0; k < kinds; ++k)
+				{
+					if (requested_[k] <= started_[k])
+						continue;
+					const auto allowed = last_start_[k] + min_interval_;
+					if (last_start_[k] == clock_type::time_point{} || now >= allowed)
+					{
+						ready = k;
+						break;
+					}
+					if (!next || allowed < *next)
+						next = allowed;
+				}
+				if (!ready)
+				{
+					if (next)
+						cv_.wait_until(lock, *next);
+					else
+						cv_.wait(lock);
+					continue;
+				}
+				const auto k = *ready;
+				const auto number = ++started_[k];
+				last_start_[k] = now;
+				lock.unlock();
+				const auto t0 = clock_type::now();
+				actualize(k);
+				const auto us = static_cast<uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(clock_type::now() - t0).count());
+				if (us > max_us_.load())
+					max_us_ = us;
+				++refreshes_;
+				completed_[k] = number;
+				lock.lock();
+			}
+		}
+
+		const std::chrono::milliseconds min_interval_;
+		std::mutex mutex_;
+		std::condition_variable cv_;
+		bool stopping_{false};
+		std::array<uint64_t, kinds> requested_{};
+		std::array<uint64_t, kinds> started_{};
+		std::array<clock_type::time_point, kinds> last_start_{};
+		std::array<std::atomic<uint64_t>, kinds> completed_{};
+		uint64_t requests_{};
+		std::atomic<uint64_t> refreshes_{0};
+		std::atomic<uint64_t> max_us_{0};
+		std::thread thread_;
+	};
 
 	// ----------------------------------------------------------------------------
 	// Work items and statistics
@@ -430,8 +578,15 @@ namespace
 		iph_state iph{iph_state::miss};
 		uint32_t iph_pid{};
 		std::wstring iph_path;
+		/// <summary>a refresh was requested on a miss and has not completed yet</summary>
+		bool iph_pending{};
+		uint64_t iph_need{};
 
+		/// <summary>ETW was available when the item was queued</summary>
+		bool etw_attempted{};
 		std::optional<iphelper::etw::owner_info> etw;
+		/// <summary>TCP SYN: connected (1033/KN 12) or failed (1034) seen, or gave up</summary>
+		bool tcp_outcome_done{};
 		bool dnscache_owner{};
 		iphelper::etw::dns_attribution dns_attr;
 	};
@@ -445,6 +600,7 @@ namespace
 		uint64_t etw_in_budget{};
 		uint64_t etw_late{};
 		uint64_t etw_none{};
+		uint64_t etw_unknown_pid{};
 		uint64_t agree{};
 		uint64_t disagree{};
 		uint64_t etw_only{};
@@ -496,7 +652,8 @@ namespace
 	{
 	public:
 		engine(const options& opt, iphelper::etw_packet_attributor& attributor, std::mutex& output_mutex)
-			: opt_(opt), attributor_(attributor), output_mutex_(output_mutex)
+			: opt_(opt), attributor_(attributor), output_mutex_(output_mutex),
+			  refresher_(std::chrono::milliseconds(opt.iph_refresh_ms))
 		{
 			LARGE_INTEGER f;
 			QueryPerformanceFrequency(&f);
@@ -509,13 +666,19 @@ namespace
 					csv_ << "time_s,proto,kind,local,remote,iph_state,iph_pid,iph_image,etw_state,etw_pid,etw_image,"
 						"etw_image_verified,etw_source,etw_event,etw_version,etw_latency_ms,etw_event_offset_ms,etw_sources,"
 						"etw_conflict,"
-						"verdict,dns_qname,dns_qtype,dns_tier,dns_callers,dns_wire_confirmed\n";
+						"verdict,dns_qname,dns_qtype,dns_tier,dns_callers,dns_wire_confirmed,"
+						"etw_pid_from_header,tcp_outcome,tcp_connect_status\n";
 				else
 					std::cerr << "cannot open " << opt_.csv_path << "\n";
 			}
 		}
 
-		void start() { worker_ = std::thread(&engine::worker_proc, this); }
+		void start()
+		{
+			if (opt_.iph_refresh)
+				refresher_.start();
+			worker_ = std::thread(&engine::worker_proc, this);
+		}
 
 		void stop()
 		{
@@ -526,6 +689,7 @@ namespace
 			queue_cv_.notify_all();
 			if (worker_.joinable())
 				worker_.join();
+			refresher_.stop();
 		}
 
 		/// <summary>Called on the filter thread: must not block</summary>
@@ -582,8 +746,8 @@ namespace
 					return;
 				os << "  ETW: in budget " << s.etw_in_budget << " (" << percent(s.etw_in_budget, s.total) << "), late "
 					<< s.etw_late << " (" << percent(s.etw_late, s.total) << "), none " << s.etw_none << " ("
-					<< percent(s.etw_none, s.total) << "); image unverified " << s.image_unverified << ", conflicts "
-					<< s.conflicts << "\n"
+					<< percent(s.etw_none, s.total) << "), event without PID " << s.etw_unknown_pid
+					<< "; image unverified " << s.image_unverified << ", conflicts " << s.conflicts << "\n"
 					<< "  ETW delivery latency: " << latency_summary(s.latency_ms) << "\n"
 					<< "  verdict: agree " << s.agree << ", disagree " << s.disagree << ", ETW only " << s.etw_only
 					<< ", IP Helper only " << s.iph_only << ", neither " << s.neither << "\n";
@@ -604,6 +768,7 @@ namespace
 				os << "ETW counters: events " << c.events_total << ", unrequested " << c.events_unrequested
 					<< ", schema-rejected " << c.events_schema_rejected << ", parse-failed " << c.events_parse_failed
 					<< ", own-process " << c.events_own_process << "\n"
+					<< "  lookups " << c.lookups << " (matched " << c.matches << ", timed out " << c.timeouts << ")\n"
 					<< "  per source:";
 				for (size_t i = 1; i < c.events_by_source.size(); ++i)
 				{
@@ -627,6 +792,11 @@ namespace
 				}
 				os << "\n";
 			}
+			if (opt_.iph_refresh)
+				os << "IP Helper refreshes " << refresher_.refreshes() << " for " << refresher_.requests()
+					<< " misses (max " << refresher_.max_us() << " us, min interval " << opt_.iph_refresh_ms << " ms)\n";
+			else
+				os << "IP Helper refresh off (--no-iph-refresh)\n";
 			os << "queue dropped " << queue_dropped_.load() << ", UDP duplicates suppressed " << udp_suppressed_ << "\n";
 			std::lock_guard<std::mutex> lock(output_mutex_);
 			std::cout << os.str() << std::flush;
@@ -643,6 +813,10 @@ namespace
 		bool is_duplicate(const work_item& item)
 		{
 			if (item.kind != item_kind::udp || opt_.udp_all)
+				return false;
+			// Dnscache sends every query from one socket: per-5-tuple suppression would hide
+			// all queries but the first [M26300]. With --dns every DNS query gets a row.
+			if (opt_.dns && item.dns)
 				return false;
 			const auto now = item.seen;
 			auto& last = recent_udp_[item.tuple];
@@ -679,17 +853,35 @@ namespace
 			return seen;
 		}
 
-		void refresh_iph(work_item& item)
+		/// <summary>On a miss, asks the background refresher for a table refresh that
+		/// starts after now; the lookup is retried in resolve_iph() when it completed.</summary>
+		void request_iph_refresh(work_item& item)
 		{
-			if (item.iph != iph_state::miss)
+			if (item.iph != iph_state::miss || !opt_.iph_refresh)
 				return;
-			iph_refresh(item.tuple);
-			if (const auto p = iph_lookup(item.tuple); p)
+			item.iph_need = refresher_.request(iph_refresher::kind_of(item.tuple));
+			item.iph_pending = true;
+		}
+
+		/// <summary>true when the IP Helper side of the item is final</summary>
+		bool resolve_iph(work_item& item, const bool expired)
+		{
+			if (!item.iph_pending)
+				return true;
+			if (refresher_.done(iph_refresher::kind_of(item.tuple), item.iph_need))
 			{
-				item.iph = iph_state::refreshed_hit;
-				item.iph_pid = p->id;
-				item.iph_path = p->path_name.empty() ? p->name : p->path_name;
+				item.iph_pending = false;
+				if (const auto p = iph_lookup(item.tuple); p)
+				{
+					item.iph = iph_state::refreshed_hit;
+					item.iph_pid = p->id;
+					item.iph_path = p->path_name.empty() ? p->name : p->path_name;
+				}
+				return true;
 			}
+			if (expired)
+				item.iph_pending = false; // the refresh did not finish in time: stays a miss
+			return !item.iph_pending;
 		}
 
 		bool needs_dns(const work_item& item)
@@ -704,27 +896,48 @@ namespace
 		/// <summary>true when the item is complete</summary>
 		bool try_resolve(work_item& item, const clock_type::time_point now)
 		{
+			const bool expired = now - item.seen >= std::chrono::milliseconds(opt_.late_ms);
+			const bool iph_done = resolve_iph(item, expired);
+			if (!item.etw_attempted)
+			{
+				if (!iph_done)
+					return false;
+				if (opt_.dns && item.dns && attributor_.dnscache_pid() == item.iph_pid)
+					item.dnscache_owner = true;
+				return true;
+			}
+
 			if (!item.etw)
 			{
 				const auto kind = item.kind == item_kind::tcp_existing
 					                  ? iphelper::etw::match_kind::connection
 					                  : iphelper::etw::match_kind::datagram;
-				item.etw = attributor_.lookup(item.tuple, item.qpc, kind);
+				// A record without a PID (e.g. 1031 whose header PID is 4) is taken only on
+				// the last attempt: until then a later 1033 / KN 12 may still name the owner.
+				item.etw = attributor_.lookup(item.tuple, item.qpc, kind, expired);
 			}
-			const bool expired = now - item.seen >= std::chrono::milliseconds(opt_.late_ms);
 			if (!item.etw)
 			{
 				if (expired)
 					attributor_.record_timeout();
-				return expired;
+				return expired && iph_done;
+			}
+			if (item.kind == item_kind::tcp_syn && !item.tcp_outcome_done)
+			{
+				// Keep the SYN until 1033/KN 12 (connected) or 1034 (failed, with its status)
+				// is seen, so the row can show the outcome even though 1031 decided the owner.
+				// The owner and its latency stay those of the first match.
+				item.tcp_outcome_done = attributor_.tcp_outcome(item.tuple, item.qpc, *item.etw) || expired;
+				if (!item.tcp_outcome_done)
+					return false;
 			}
 			if (needs_dns(item))
 			{
 				item.dnscache_owner = true;
 				item.dns_attr = attributor_.dns_lookup(item.dns->qname, item.dns->qtype, item.qpc);
-				return !item.dns_attr.callers.empty() || expired;
+				return (!item.dns_attr.callers.empty() || expired) && iph_done;
 			}
-			return true;
+			return iph_done;
 		}
 
 		void worker_proc()
@@ -743,17 +956,15 @@ namespace
 						break;
 				}
 
+				const auto intake = clock_type::now();
 				for (auto& item : batch)
 				{
 					if (is_duplicate(item) || is_seen_flow(item))
 						continue;
-					refresh_iph(item);
-					if (!etw_enabled_ || !attributor_.available())
-					{
-						if (opt_.dns && item.dns && attributor_.dnscache_pid() == item.iph_pid)
-							item.dnscache_owner = true;
-						finalize(item, false);
-					}
+					request_iph_refresh(item);
+					item.etw_attempted = etw_enabled_ && attributor_.available();
+					if (try_resolve(item, intake))
+						finalize(item);
 					else
 						pending.push_back(std::move(item));
 				}
@@ -763,29 +974,42 @@ namespace
 
 				const auto generation = attributor_.generation();
 				const auto now = clock_type::now();
+				size_t waiting_for_owner = 0;
 				for (auto it = pending.begin(); it != pending.end();)
 				{
 					if (try_resolve(*it, now))
 					{
-						finalize(*it, true);
+						finalize(*it);
 						it = pending.erase(it);
 					}
 					else
+					{
+						if (it->etw_attempted && !it->etw)
+							++waiting_for_owner;
 						++it;
+					}
 				}
-				if (!pending.empty())
+				if (waiting_for_owner != 0)
 				{
-					attributor_.request_flush(pending.size());
+					// Only items still waiting for their owner drive on-demand flushes; items
+					// waiting for a TCP outcome or an IP Helper refresh do not.
+					attributor_.request_flush(waiting_for_owner);
 					attributor_.wait_for_events(generation, clock_type::now() + std::chrono::milliseconds(5));
+				}
+				else if (!pending.empty())
+				{
+					std::unique_lock<std::mutex> lock(queue_mutex_);
+					queue_cv_.wait_for(lock, std::chrono::milliseconds(5), [this] { return stopping_ || !queue_.empty(); });
 				}
 			}
 			for (auto& item : pending)
-				finalize(item, true);
+				finalize(item);
 		}
 
-		void finalize(work_item& item, const bool etw_attempted)
+		void finalize(work_item& item)
 		{
 			using namespace iphelper::etw;
+			const bool etw_attempted = item.etw_attempted;
 			const char* proto = item.tuple.protocol == IPPROTO_TCP ? "TCP" : "UDP";
 			const char* kind = item.kind == item_kind::udp
 				                   ? "datagram"
@@ -798,7 +1022,14 @@ namespace
 			double event_offset = 0; // event timestamp minus packet read time (negative: written before)
 			if (etw_attempted)
 			{
-				if (item.etw)
+				if (item.etw && item.etw->is_unknown())
+				{
+					// An event matched but named no PID: not an owner (and not "Idle")
+					latency = std::max(0.0, qpc_ms(item.etw->received_qpc - item.qpc));
+					event_offset = qpc_ms(item.etw->event_qpc - item.qpc);
+					etw_state = "no-pid";
+				}
+				else if (item.etw)
 				{
 					latency = std::max(0.0, qpc_ms(item.etw->received_qpc - item.qpc));
 					event_offset = qpc_ms(item.etw->event_qpc - item.qpc);
@@ -809,7 +1040,15 @@ namespace
 			}
 
 			const bool iph_found = item.iph != iph_state::miss;
-			const bool etw_found = item.etw.has_value();
+			const bool etw_found = item.etw.has_value() && !item.etw->is_unknown();
+			const bool etw_event = item.etw.has_value();
+			std::string tcp_outcome;
+			if (item.kind == item_kind::tcp_syn && etw_event)
+				tcp_outcome = item.etw->connect_failed
+					              ? "failed"
+					              : item.etw->connect_completed
+					              ? "connected"
+					              : "unknown";
 			std::string verdict;
 			if (!etw_attempted)
 				verdict = iph_found ? "iph" : "neither";
@@ -851,13 +1090,15 @@ namespace
 						++s.etw_in_budget;
 					else if (etw_state == "late")
 						++s.etw_late;
+					else if (etw_state == "no-pid")
+						++s.etw_unknown_pid;
 					else
 						++s.etw_none;
-					if (latency >= 0 && s.latency_ms.size() < 2000000)
+					if (etw_found && latency >= 0 && s.latency_ms.size() < 2000000)
 						s.latency_ms.push_back(latency);
-					if (item.etw && !item.etw->image_verified)
+					if (etw_found && !item.etw->image_verified)
 						++s.image_unverified;
-					if (item.etw && item.etw->conflict)
+					if (etw_event && item.etw->conflict)
 						++s.conflicts;
 					if (verdict == "agree")
 						++s.agree;
@@ -903,17 +1144,25 @@ namespace
 				if (etw_attempted)
 				{
 					os << " | ETW ";
-					if (etw_found)
+					if (etw_event)
 					{
-						os << (etw_image.empty() ? "?" : etw_image) << "(" << item.etw->pid << ")"
-							<< (item.etw->image_verified ? "" : "[unverified]") << " " << item.etw->event_id << "v"
+						if (etw_found)
+							os << (etw_image.empty() ? "?" : etw_image) << "(" << item.etw->pid << ")"
+								<< (item.etw->pid_from_header ? "[header-pid]" : "")
+								<< (item.etw->image_verified ? "" : "[unverified]");
+						else
+							os << "no PID";
+						os << " " << item.etw->event_id << "v"
 							<< static_cast<unsigned>(item.etw->event_version) << " +" << format_ms(latency) << "ms "
 							<< etw_state << " (event " << (event_offset < 0 ? "-" : "+")
 							<< format_ms(std::abs(event_offset)) << "ms)";
 						if (item.etw->conflict)
 							os << " CONFLICT{" << sources_to_string(item.etw->sources_seen) << "}";
-						if (item.etw->source == event_source::tcpip_tcp_failed)
-							os << " (connect failed, status 0x" << std::hex << item.etw->status << std::dec << ")";
+						if (item.etw->connect_failed)
+							os << " (connect failed, 1034 status 0x" << std::hex << item.etw->connect_status << std::dec
+								<< ")";
+						else if (item.kind == item_kind::tcp_syn)
+							os << " (" << tcp_outcome << ")";
 					}
 					else
 						os << "- none after " << opt_.late_ms << "ms";
@@ -946,18 +1195,26 @@ namespace
 					<< csv_escape(iph_image) << "," << etw_state << ","
 					<< (etw_found ? std::to_string(item.etw->pid) : "") << "," << csv_escape(etw_image) << ","
 					<< (etw_found ? (item.etw->image_verified ? "1" : "0") : "") << ","
-					<< (etw_found ? to_string(item.etw->source) : "") << ","
-					<< (etw_found ? std::to_string(item.etw->event_id) : "") << ","
-					<< (etw_found ? std::to_string(item.etw->event_version) : "") << ","
+					<< (etw_event ? to_string(item.etw->source) : "") << ","
+					<< (etw_event ? std::to_string(item.etw->event_id) : "") << ","
+					<< (etw_event ? std::to_string(item.etw->event_version) : "") << ","
 					<< (latency >= 0 ? format_ms(latency) : "") << ","
-					<< (etw_found ? std::to_string(event_offset) : "") << ","
-					<< (etw_found ? csv_escape(sources_to_string(item.etw->sources_seen)) : "") << ","
-					<< (etw_found && item.etw->conflict ? "1" : "0") << "," << verdict << ","
+					<< (etw_event ? std::to_string(event_offset) : "") << ","
+					<< (etw_event ? csv_escape(sources_to_string(item.etw->sources_seen)) : "") << ","
+					<< (etw_event && item.etw->conflict ? "1" : "0") << "," << verdict << ","
 					<< csv_escape(item.dns ? item.dns->qname : "") << ","
 					<< (item.dns ? std::to_string(item.dns->qtype) : "") << ","
 					<< (item.dnscache_owner ? iphelper::etw::to_string(item.dns_attr.tier) : "") << ","
 					<< csv_escape(dns_callers) << ","
-					<< (item.dnscache_owner ? (item.dns_attr.wire_confirmed ? "1" : "0") : "") << "\n";
+					<< (item.dnscache_owner ? (item.dns_attr.wire_confirmed ? "1" : "0") : "") << ","
+					<< (etw_found ? (item.etw->pid_from_header ? "1" : "0") : "") << "," << tcp_outcome << ",";
+				if (etw_event && item.etw->connect_failed)
+				{
+					char hex[16];
+					std::snprintf(hex, sizeof(hex), "0x%08X", static_cast<unsigned>(item.etw->connect_status));
+					csv_ << hex;
+				}
+				csv_ << "\n";
 			}
 		}
 
@@ -973,6 +1230,7 @@ namespace
 		std::deque<work_item> queue_;
 		bool stopping_{false};
 		std::atomic<uint64_t> queue_dropped_{0};
+		iph_refresher refresher_;
 		std::thread worker_;
 
 		// worker-thread only
@@ -1159,6 +1417,11 @@ int main(int argc, char* argv[])
 		}
 		else if (opt.tcp && !attributor.report().tcp_available)
 			std::cout << "\nNote: no accepted TCP connect schema yet; TCP rows may show no ETW owner.\n";
+		else if (opt.tcp && attributor.report().self_test.tcp_attempted && !attributor.report().self_test.tcp_ok)
+			std::cout << "\nNote: the loopback TCP self-test did not attribute the connect to this process"
+				" (see tcp-owner above); treat TCP ETW owners with care.\n";
+		if (!opt.iph_refresh)
+			std::cout << "IP Helper refresh disabled (--no-iph-refresh): IP Helper shows cached tables only\n";
 		if (opt.dns)
 			std::cout << "Dnscache PID: " << attributor.dnscache_pid(true) << "\n";
 	}
