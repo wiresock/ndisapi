@@ -39,6 +39,9 @@ namespace
 		int stats_sec = 0;
 		bool no_etw = false;
 		bool gates_only = false;
+		/// <summary>true: start even if the adapter already has a non-zero filter mode
+		/// (another process is filtering it)</summary>
+		bool force_adapter = false;
 		/// <summary>false: never refresh the IP Helper tables on a cache miss (diagnostic;
 		/// the IP Helper column then shows only what the cached tables knew)</summary>
 		bool iph_refresh = true;
@@ -53,6 +56,8 @@ namespace
 			"Usage: packet_owner [options]\n"
 			"  --adapter <index|name>   adapter to filter (1-based index as listed, or friendly name);\n"
 			"                           without it the adapters are listed and you are asked\n"
+			"  --force-adapter          start even if another process is already filtering the\n"
+			"                           adapter (unsupported: see README)\n"
 			"  --udp                    attribute outbound UDP only\n"
 			"  --tcp                    attribute outbound TCP SYNs only (default: both)\n"
 			"  --dns                    resolve the callers of DNS queries sent by the DNS Client\n"
@@ -163,6 +168,8 @@ namespace
 				o.iph_refresh = false;
 			else if (a == "--gates-only")
 				o.gates_only = true;
+			else if (a == "--force-adapter")
+				o.force_adapter = true;
 			else if (a == "-h" || a == "--help" || a == "/?")
 			{
 				print_usage();
@@ -1400,6 +1407,29 @@ int main(int argc, char* argv[])
 		WSACleanup();
 		return 1;
 	}
+
+	// The driver is designed for one filtering process at a time: a non-zero adapter mode
+	// means another process already filters this adapter. Starting anyway is unsupported:
+	// on exit the adapter mode is reset to 0, which stops the other process's filtering too.
+	ADAPTER_MODE current_mode{filter->get_interface_list()[*adapter]->get_adapter(), 0};
+	if (!filter->GetAdapterMode(&current_mode))
+		std::cerr << "Warning: could not query the current filter mode of the selected adapter\n";
+	else if (current_mode.dwFlags != 0)
+	{
+		std::cerr << (opt.force_adapter ? "Warning: " : "Error: ") << "adapter '" << names[*adapter]
+			<< "' is already being filtered by another process (filter mode 0x" << std::hex
+			<< current_mode.dwFlags << std::dec << ").\n"
+			"The Windows Packet Filter driver is designed to be used by a single filtering process at a\n"
+			"time; a second instance would also reset the first instance's adapter mode on exit.\n";
+		if (!opt.force_adapter)
+		{
+			std::cerr << "Stop the other filtering process, or pass --force-adapter to start anyway.\n";
+			WSACleanup();
+			return 1;
+		}
+		std::cerr << "--force-adapter given: starting anyway (unsupported).\n";
+	}
+
 	std::cout << "\nFiltering: " << names[*adapter] << "\n\n";
 
 	bool etw_ok = false;

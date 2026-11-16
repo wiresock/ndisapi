@@ -26,13 +26,18 @@ happens on a worker thread.
 
 ## Requirements
 
-* Windows 8.1 / Windows Server 2012 R2 or later; Windows 10/11 recommended. Event-ID
-  filtering (`EVENT_FILTER_TYPE_EVENT_ID`) and `EVENT_TRACE_INDEPENDENT_SESSION_MODE` are
-  required and checked at run time.
+* ETW attribution: Windows 8.1 / Windows Server 2012 R2 or later; Windows 10/11
+  recommended. Event-ID filtering (`EVENT_FILTER_TYPE_EVENT_ID`) and
+  `EVENT_TRACE_INDEPENDENT_SESSION_MODE` are required and checked at run time.
 * Administrator rights (the driver and the ETW real-time session both need them).
 * Windows Packet Filter driver installed.
-* Windows 7 is **not supported**: the current driver does not install there, and the ETW
-  gates fail on it anyway (see "Limits").
+* No other process filtering the selected adapter (see "One filtering process per
+  adapter" below).
+* **Windows 7 / Server 2008 R2:** the Windows Packet Filter driver runs there, but ETW
+  attribution does not. Windows 7 accepts the trace session and silently clears
+  `EVENT_TRACE_INDEPENDENT_SESSION_MODE` (`0x08000000`), which the private session needs;
+  the read-back gate sees this and turns ETW off, and the example continues with IP Helper
+  only (the same as `--no-etw`). See "Limits".
 
 ## Build
 
@@ -44,11 +49,12 @@ Win32/x64/ARM64). Like the other C++ examples it uses a vcpkg manifest (`ms-gsl`
 
 From a Developer Command Prompt, `msbuild ndisapi.sln /t:packet_owner` fails with MSB4057:
 in the solution the project sits in the solution folder `examples\C++`, and MSBuild names
-solution targets after the folder path, so the target should be
+solution targets after the folder path, so the target is
 `examples\C++\packet_owner` (for example
 `msbuild ndisapi.sln /t:examples\C++\packet_owner /p:Configuration=Release /p:Platform=x64`;
-not verified yet). Building the two project files directly is known to work; `SolutionDir` (with a trailing
-backslash) must point at the clone root because the output and library paths use it:
+verified to build x64, ARM64 and Win32 with no warnings at level 3). Building the two
+project files directly also works; `SolutionDir` (with a trailing backslash) must point
+at the clone root because the output and library paths use it:
 
 ```
 msbuild ndisapi.lib\ndisapilib.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=<clone>\ /p:SolutionName=ndisapi
@@ -64,7 +70,7 @@ msbuild examples\cpp\packet_owner\packet_owner.vcxproj /p:Configuration=Release 
 packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
              [--flush auto|ondemand|timer] [--hold-ms N] [--late-ms N]
              [--csv file] [--udp-all] [--tcp-existing] [--stats-sec N] [--quiet] [--no-etw]
-             [--no-iph-refresh] [--iph-refresh-ms N] [--gates-only]
+             [--no-iph-refresh] [--iph-refresh-ms N] [--gates-only] [--force-adapter]
 ```
 
 | Option | Meaning |
@@ -84,10 +90,34 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--no-iph-refresh` | Diagnostic: never refresh the IP Helper tables on a miss; the IP Helper column shows only what the cached tables knew. |
 | `--iph-refresh-ms` | Minimum interval between two refreshes of one IP Helper table (IPv4/IPv6 × TCP/UDP). Default 25 ms. Misses that arrive meanwhile share the next refresh. |
 | `--gates-only` | Run only the ETW gates and the loopback self-test, print the report and exit (exit code 0 if ETW attribution is available, 3 if not). Does not need the driver. |
+| `--force-adapter` | Start even if the selected adapter already has a non-zero filter mode, i.e. another process is filtering it. Prints a warning; unsupported (see below). |
 
 Press **Ctrl+C** to stop. The filter is stopped first (this restores the adapter mode and
 releases queued packets), then the ETW session is stopped and the final statistics and
 the gate report are printed. Closing the console window does the same.
+
+### One filtering process per adapter
+
+The Windows Packet Filter driver is designed to be used by one filtering process at a
+time. Running two filters on the same adapter (two `packet_owner` instances, or
+`packet_owner` next to ProxiFyre or another WinpkFilter based tool) is unsupported: both
+read from the same adapter, and when either one exits it resets the adapter mode to 0,
+which silently stops filtering for the other.
+
+Before it sets the adapter mode, `packet_owner` reads the current mode with
+`GetAdapterMode`. If it is non-zero, the adapter is treated as busy and the program exits
+with code 1 and this message:
+
+```
+Error: adapter '<name>' is already being filtered by another process (filter mode 0x<mode>).
+The Windows Packet Filter driver is designed to be used by a single filtering process at a
+time; a second instance would also reset the first instance's adapter mode on exit.
+Stop the other filtering process, or pass --force-adapter to start anyway.
+```
+
+`--force-adapter` skips the refusal (the same text is printed as a warning) for
+experiments where the interference is acceptable. If the mode cannot be queried, a
+warning is printed and the program continues.
 
 ### Output
 
@@ -128,7 +158,8 @@ the gates are still running nothing is logged about availability; the first verd
 stderr is the final one.
 
 The ETW session is named `NdisApi-PacketOwner-<pid>`, so several instances can run at the
-same time without touching each other's session. At start, sessions with that prefix
+same time without touching each other's session (on one adapter the driver still allows
+only one of them, see above; `--gates-only` does not use the driver). At start, sessions with that prefix
 whose PID no longer runs (left behind by a killed instance; a real-time session outlives
 its process) are stopped; sessions of running processes are never stopped. Session
 buffers: 64 KB each, `MinimumBuffers` = 2 × logical CPUs, `MaximumBuffers` = 4 × logical
@@ -201,7 +232,7 @@ These numbers come from a standalone probe that used the same events and flush m
 |---|---|---|
 | Build 26300 (bare metal, 6 CPUs) | 50/50 at every close delay; 30000/30000 at 1000 datagrams/s; no lost events | On-demand: medians 18.6–30.7 ms, max 58.3 ms. 10 ms timer: medians 27.7–30.3 ms, max 45.7 ms. At 1000/s: on-demand median 16.8 ms, p95 24.2 ms; timer median 26.7 ms, p95 41.3 ms |
 | Windows 10 22H2 19045 (VM, 2 vCPUs) | 50/50 at every close delay; 30000/30000 at 1000/s; no lost events | On-demand: median 15.7 ms, max 28.1 ms. 10 ms timer: median ~31 ms, max 33.3 ms. At 1000/s on-demand collapsed (median 95 ms, p95 1317 ms); timer median 62 ms, p95 160 ms |
-| Windows 7 SP1 7601 (VM) | Gates fail (independent mode cleared); the driver does not install | 10 ms timer accepted but median 1.62 s |
+| Windows 7 SP1 7601 (VM) | Gates fail (independent mode cleared): no ETW attribution | 10 ms timer accepted but median 1.62 s |
 
 With a 1 s flush timer and no on-demand flush the median was 0.7–1.6 s, which is why the
 flush strategy matters. The event is written before WinpkFilter reads the frame (median
@@ -234,8 +265,15 @@ to the flush delay.
 
 ## Limits
 
-* **Windows 7 / Server 2008 R2:** unsupported (see above). The gates turn ETW off and the
-  example falls back to IP Helper.
+* **Windows 7 / Server 2008 R2:** the driver runs and packets are filtered, but ETW
+  attribution is unavailable: the kernel clears `EVENT_TRACE_INDEPENDENT_SESSION_MODE`
+  (`0x08000000`) on the session, the gates turn ETW off ("ETW attribution is NOT
+  available ... Continuing with IP Helper only") and every row is attributed by IP Helper
+  alone, with its usual misses for short-lived sockets. The ETW part was measured on
+  Windows 7 SP1 with the standalone probe; a full `packet_owner` run with the driver on
+  Windows 7 has not been tested.
+* **One filtering process per adapter:** see above; a busy adapter is refused unless
+  `--force-adapter` is given.
 * **DNS cache hits are invisible:** a name answered from the Dnscache cache produces no
   packet, so there is nothing to attribute. DNS-Client events are also only correlated
   with queries that Dnscache puts on the wire.
