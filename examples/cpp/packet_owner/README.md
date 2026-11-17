@@ -93,8 +93,13 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--force-adapter` | Start even if the selected adapter already has a non-zero filter mode, i.e. another process is filtering it. Prints a warning; unsupported (see below). |
 
 Press **Ctrl+C** to stop. The filter is stopped first (this restores the adapter mode and
-releases queued packets), then the ETW session is stopped and the final statistics and
-the gate report are printed. Closing the console window does the same.
+releases queued packets), then the final statistics and the gate report are printed, and
+then the ETW session is stopped. Closing the console window does the same within the
+about 5 s Windows allows for it (the adapter mode is restored first; if time runs out,
+only the ETW session is left behind, and the next start stops it). Ctrl+C while the
+gates run (a few seconds after "Starting ETW session") takes effect when they finish: the
+session is stopped and the program exits without touching the adapter. At the
+interactive adapter prompt Ctrl+C exits immediately (nothing has been started yet).
 
 ### One filtering process per adapter
 
@@ -119,6 +124,12 @@ Stop the other filtering process, or pass --force-adapter to start anyway.
 experiments where the interference is acceptable. If the mode cannot be queried, a
 warning is printed and the program continues.
 
+The driver resets an adapter's filter mode when the process that set it exits or
+crashes (its driver handle is closed), so a crashed or killed instance does not leave the
+adapter marked busy; a non-zero mode means a filter that is still running. The check is
+not a lock: a filter that starts between the check and `packet_owner`'s own
+`SetAdapterMode` is not detected.
+
 ### Output
 
 ```
@@ -136,14 +147,18 @@ warning is printed and the program continues.
   have been reused). `[header-pid]` means the PID came from the event header (TCPIP 1031,
   see "Matching"). `no PID` with state `no-pid` means an event matched but none named a
   real PID; it is not counted as an ETW owner. `CONFLICT{...}` lists the event sources when
-  they named different (nonzero) PIDs.
+  they named different (nonzero) PIDs. `[header-pid N overridden by 1033/1034]` means the
+  1031 header PID N was replaced by the different payload PID of TCPIP 1033/1034 for the
+  same connection (see "Matching").
 * TCP SYN rows end with the connect outcome seen later for the same connection:
   `(connected)` (TCPIP 1033 or Kernel-Network 12/28), `(connect failed, 1034 status 0x...)`,
-  or `(unknown)` if neither arrived within `--late-ms`. The owner and its latency are
-  still those of the first matching event.
+  or `(unknown)` if neither arrived within `--late-ms`. The event and latency shown are
+  still those of the first matching event; the owner is too, unless a 1033/1034 payload
+  PID overrode a 1031 header PID.
 * Verdict: `agree`, `DISAGREE`, `etw-only`, `iph-only` or `neither`.
 * CSV columns added after `dns_wire_confirmed`: `etw_pid_from_header`, `tcp_outcome`
-  (`connected` / `failed` / `unknown`) and `tcp_connect_status` (the 1034 status).
+  (`connected` / `failed` / `unknown`), `tcp_connect_status` (the 1034 status) and
+  `etw_overridden_header_pid` (the replaced 1031 header PID, empty if none).
 * `DNS ... via Dnscache`: the callers of a query sent by Dnscache. `tier1:ClientPID` comes
   from the `ClientPID` field of DNS-Client 3019/3010 (newer builds); `tier2:3006-header-PID`
   matches DNS-Client 3006 events by name and type (including DNS search suffixes).
@@ -157,11 +172,16 @@ same report is printed again at exit with the schemas that appeared while runnin
 the gates are still running nothing is logged about availability; the first verdict on
 stderr is the final one.
 
-The ETW session is named `NdisApi-PacketOwner-<pid>`, so several instances can run at the
-same time without touching each other's session (on one adapter the driver still allows
-only one of them, see above; `--gates-only` does not use the driver). At start, sessions with that prefix
-whose PID no longer runs (left behind by a killed instance; a real-time session outlives
-its process) are stopped; sessions of running processes are never stopped. Session
+The ETW session is named `NdisApi-PacketOwner-<pid>-<creation>-<n>` (`<creation>` is the
+process creation time as 16 hex digits, `<n>` counts attributor instances in the
+process), so several instances can run at the same time, in different processes or in
+one, without touching each other's session (on one adapter the driver still allows only
+one of them, see above; `--gates-only` does not use the driver). An existing session with
+the same name is never stopped; `start()` fails instead. At start, sessions with that
+prefix whose process (PID and creation time) no longer runs are stopped: they were left
+behind by a killed instance (a real-time session outlives its process). Sessions of
+running processes are never stopped, and a reused PID does not make a live session look
+stale because its creation time differs. Session
 buffers: 64 KB each, `MinimumBuffers` = 2 × logical CPUs, `MaximumBuffers` = 4 × logical
 CPUs + 16 (12 / 40 on a 6-CPU machine).
 
@@ -173,10 +193,18 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    providers are enabled with event-ID filters, and any event with an ID that was not
    requested marks that provider "filter not honoured" and its events are ignored; each
    (provider, ID, version) schema is read with TDH and the fields are located by name;
-   a loopback self-test (127.0.0.1, ::1 and a loopback TCP connection) must come back as
-   events naming this process. For TCP the check is the attributed owner: `tcp=ok` only if
-   the owner chosen for the loopback connect is this process's PID, not merely that some
-   TCP event arrived.
+   a loopback self-test. What it gates, precisely:
+   * IPv4 UDP (127.0.0.1) gates ETW as a whole: its event must arrive within 250 ms with
+     an on-demand flush, or ETW is off. It also picks the flush mode, and it is repeated
+     every 60 s (and after lost events); two failures in a row switch ETW off until a
+     probe passes again.
+   * TCP (a loopback connect, at start only) gates TCP owners: `tcp=ok` only if the owner
+     chosen for the loopback connect is this process's PID, not merely that some TCP
+     event arrived. If it fails (wrong owner, or loopback TCP blocked; the connect is
+     bounded by the probe timeout), the self-test line shows `tcp=fail` and the availability line `tcp=no`, TCP ETW owners are switched
+     off for the session and TCP rows use IP Helper only; UDP is not affected.
+   * IPv6 UDP (::1) is reported (`ipv6=ok/fail`, or `n/a` when ::1 cannot be bound) but
+     gates nothing: IPv6 events are not measured yet.
 2. **Flush strategy.** ETW delivers events in buffers; without help a datagram's event
    can take a second or more to arrive. `ondemand` calls `ControlTrace(FLUSH)` at most
    every 10 ms while lookups wait (backing off to 50 ms under load). `timer` starts the
@@ -200,8 +228,21 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    A header PID of 0 or 4 is not used. 1033 has header PID 4 and the real PID in the
    payload; 1034 carried the real PID in both after a local abort; both use the payload.
    PID 0 is shown as "unknown", never as a verified Idle process.
+   **Header PID override:** a header PID is only right if 1031 is written in the
+   connecting process's context, as measured. If TCPIP 1033 or 1034 for the same
+   connection names a different nonzero payload PID, that PID replaces the header PID and
+   the row is marked (see "Output"). The case this guards against, a connect completed
+   in another process's context (e.g. a WFP callout that pends ALE connect authorization),
+   has not been observed or tested. KN 12 is not used for the override.
 4. **Image names** are resolved on the ETW consumer thread when the event arrives, and are
    checked against PID reuse with the process start key or the process creation time.
+   Events without a start key (Kernel-Network, one per datagram) reuse the last
+   `OpenProcess` result for their PID if the event was written before that open and the
+   process was created no later than the event (a PID is not reused while its process
+   object exists), so the process is opened about once per delivered buffer per PID
+   rather than once per event.
+5. **DNS search suffixes** (used by tier 2) are loaded at start and refreshed every 30 s
+   on the attributor's maintenance thread; `dns_lookup()` only reads a snapshot.
 
 ## Events used
 
@@ -273,7 +314,8 @@ to the flush delay.
   Windows 7 SP1 with the standalone probe; a full `packet_owner` run with the driver on
   Windows 7 has not been tested.
 * **One filtering process per adapter:** see above; a busy adapter is refused unless
-  `--force-adapter` is given.
+  `--force-adapter` is given. A crashed instance does not leave the adapter busy: the
+  driver resets the mode when the owning process exits.
 * **DNS cache hits are invisible:** a name answered from the Dnscache cache produces no
   packet, so there is nothing to attribute. DNS-Client events are also only correlated
   with queries that Dnscache puts on the wire.
@@ -285,13 +327,25 @@ to the flush delay.
   for the self-test).
 * **TCP:** a connect issued from kernel mode or one whose 1031 header PID is 0 or 4 has no
   PID at SYN time; the owner then comes from 1033 / KN 12 one RTT later. A remote RST
-  (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again.
+  (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again, but
+  1031 is written once per connect: a retransmission read 50 ms or more after it falls
+  outside the strict window and usually gets ETW `none`, unless 1033 / KN 12 arrives
+  within 50 ms of the retransmission.
+* **Header PID override (1031 vs 1033/1034)** is implemented but the asynchronous
+  completion case it targets has not been verified; check it with a WFP callout that
+  pends connects before relying on it in a product.
+* **Image resolution and DNS suffixes under load:** the per-PID open reuse and the
+  background suffix refresh remove the obvious per-event and per-lookup costs, but neither
+  has been measured at high datagram rates (tens of thousands per second).
 * **Under heavy load on small machines** delivery can exceed the hold budget; such packets
   are reported as `late` (or `none` after `--late-ms`).
-* **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>` session
-  behind until the next instance starts and finds that PID no longer running. If the PID
-  has been reused by an unrelated live process, that session stays until the process exits
-  (stop it with `logman stop NdisApi-PacketOwner-<pid> -ets`). Sessions named only
-  `NdisApi-PacketOwner` (earlier builds) are never stopped automatically.
+* **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>-<creation>-<n>`
+  session behind until the next instance starts and finds no process with that PID and
+  creation time (stop it by hand with `logman stop <name> -ets`). If the creation time of a
+  running PID cannot be read, its sessions are kept. Sessions named
+  `NdisApi-PacketOwner-<pid>` (earlier builds of this example) are stopped if that PID no
+  longer runs; sessions named only `NdisApi-PacketOwner` are never stopped automatically.
+* **Frames:** up to two 802.1Q / 802.1ad tags are skipped; IPv4 and IPv6 non-first
+  fragments have no ports and are not reported.
 * **IP Helper refresh:** refreshes run off the packet path and are coalesced; a socket that
   is created and closed between two refreshes is still an IP Helper miss.

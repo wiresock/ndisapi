@@ -794,8 +794,11 @@ namespace iphelper
 	// --------------------------------------------------------------------------------
 	/// <summary>
 	/// ETW owner attributor: one real-time session, one consumer thread, one maintenance
-	/// thread. lookup(), wait_for(), dns_lookup() and wait_for_dns() may be called from any
-	/// thread.
+	/// thread. lookup(), wait_for(), tcp_outcome(), dns_lookup(), wait_for_dns(),
+	/// request_flush(), get_counters() and report() may be called from any thread, also
+	/// while another thread runs start() or stop() (lookup(), wait_for(), dns_lookup() and
+	/// wait_for_dns() return nothing while ETW is unavailable). start() and stop()
+	/// serialize with each other; the destructor must not run concurrently with any call.
 	/// </summary>
 	// --------------------------------------------------------------------------------
 	class etw_packet_attributor
