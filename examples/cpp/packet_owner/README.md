@@ -239,7 +239,14 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    `--flush timer` is the safer explicit choice.
 3. **Matching.** Events are cached by 5-tuple. A datagram or SYN matches only events of
    the same 5-tuple whose timestamp lies in [packet − 50 ms, packet + 1 ms] (TCP:
-   + 50 ms, because connection events may be written after the SYN). A record that names
+   + 50 ms, because connection events may be written after the SYN). For UDP, consecutive
+   events of one owner (same source, PID, start key and image) written within 1 ms of each
+   other are merged into one record that covers their time range, and a datagram matches
+   if that range overlaps its window; a tuple keeps up to 512 such records (at least
+   256 ms of history at any rate). This keeps a busy tuple (Dnscache sends every query
+   from one socket; a steady flow) from evicting the event of an earlier datagram before
+   the lookup sees it. A short-lived socket has one datagram per tuple, so nothing is
+   merged there; a merged record reports the time of its first event. A record that names
    a real PID always beats one whose PID is unknown (0); among those, preferred sources are:
    UDP – TCPIP 1169, then Kernel-Network 42/58; TCP – TCPIP 1031, then Kernel-Network
    12/28, then 1033/1034/1017. TCPIP 1396 (UDP bind) only adds a process start key.

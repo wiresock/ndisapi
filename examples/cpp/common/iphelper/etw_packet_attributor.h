@@ -446,6 +446,16 @@ namespace iphelper
 			int64_t event_qpc{};
 			/// <summary>QPC when the consumer received the event</summary>
 			int64_t received_qpc{};
+			/// <summary>Number of events this record stands for. UDP records merge consecutive
+			/// events of one owner (same source, PID, start key and image) written within
+			/// 1 ms of the record's first event, so that a busy 5-tuple (Dnscache, a steady
+			/// flow) does not push the event of an earlier packet out of the per-tuple cache.
+			/// event_qpc and received_qpc stay those of the first event; 1 for TCP.</summary>
+			uint32_t merged_events{1};
+			/// <summary>Timestamp of the last merged event (== event_qpc if merged_events is 1)</summary>
+			int64_t event_qpc_last{};
+			/// <summary>Receive QPC of the last merged event (== received_qpc if merged_events is 1)</summary>
+			int64_t received_qpc_last{};
 			/// <summary>TCPIP Status field where present (1031/1033/1034/1017), else 0</summary>
 			uint32_t status{};
 			/// <summary>Bit mask (1 << event_source) of every source that produced a matching
@@ -2777,6 +2787,8 @@ namespace iphelper
 			owner.event_version = record->EventHeader.EventDescriptor.Version;
 			owner.event_qpc = event_qpc;
 			owner.received_qpc = received;
+			owner.event_qpc_last = event_qpc;
+			owner.received_qpc_last = received;
 			owner.status = ev.has[f_status] ? static_cast<uint32_t>(ev.num[f_status]) : 0;
 			resolve_image(owner);
 
@@ -3009,15 +3021,55 @@ namespace iphelper
 			int64_t received_qpc{};
 		};
 
+		/// <summary>TCP: a connect attempt has a handful of records (1031, 1033/1034, KN 12)</summary>
 		static constexpr size_t max_records_per_tuple = 8;
+		/// <summary>UDP: one record per source per merge span (see merge_udp_record), so 512
+		/// records keep at least 256 ms of a tuple's history at any datagram rate, more than
+		/// one ETW delivery interval; the oldest record goes first beyond that.</summary>
+		static constexpr size_t max_udp_records_per_tuple = 512;
+		/// <summary>UDP merge span: events written within 1 ms of a record's first event</summary>
+		static constexpr int64_t udp_merge_span_us = 1000;
 
 		void insert_owner(const etw::packet_tuple& tuple, const etw::owner_info& owner)
 		{
 			std::unique_lock<std::shared_mutex> lock(cache_mutex_);
 			auto& records = cache_[tuple];
-			if (records.size() >= max_records_per_tuple)
+			const bool udp = tuple.protocol == IPPROTO_UDP;
+			if (udp && merge_udp_record(records, owner))
+				return;
+			// A plain cap of 8 for UDP would let the events of later datagrams of a busy tuple
+			// (written after the packet, delivered in the same buffer) evict the event of the
+			// packet before the lookup sees it.
+			if (records.size() >= (udp ? max_udp_records_per_tuple : max_records_per_tuple))
 				records.erase(records.begin());
 			records.push_back(owner);
+		}
+
+		/// <summary>
+		/// Merges a UDP event into the latest record of the same source if that record has the
+		/// same owner (PID, start key, image) and its first event was written at most
+		/// udp_merge_span_us before this one. A datagram then matches the record if the
+		/// record's event range [event_qpc, event_qpc_last] overlaps the match window. A
+		/// short-lived socket sends one datagram per tuple, so nothing is merged there.
+		/// Caller holds cache_mutex_ exclusively.
+		/// </summary>
+		bool merge_udp_record(std::vector<etw::owner_info>& records, const etw::owner_info& owner) const
+		{
+			for (auto it = records.rbegin(); it != records.rend(); ++it)
+			{
+				if (it->source != owner.source)
+					continue;
+				// Only the latest record of this source: a different owner in between ends the run.
+				if (it->pid != owner.pid || it->process_start_key != owner.process_start_key ||
+					it->image_verified != owner.image_verified || it->image_path != owner.image_path ||
+					owner.event_qpc < it->event_qpc || owner.event_qpc - it->event_qpc > us_to_qpc(udp_merge_span_us))
+					return false;
+				it->event_qpc_last = (std::max)(it->event_qpc_last, owner.event_qpc);
+				it->received_qpc_last = (std::max)(it->received_qpc_last, owner.received_qpc);
+				++it->merged_events;
+				return true;
+			}
+			return false;
 		}
 
 		/// <summary>TCPIP 1033 / 1034: payload PID written for the connection itself</summary>
@@ -3201,12 +3253,13 @@ namespace iphelper
 				{
 					// Strict: "the event of this datagram/SYN". A rundown (1300) describes an
 					// existing connection, not this packet.
+					// A merged UDP record matches if its event range overlaps the window.
 					in_window = r.source != etw::event_source::tcpip_tcp_rundown &&
-						r.event_qpc >= packet_qpc - before && r.event_qpc <= packet_qpc + after;
+						r.event_qpc_last >= packet_qpc - before && r.event_qpc <= packet_qpc + after;
 				}
 				else
 				{
-					in_window = r.received_qpc + ttl >= packet_qpc && r.event_qpc <= packet_qpc + after;
+					in_window = r.received_qpc_last + ttl >= packet_qpc && r.event_qpc <= packet_qpc + after;
 				}
 				if (!in_window)
 					continue;
@@ -3218,7 +3271,12 @@ namespace iphelper
 						conflict = true;
 					known_pid = r.pid;
 				}
-				const auto distance = r.event_qpc > packet_qpc ? r.event_qpc - packet_qpc : packet_qpc - r.event_qpc;
+				// Distance from the packet to the record's event range (0 inside it)
+				const auto distance = r.event_qpc > packet_qpc
+					                      ? r.event_qpc - packet_qpc
+					                      : r.event_qpc_last < packet_qpc
+					                      ? packet_qpc - r.event_qpc_last
+					                      : 0;
 				if (!best || better(r, distance, *best, best_distance))
 				{
 					best = &r;
@@ -3282,7 +3340,7 @@ namespace iphelper
 					auto& v = it->second;
 					v.erase(std::remove_if(v.begin(), v.end(), [&](const etw::owner_info& r)
 					{
-						return r.received_qpc + ttl < now;
+						return r.received_qpc_last + ttl < now;
 					}), v.end());
 					it = v.empty() ? cache_.erase(it) : std::next(it);
 				}
@@ -3293,7 +3351,7 @@ namespace iphelper
 					const auto limit = pass == 0 ? udp_ttl / 2 : udp_ttl;
 					for (auto it = cache_.begin(); it != cache_.end();)
 					{
-						const bool old = it->second.back().received_qpc + limit < now &&
+						const bool old = it->second.back().received_qpc_last + limit < now &&
 							(pass == 1 || it->first.protocol == IPPROTO_UDP);
 						it = old ? cache_.erase(it) : std::next(it);
 					}
