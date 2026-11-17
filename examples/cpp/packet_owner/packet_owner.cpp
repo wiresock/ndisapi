@@ -1494,9 +1494,15 @@ int main(int argc, char* argv[])
 		std::cout << (i + 1) << ")\t" << names[i] << "\n";
 
 	const auto adapter = select_adapter(names, opt.adapter);
+	if (!adapter && opt.adapter.empty())
+	{
+		// Ctrl+C at the interactive prompt aborts the console read, but the console runs
+		// the control handler on a thread of its own, so the read can fail before the
+		// handler has set g_stop_requested: give it a moment before deciding.
+		WaitForSingleObject(g_stop_event, 250);
+	}
 	if (!adapter && g_stop_requested.load())
 	{
-		// Ctrl+C at the interactive prompt ends the console read.
 		std::cout << "\nStopped during start-up; the adapter was not touched.\n";
 		WSACleanup();
 		return 0;
