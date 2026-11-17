@@ -101,11 +101,10 @@ the window while the gates run (normally well under a second after "Starting ETW
 session", up to about 5 s if probes time out) cuts the self-test probes short, so the
 gates end within about 1.5 s; the session is then stopped and the program prints
 "Stopped during start-up" (the self-test detail reads `cancelled`; this is not an ETW
-verdict) and exits without touching the adapter. In the rare worst case where closing the window still takes longer
-than Windows allows, only the ETW session is left behind (stopped by the next start). Ctrl+C,
-Ctrl+Break or closing the window earlier, from the first lines of `main` on (including
-at the interactive adapter prompt), takes the same path: nothing is started, and the
-program prints "Stopped during start-up" and exits. Only a signal during process
+verdict) and exits without touching the adapter (the same 5 s limit applies when the
+window is closed). Ctrl+C, Ctrl+Break or closing the window earlier, from the first lines
+of `main` on (including at the interactive adapter prompt), takes the same path: nothing
+is started, and the program prints "Stopped during start-up" and exits. Only a signal during process
 start-up itself, before `main` runs, ends the process with the default Windows handling;
 nothing has been started at that point either.
 
@@ -222,8 +221,9 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    * TCP (a loopback connect, at start only) gates TCP owners: `tcp=ok` only if the owner
      chosen for the loopback connect is this process's PID, not merely that some TCP
      event arrived. If it fails (wrong owner, or loopback TCP blocked; the connect is
-     bounded by the probe timeout), the self-test line shows `tcp=fail` and the availability line `tcp=no`, TCP ETW owners are switched
-     off for the session and TCP rows use IP Helper only; UDP is not affected.
+     bounded by the probe timeout), the self-test line shows `tcp=fail` and the
+     availability line `tcp=no`, TCP ETW owners are switched off for the session and TCP
+     rows use IP Helper only; UDP is not affected.
    * IPv6 UDP (::1) is reported (`ipv6=ok/fail`, or `n/a` when ::1 cannot be bound) but
      gates nothing: IPv6 events are not measured yet.
 2. **Flush strategy.** ETW delivers events in buffers; without help a datagram's event
