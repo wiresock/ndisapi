@@ -76,7 +76,10 @@ namespace ndisapi
 		bool reconfigure();
 		// ********************************************************************************
 		/// <summary>
-		/// Starts packet filtering
+		/// Starts packet filtering. start_filter() and stop_filter() must not run
+		/// concurrently with each other (call them from one thread, or serialize them):
+		/// the state is published as running before the worker thread object is assigned,
+		/// so a stop_filter() on another thread in that window would not join the worker.
 		/// </summary>
 		/// <param name="adapter">network interface index to filter</param>
 		/// <returns>status of the operation</returns>
@@ -84,7 +87,7 @@ namespace ndisapi
 		bool start_filter(size_t adapter);
 		// ********************************************************************************
 		/// <summary>
-		/// Stops packet filtering
+		/// Stops packet filtering. Must not run concurrently with start_filter() (see there).
 		/// </summary>
 		/// <returns>status of the operation</returns>
 		// ********************************************************************************
