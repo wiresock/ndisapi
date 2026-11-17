@@ -58,7 +58,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <set>
 #include <shared_mutex>
 #include <sstream>
@@ -240,7 +239,7 @@ namespace iphelper
 			return s;
 		}
 
-		/// <summary>Flush strategy (implementation plan 3.3)</summary>
+		/// <summary>Flush strategy</summary>
 		enum class flush_mode : uint8_t
 		{
 			/// <summary>10 ms timer if the self-test proves it, plus light on-demand flushes;
@@ -580,12 +579,12 @@ namespace iphelper
 			ULONGLONG keywords{};
 			std::vector<USHORT> event_ids;
 			/// <summary>An event id that was not requested arrived: the event-id filter is not
-			/// honoured, so the provider's events are ignored (plan gate 3)</summary>
+			/// honoured, so the provider's events are ignored (gate 3)</summary>
 			bool unfiltered{};
 			std::vector<USHORT> unrequested_ids_seen;
 		};
 
-		/// <summary>Loopback self-test result (implementation plan gate 5)</summary>
+		/// <summary>Loopback self-test result (gate 5)</summary>
 		struct self_test_status
 		{
 			bool ran{};
@@ -790,7 +789,7 @@ namespace iphelper
 			bool tcp_rundown = true;
 			flush_mode flush = flush_mode::automatic;
 			/// <summary>Strict window for datagram matches: [t - before, t + after]
-			/// (plan 3.4; measured offsets -80..-370 us on 26300)</summary>
+			/// (measured offsets -80..-370 us on 26300)</summary>
 			std::chrono::microseconds window_before{50000};
 			std::chrono::microseconds window_after{1000};
 			/// <summary>TCP connection events may be written after the SYN is read [U]; the
@@ -889,7 +888,7 @@ namespace iphelper
 
 		// ****************************************************************************
 		/// <summary>
-		/// Starts the session and runs every capability gate (implementation plan 2).
+		/// Starts the session and runs every capability gate.
 		/// Returns true if ETW attribution is usable. On false the session is stopped and
 		/// report() explains why; the caller keeps its IP Helper behaviour.
 		/// </summary>
@@ -1152,8 +1151,8 @@ namespace iphelper
 
 		// ****************************************************************************
 		/// <summary>
-		/// Requests an EVENT_TRACE_CONTROL_FLUSH according to the effective flush policy
-		/// (implementation plan 3.3). pending = number of lookups currently waiting.
+		/// Requests an EVENT_TRACE_CONTROL_FLUSH according to the effective flush policy.
+		/// pending = number of lookups currently waiting.
 		/// Rate-limited and non-blocking for concurrent callers; cheap to call often.
 		/// </summary>
 		// ****************************************************************************
@@ -1209,7 +1208,7 @@ namespace iphelper
 
 		// ****************************************************************************
 		/// <summary>
-		/// DNS caller lookup for a wire query sent by Dnscache (implementation plan 4).
+		/// DNS caller lookup for a wire query sent by Dnscache.
 		/// wire_qname: QNAME from the packet (any case, trailing dot optional).
 		/// Tier 1: 3019 (and 3010) ClientPID, de-duplicated per PID across NetworkIndex.
 		/// Tier 2: 3006 header PID with QNAME/QTYPE match, including search-suffix
@@ -1844,7 +1843,7 @@ namespace iphelper
 				p.enable_status = status;
 				p.enabled = (status == ERROR_SUCCESS);
 				// No keyword-only fallback: Kernel-Network keyword 0x10 alone delivers every IPv4
-				// TCP and UDP send/receive event system-wide (plan gate 3).
+				// TCP and UDP send/receive event system-wide (gate 3).
 				if (p.enabled && (i == kernel_network_index || i == tcpip_index))
 					udp_source = true;
 				messages.push_back(std::string("EnableTraceEx2 ") + p.name + " status=" + std::to_string(status));
@@ -2875,7 +2874,7 @@ namespace iphelper
 		}
 
 		// ------------------------------------------------------------------------
-		// Image resolution on the consumer thread, at event time (plan 3.5)
+		// Image resolution on the consumer thread, at event time
 		// ------------------------------------------------------------------------
 		struct image_memo
 		{
@@ -2988,7 +2987,7 @@ namespace iphelper
 		}
 
 		// ------------------------------------------------------------------------
-		// Owner cache (plan 3.4)
+		// Owner cache
 		// ------------------------------------------------------------------------
 		struct bind_key
 		{
@@ -3158,7 +3157,7 @@ namespace iphelper
 		/// Applies the payload PID of the attempt's first 1033/1034 to owner:
 		/// - owner has no PID (1031 payload 0, header 0 or 4): owner becomes that record
 		///   (pid_from_outcome); the connect's PID is known only from then on;
-		/// - owner came from a 1031 header PID and the payload names another PID (S8): a
+		/// - owner came from a 1031 header PID and the payload names another PID: a
 		///   header PID is only as good as the context the event was written in, so the
 		///   payload wins and the owner is marked header_pid_overridden.
 		/// </summary>
@@ -3196,7 +3195,7 @@ namespace iphelper
 
 		static int source_rank(const etw::event_source s) noexcept
 		{
-			// Lower is preferred. UDP: 1169 (start key, written earlier) over 42/58 (plan 3.1).
+			// Lower is preferred. UDP: 1169 (start key, written earlier) over 42/58.
 			// TCP: 1031 (connect proceeding) over KN 12/28, then completion, failure, accept.
 			// find_owner() ranks known PIDs above unknown (0) ones before applying this.
 			switch (s)
@@ -3378,7 +3377,7 @@ namespace iphelper
 		}
 
 		// ------------------------------------------------------------------------
-		// DNS helpers (plan 4)
+		// DNS helpers
 		// ------------------------------------------------------------------------
 		struct dns_record
 		{
@@ -3502,7 +3501,7 @@ namespace iphelper
 		}
 
 		// ------------------------------------------------------------------------
-		// Loopback self-test (plan gate 5). Our own loopback datagram / connection must
+		// Loopback self-test (gate 5). Our own loopback datagram / connection must
 		// come back as an event naming our PID within the bound. It proves the session is
 		// live, measures delivery latency with and without on-demand flushes, and is
 		// repeated periodically.
@@ -3961,7 +3960,7 @@ namespace iphelper
 					detail << "tcp: " << t.error << "; ";
 			}
 
-			// Flush mode selection (plan 3.3)
+			// Flush mode selection
 			auto mode = etw::effective_flush::none;
 			if (st.ipv4_ok && st.on_demand_ms <= 250.0)
 			{
