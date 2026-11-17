@@ -253,10 +253,27 @@ namespace ndisapi
 
 		adapter_ = adapter;
 
-		if (init_filter())
-			working_thread_ = std::thread(&simple_packet_filter::filter_working_thread, this);
-		else
+		if (!init_filter())
+		{
+			// init_filter() fails before it sets the adapter mode: nothing to release
+			filter_state_ = filter_state::stopped;
 			return false;
+		}
+
+		// Publish running before the worker can execute, so a stop_filter() right after
+		// start_filter() is not ignored; the worker never changes the lifecycle state.
+		filter_state_ = filter_state::running;
+		try
+		{
+			working_thread_ = std::thread(&simple_packet_filter::filter_working_thread, this);
+		}
+		catch (const std::system_error&)
+		{
+			filter_state_ = filter_state::stopping;
+			release_filter();
+			filter_state_ = filter_state::stopped;
+			return false;
+		}
 
 		return true;
 	}
@@ -319,8 +336,6 @@ namespace ndisapi
 
 	inline void simple_packet_filter::filter_working_thread()
 	{
-		filter_state_ = filter_state::running;
-
 		auto* read_request = reinterpret_cast<PETH_M_REQUEST>(read_request_ptr_.get());
 		auto* write_adapter_request = reinterpret_cast<PETH_M_REQUEST>(write_adapter_request_ptr_.get());
 		auto* write_mstcp_request = reinterpret_cast<PETH_M_REQUEST>(write_mstcp_request_ptr_.get());
