@@ -1447,6 +1447,12 @@ int main(int argc, char* argv[])
 		std::cout << attributor.report().to_string() << "\n";
 		attributor.stop();
 		WSACleanup();
+		if (!ok && g_stop_requested.load())
+		{
+			// Interrupted, not a capability verdict: neither 0 nor 3.
+			std::cout << "\nStopped during start-up.\n";
+			return 1;
+		}
 		return ok ? 0 : 3;
 	}
 

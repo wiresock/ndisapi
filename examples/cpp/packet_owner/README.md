@@ -89,7 +89,7 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--no-etw` | IP Helper only. |
 | `--no-iph-refresh` | Diagnostic: never refresh the IP Helper tables on a miss; the IP Helper column shows only what the cached tables knew. |
 | `--iph-refresh-ms` | Minimum interval between two refreshes of one IP Helper table (IPv4/IPv6 × TCP/UDP). Default 25 ms. Misses that arrive meanwhile share the next refresh. |
-| `--gates-only` | Run only the ETW gates and the loopback self-test, print the report and exit (exit code 0 if ETW attribution is available, 3 if not). Does not need the driver. |
+| `--gates-only` | Run only the ETW gates and the loopback self-test, print the report and exit (exit code 0 if ETW attribution is available, 3 if not, 1 if stopped with Ctrl+C or a console close before the gates finished). Does not need the driver. |
 | `--force-adapter` | Start even if the selected adapter already has a non-zero filter mode, i.e. another process is filtering it. Prints a warning; unsupported (see below). |
 
 Press **Ctrl+C** to stop. The filter is stopped first (this restores the adapter mode and
