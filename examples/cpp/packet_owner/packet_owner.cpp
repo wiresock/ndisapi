@@ -1374,10 +1374,9 @@ namespace
 			// the ETW session within 4 s. During the gates, g_stop_requested cuts the
 			// probes short (about 1.5 s left at most). If the time still runs out, only the
 			// ETW session can be left behind; the next start stops it.
-			// Before anything is started main returns at its next stop check (or the
-			// cleanup_done signal fires on any earlier return), so the wait is usually
-			// short. If main is blocked in the adapter prompt and the close does not end
-			// that console read, the full 4 s pass; nothing has been started then.
+			// Before anything is started main returns at its next stop check (the adapter
+			// prompt waits on g_stop_event too, see read_line_or_stop), or the cleanup_done
+			// signal fires on any earlier return, so the wait is short.
 			g_stop_requested = true;
 			SetEvent(g_stop_event);
 			WaitForSingleObject(g_cleanup_done_event, 4000);
@@ -1385,6 +1384,83 @@ namespace
 		default:
 			return FALSE;
 		}
+	}
+
+	// ****************************************************************************
+	/// <summary>
+	/// Reads one line from stdin for the adapter prompt, or returns nullopt on EOF, a read
+	/// error or a stop request (g_stop_event).
+	/// Returning from the console control handler does not end a blocking console read
+	/// (measured for Ctrl+C and Ctrl+Break sent with GenerateConsoleCtrlEvent: std::cin
+	/// stayed blocked), and the handler only signals main. So the read runs on a helper thread
+	/// with ReadFile (not std::cin: a CRT stream lock held by a blocked thread could stall
+	/// the CRT shutdown in exit()), and main waits for either the line or g_stop_event.
+	/// On a stop request main returns normally (code page restored, nothing started); the
+	/// helper thread, still blocked in ReadFile, ends with the process. Works the same
+	/// for redirected stdin (file or pipe; EOF ends the read).
+	/// </summary>
+	// ****************************************************************************
+	std::optional<std::string> read_line_or_stop()
+	{
+		struct line_state
+		{
+			std::string line;
+			bool ok{};
+			HANDLE done{};
+			~line_state()
+			{
+				if (done)
+					CloseHandle(done);
+			}
+		};
+		// Shared with the helper thread, which may outlive this call (stop requested)
+		const auto state = std::make_shared<line_state>();
+		state->done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		if (!state->done)
+			return std::nullopt;
+
+		std::thread([state]
+		{
+			const HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+			char c = 0;
+			DWORD n = 0;
+			DWORD error = ERROR_SUCCESS;
+			// One byte at a time: never reads past the line from a pipe or file
+			for (;;)
+			{
+				SetLastError(ERROR_SUCCESS);
+				const BOOL read = ReadFile(in, &c, 1, &n, nullptr);
+				if (!read || n == 0)
+				{
+					error = GetLastError(); // EOF: success with 0 bytes
+					break;
+				}
+				if (c == '\n')
+				{
+					state->ok = true;
+					break;
+				}
+				if (c != '\r')
+					state->line.push_back(c);
+			}
+			if (!state->ok && error == ERROR_OPERATION_ABORTED)
+			{
+				// Ctrl+C typed into the console ends a line-mode console read with 0 bytes
+				// and ERROR_OPERATION_ABORTED, possibly before the handler has run on its
+				// own thread: it is the same stop request.
+				g_stop_requested = true;
+				SetEvent(g_stop_event);
+			}
+			else if (!state->ok && !state->line.empty())
+				state->ok = true; // last line without a newline (redirected stdin)
+			SetEvent(state->done);
+		}).detach();
+
+		// The stop event first: if both are signalled, the stop request wins
+		const HANDLE handles[] = {g_stop_event, state->done};
+		if (WaitForMultipleObjects(2, handles, FALSE, INFINITE) != WAIT_OBJECT_0 + 1 || !state->ok)
+			return std::nullopt;
+		return state->line;
 	}
 
 	std::optional<size_t> select_adapter(const std::vector<std::string>& names, const std::string& wanted)
@@ -1427,11 +1503,17 @@ namespace
 			return std::nullopt;
 		}
 
-		std::cout << "\nSelect interface to filter: ";
-		size_t index = 0;
-		if (!(std::cin >> index) || index < 1 || index > names.size())
+		std::cout << "\nSelect interface to filter: " << std::flush;
+		auto line = read_line_or_stop();
+		if (!line)
 			return std::nullopt;
-		return index - 1;
+		const auto first = line->find_first_not_of(" \t");
+		const auto last = line->find_last_not_of(" \t");
+		int index = 0;
+		if (first == std::string::npos || !parse_int(line->substr(first, last - first + 1), index) ||
+			index < 1 || static_cast<size_t>(index) > names.size())
+			return std::nullopt;
+		return static_cast<size_t>(index - 1);
 	}
 }
 
@@ -1545,14 +1627,9 @@ int main(int argc, char* argv[])
 	for (size_t i = 0; i < display_names.size(); ++i)
 		std::cout << (i + 1) << ")\t" << display_names[i] << "\n";
 
+	// The interactive prompt returns at once on Ctrl+C, Ctrl+Break or console close
+	// (read_line_or_stop waits on g_stop_event as well as on the input).
 	const auto adapter = select_adapter(names, opt.adapter);
-	if (!adapter && opt.adapter.empty())
-	{
-		// Ctrl+C at the interactive prompt aborts the console read, but the console runs
-		// the control handler on a thread of its own, so the read can fail before the
-		// handler has set g_stop_requested: give it a moment before deciding.
-		WaitForSingleObject(g_stop_event, 250);
-	}
 	if (!adapter && g_stop_requested.load())
 	{
 		std::cout << "\nStopped during start-up; the adapter was not touched.\n";

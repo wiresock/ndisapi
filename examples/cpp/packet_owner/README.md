@@ -103,10 +103,12 @@ gates end within about 1.5 s; the session is then stopped and the program prints
 "Stopped during start-up" (the self-test detail reads `cancelled`; this is not an ETW
 verdict) and exits without touching the adapter (the same 5 s limit applies when the
 window is closed). Ctrl+C, Ctrl+Break or closing the window earlier, from the first lines
-of `main` on (including at the interactive adapter prompt), takes the same path: nothing
-is started, and the program prints "Stopped during start-up" and exits. Only a signal during process
-start-up itself, before `main` runs, ends the process with the default Windows handling;
-nothing has been started at that point either.
+of `main` on, takes the same path: nothing is started, and the program prints "Stopped
+during start-up" and exits. This includes the interactive adapter prompt: it waits for
+the typed line and for the stop signal at the same time (returning from a console
+control handler does not end a blocking console read), so it returns at once. Only a
+signal during process start-up itself, before `main` runs, ends the process with the
+default Windows handling; nothing has been started at that point either.
 
 ### One filtering process per adapter
 
