@@ -736,14 +736,20 @@ namespace iphelper
 		/// <summary>Configuration</summary>
 		struct attributor_config
 		{
-			/// <summary>Real-time session name. Empty (default): session_name_prefix + "-" +
-			/// GetCurrentProcessId(), so concurrent instances never share (and never stop)
-			/// each other's session. A non-empty name is used verbatim; if a session with
+			/// <summary>Real-time session name. Empty (default):
+			/// "<session_name_prefix>-<pid>-<process creation time, 16 hex digits>-<n>",
+			/// where n is a per-process instance counter, so concurrent instances (in other
+			/// processes or in the same one) never share (and never stop) each other's
+			/// session. A non-empty name is used verbatim. In both cases, if a session with
 			/// that name already exists, start() fails instead of stopping it.</summary>
 			std::wstring session_name;
-			/// <summary>Prefix of the per-process session name. At start, sessions named
-			/// "<prefix>-<pid>" whose pid is no longer running (left behind by a crashed or
-			/// killed instance) are stopped; sessions of live processes are never touched.</summary>
+			/// <summary>Prefix of the default session name. At start, sessions named
+			/// "<prefix>-<pid>-<creation>-<n>" are stopped if no process with that pid AND
+			/// that creation time is running (left behind by a crashed or killed instance; a
+			/// reused PID has a different creation time). Sessions of live processes are never
+			/// touched; if the creation time of a running pid cannot be read, its sessions are
+			/// kept. The older form "<prefix>-<pid>" is stopped only if that pid is not
+			/// running (or is our own pid: this process never creates that form).</summary>
 			std::wstring session_name_prefix = L"NdisApi-PacketOwner";
 			/// <summary>Enable TCP connection events (UDP is always enabled: it is the
 			/// liveness source of the loopback self-test)</summary>
@@ -794,9 +800,19 @@ namespace iphelper
 			QueryPerformanceFrequency(&f);
 			qpc_frequency_ = f.QuadPart;
 			own_pid_ = GetCurrentProcessId();
-			session_name_ = config_.session_name.empty()
-				                ? config_.session_name_prefix + L"-" + std::to_wstring(own_pid_)
-				                : config_.session_name;
+			own_creation_ = process_creation_time(GetCurrentProcess());
+			if (config_.session_name.empty())
+			{
+				// pid + creation time identify this process even after PID reuse; the counter
+				// separates instances inside it.
+				wchar_t creation[24];
+				std::swprintf(creation, sizeof(creation) / sizeof(creation[0]), L"%016llX",
+				              static_cast<unsigned long long>(own_creation_));
+				session_name_ = config_.session_name_prefix + L"-" + std::to_wstring(own_pid_) + L"-" + creation +
+					L"-" + std::to_wstring(instance_counter().fetch_add(1) + 1);
+			}
+			else
+				session_name_ = config_.session_name;
 			init_provider_table();
 		}
 
@@ -860,6 +876,15 @@ namespace iphelper
 			stopping_ = false;
 			live_ = false;
 			gate_final_ = false;
+			// A "filter not honoured" observation belongs to the previous session: the
+			// providers are enabled again below. TDH schemas are kept (they do not change).
+			for (auto& u : provider_unfiltered_)
+				u = false;
+			{
+				std::lock_guard<std::mutex> lock(unrequested_mutex_);
+				for (auto& u : unrequested_seen_)
+					u.clear();
+			}
 			calibrate_clock();
 
 			// Gate 1: elevation. Real-time sessions with kernel providers need admin.
@@ -1372,7 +1397,10 @@ namespace iphelper
 
 		void stop_locked()
 		{
+			// stopping_ makes refresh_availability() a no-op, so events the consumer still
+			// drains below cannot turn available_ back on.
 			stopping_ = true;
+			live_ = false;
 			available_ = false;
 			{
 				std::lock_guard<std::mutex> lock(wake_mutex_);
@@ -1389,6 +1417,15 @@ namespace iphelper
 			stop_session_and_consumer();
 			effective_flush_ = etw::effective_flush::none;
 			started_ = false;
+			// Both internal threads are joined: nothing can call refresh_availability() any
+			// more. Store the final state again in case one ran concurrently with the stores
+			// at the top.
+			available_ = false;
+			{
+				std::lock_guard<std::mutex> lock(report_mutex_);
+				report_.available = false;
+				report_.udp_available = report_.tcp_available = report_.dns_available = false;
+			}
 			if (wsa_started_)
 			{
 				WSACleanup();
@@ -1398,11 +1435,17 @@ namespace iphelper
 
 		void stop_session_and_consumer()
 		{
-			if (session_handle_ != 0)
+			TRACEHANDLE session = 0;
+			{
+				// Public flush/query callers hold the shared lock while they use the handle:
+				// once this returns, none of them can use the logger id being stopped.
+				std::unique_lock<std::shared_mutex> lock(session_mutex_);
+				std::swap(session, session_handle_);
+			}
+			if (session != 0)
 			{
 				auto props = make_properties();
-				ControlTraceW(session_handle_, nullptr, props.get(), EVENT_TRACE_CONTROL_STOP);
-				session_handle_ = 0;
+				ControlTraceW(session, nullptr, props.get(), EVENT_TRACE_CONTROL_STOP);
 			}
 			if (consumer_handle_ != invalid_processtrace_handle())
 			{
@@ -1479,9 +1522,27 @@ namespace iphelper
 			return properties_ptr(p);
 		}
 
-		/// <summary>true if a process with this PID is running now</summary>
-		static bool process_alive(const uint32_t pid)
+		/// <summary>Process-wide instance counter for the default session name</summary>
+		static std::atomic<uint32_t>& instance_counter() noexcept
 		{
+			static std::atomic<uint32_t> counter{0};
+			return counter;
+		}
+
+		/// <summary>Creation time (FILETIME as uint64_t) of a process handle, 0 if unknown</summary>
+		static uint64_t process_creation_time(const HANDLE process) noexcept
+		{
+			FILETIME creation{}, exit_time{}, kernel_time{}, user_time{};
+			if (!GetProcessTimes(process, &creation, &exit_time, &kernel_time, &user_time))
+				return 0;
+			return (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+		}
+
+		/// <summary>true if a process with this PID is running now; creation receives its
+		/// creation time, or 0 if it could not be read (e.g. access denied)</summary>
+		static bool process_alive(const uint32_t pid, uint64_t& creation)
+		{
+			creation = 0;
 			if (pid == 0)
 				return false;
 			const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -1489,17 +1550,24 @@ namespace iphelper
 				return GetLastError() == ERROR_ACCESS_DENIED; // exists, but we may not open it
 			DWORD code = 0;
 			const bool alive = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+			if (alive)
+				creation = process_creation_time(process);
 			CloseHandle(process);
 			return alive;
 		}
 
 		/// <summary>
-		/// Stops sessions named "<session_name_prefix>-<pid>" whose pid is not running: they
-		/// were left behind by an instance that was killed (a real-time session outlives its
-		/// process). Sessions of live processes, including other running instances, and the
-		/// legacy fixed name without a pid suffix are never stopped. A PID that was reused
-		/// by an unrelated live process keeps its stale session until that process exits;
-		/// if it is our own PID, start_session() replaces it.
+		/// Stops sessions left behind by an instance that was killed (a real-time session
+		/// outlives its process):
+		/// "<session_name_prefix>-<pid>-<creation>-<n>" if no process with that pid and that
+		/// creation time is running. The name of a live instance always matches its own
+		/// running process, so it is never stopped, and a PID reused between enumeration and
+		/// ControlTrace(STOP) cannot make a live session match. If the creation time of a
+		/// running pid cannot be read, its sessions are kept.
+		/// "<session_name_prefix>-<pid>" (earlier builds) if that pid is not running or is
+		/// our own pid (this process never creates that form). A reused pid keeps it until
+		/// that process exits.
+		/// The legacy fixed name without a pid is never stopped.
 		/// </summary>
 		void stop_stale_sessions()
 		{
@@ -1545,16 +1613,42 @@ namespace iphelper
 					reinterpret_cast<const char*>(p) + p->LoggerNameOffset));
 				if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0)
 					continue;
-				const auto digits = name.substr(prefix.size());
-				if (digits.size() > 10 || digits.find_first_not_of(L"0123456789") != std::wstring::npos)
+				// "<pid>" or "<pid>-<16 hex creation>-<decimal n>"
+				const auto rest = name.substr(prefix.size());
+				const auto dash1 = rest.find(L'-');
+				const auto digits = rest.substr(0, dash1);
+				if (digits.empty() || digits.size() > 10 ||
+					digits.find_first_not_of(L"0123456789") != std::wstring::npos)
 					continue;
 				const auto pid = static_cast<uint32_t>(std::wcstoul(digits.c_str(), nullptr, 10));
-				if (pid == own_pid_ || process_alive(pid))
+				uint64_t running_creation = 0;
+				bool stale;
+				if (dash1 == std::wstring::npos)
+					stale = pid == own_pid_ || !process_alive(pid, running_creation);
+				else
+				{
+					const auto dash2 = rest.find(L'-', dash1 + 1);
+					if (dash2 == std::wstring::npos || dash2 - dash1 - 1 != 16)
+						continue;
+					const auto hex = rest.substr(dash1 + 1, 16);
+					const auto counter = rest.substr(dash2 + 1);
+					if (hex.find_first_not_of(L"0123456789ABCDEFabcdef") != std::wstring::npos || counter.empty() ||
+						counter.size() > 10 || counter.find_first_not_of(L"0123456789") != std::wstring::npos)
+						continue;
+					const auto creation = static_cast<uint64_t>(std::wcstoull(hex.c_str(), nullptr, 16));
+					if (pid == own_pid_ && creation == own_creation_)
+						continue; // this process (another instance, or a name we will not reuse)
+					if (!process_alive(pid, running_creation))
+						stale = true;
+					else
+						stale = running_creation != 0 && creation != 0 && running_creation != creation;
+				}
+				if (!stale)
 					continue;
 				auto props = make_properties();
 				const auto stop_status = ControlTraceW(0, name.c_str(), props.get(), EVENT_TRACE_CONTROL_STOP);
-				log("stopped stale ETW session of exited pid " + std::to_string(pid) + ", status=" +
-					std::to_string(stop_status));
+				log("stopped stale ETW session " + narrow(name) + " of exited pid " + std::to_string(pid) +
+					", status=" + std::to_string(stop_status));
 			}
 		}
 
@@ -1582,18 +1676,11 @@ namespace iphelper
 			report_.flush_timer = props->FlushTimer;
 			report_.session_name = narrow(session_name_);
 
+			// An existing session with this name is never stopped here: the default name is
+			// unique per process (pid + creation time) and per instance, so it can only exist
+			// if this very object is still running it (e.g. an earlier STOP failed).
 			TRACEHANDLE handle = 0;
 			auto status = StartTraceW(&handle, session_name_.c_str(), props.get());
-			if (status == ERROR_ALREADY_EXISTS && config_.session_name.empty())
-			{
-				// The name carries our own PID, so the existing session belongs to an exited
-				// process that had the same PID: it cannot be a live instance.
-				auto stop = make_properties();
-				ControlTraceW(0, session_name_.c_str(), stop.get(), EVENT_TRACE_CONTROL_STOP);
-				auto retry = make_properties();
-				std::memcpy(retry.get(), props.get(), props->Wnode.BufferSize);
-				status = StartTraceW(&handle, session_name_.c_str(), retry.get());
-			}
 			report_.start_status = status;
 			if (status != ERROR_SUCCESS)
 			{
@@ -1601,7 +1688,10 @@ namespace iphelper
 					(status == ERROR_ALREADY_EXISTS ? " (a session with this name is running; not stopped)" : "");
 				return false;
 			}
-			session_handle_ = handle;
+			{
+				std::unique_lock<std::shared_mutex> session_lock(session_mutex_);
+				session_handle_ = handle;
+			}
 			report_.session_started = true;
 
 			// Read back. Windows 7 returns 0 from StartTrace and silently clears the
@@ -1691,9 +1781,9 @@ namespace iphelper
 				return false;
 
 			consumer_running_ = true;
-			consumer_thread_ = std::thread([this]
+			consumer_thread_ = std::thread([this, handle = consumer_handle_]
 			{
-				TRACEHANDLE h = consumer_handle_;
+				TRACEHANDLE h = handle;
 				const auto status = ProcessTrace(&h, 1, nullptr, nullptr);
 				consumer_running_ = false;
 				if (!stopping_.load())
@@ -1705,12 +1795,16 @@ namespace iphelper
 		/// <summary>Issues EVENT_TRACE_CONTROL_FLUSH; returns the call duration in microseconds</summary>
 		uint64_t flush_now()
 		{
-			if (session_handle_ == 0)
-				return 0;
 			auto props = make_properties();
-			const auto t0 = qpc_now();
-			ControlTraceW(session_handle_, nullptr, props.get(), EVENT_TRACE_CONTROL_FLUSH);
-			const auto us = static_cast<uint64_t>(qpc_to_ms(qpc_now() - t0) * 1000.0);
+			uint64_t us;
+			{
+				std::shared_lock<std::shared_mutex> lock(session_mutex_);
+				if (session_handle_ == 0)
+					return 0;
+				const auto t0 = qpc_now();
+				ControlTraceW(session_handle_, nullptr, props.get(), EVENT_TRACE_CONTROL_FLUSH);
+				us = static_cast<uint64_t>(qpc_to_ms(qpc_now() - t0) * 1000.0);
+			}
 			++flush_calls_;
 			last_flush_us_ = us;
 			auto prev = flush_call_max_us_.load();
@@ -1723,9 +1817,10 @@ namespace iphelper
 		void query_loss(ULONG& events_lost, ULONG& log_buffers_lost, ULONG& realtime_buffers_lost) const
 		{
 			events_lost = log_buffers_lost = realtime_buffers_lost = 0;
+			auto props = make_properties();
+			std::shared_lock<std::shared_mutex> lock(session_mutex_);
 			if (session_handle_ == 0)
 				return;
-			auto props = make_properties();
 			if (ControlTraceW(session_handle_, nullptr, props.get(), EVENT_TRACE_CONTROL_QUERY) == ERROR_SUCCESS)
 			{
 				events_lost = props->EventsLost;
@@ -3605,6 +3700,10 @@ namespace iphelper
 		// ------------------------------------------------------------------------
 		void refresh_availability()
 		{
+			// Never turn availability back on while stop() drains the consumer; stop_locked()
+			// stores the final state after joining both threads.
+			if (stopping_.load())
+				return;
 			bool udp_schema = false, tcp_schema = false, dns_schema = false;
 			{
 				std::lock_guard<std::mutex> lock(schema_mutex_);
@@ -3743,10 +3842,12 @@ namespace iphelper
 		// State
 		// ------------------------------------------------------------------------
 		etw::attributor_config config_;
-		/// <summary>Effective session name (config_.session_name or prefix-pid)</summary>
+		/// <summary>Effective session name (config_.session_name or prefix-pid-creation-n)</summary>
 		std::wstring session_name_;
 		int64_t qpc_frequency_{1};
 		uint32_t own_pid_{};
+		/// <summary>Creation time of this process (FILETIME), part of the default session name</summary>
+		uint64_t own_creation_{};
 		/// <summary>false while start() is still running its gates: intermediate
 		/// availability changes are not logged, only the final verdict is</summary>
 		std::atomic<bool> gate_final_{false};
@@ -3763,6 +3864,10 @@ namespace iphelper
 		std::atomic<bool> consumer_running_{false};
 		std::atomic<etw::dns_tier> dns_tier_seen_{etw::dns_tier::none};
 
+		/// <summary>Written only by the lifecycle thread under an exclusive session_mutex_;
+		/// other threads read it under a shared lock (flush_now, query_loss), so stop() never
+		/// races with them and they never use a stopped (possibly reused) logger id.</summary>
+		mutable std::shared_mutex session_mutex_;
 		TRACEHANDLE session_handle_{0};
 		TRACEHANDLE consumer_handle_{invalid_processtrace_handle()};
 		std::thread consumer_thread_;
