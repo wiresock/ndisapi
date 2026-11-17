@@ -175,12 +175,15 @@ same report is printed again at exit with the schemas that appeared while runnin
 the gates are still running nothing is logged about availability; the first verdict on
 stderr is the final one.
 
-The ETW session is named `NdisApi-PacketOwner-<pid>-<creation>-<n>` (`<creation>` is the
-process creation time as 16 hex digits, `<n>` counts attributor instances in the
-process), so several instances can run at the same time, in different processes or in
-one, without touching each other's session (on one adapter the driver still allows only
-one of them, see above; `--gates-only` does not use the driver). An existing session with
-the same name is never stopped; `start()` fails instead. At start, sessions with that
+The ETW session is named `NdisApi-PacketOwner-<pid>-<creation>-<module>-<n>`
+(`<creation>` is the process creation time as 16 hex digits, `<module>` the base address
+of the EXE or DLL that contains the attributor, `<n>` counts attributor instances in that
+module), so several instances can run at the same time, in different processes, modules
+or objects, without touching each other's session (on one adapter the driver still
+allows only one of them, see above; `--gates-only` does not use the driver). An existing
+session with the same name is never stopped; `start()` fails instead. (Exception: if a
+STOP of the object's own session failed, which is logged, the next `start()` of that
+object retries it.) At start, sessions with that
 prefix whose process (PID and creation time) no longer runs are stopped: they were left
 behind by a killed instance (a real-time session outlives its process). Sessions of
 running processes are never stopped, and a reused PID does not make a live session look
@@ -351,7 +354,7 @@ to the flush delay.
   has been measured at high datagram rates (tens of thousands per second).
 * **Under heavy load on small machines** delivery can exceed the hold budget; such packets
   are reported as `late` (or `none` after `--late-ms`).
-* **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>-<creation>-<n>`
+* **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>-<creation>-...`
   session behind until the next instance starts and finds no process with that PID and
   creation time (stop it by hand with `logman stop <name> -ets`). If the creation time of a
   running PID cannot be read, its sessions are kept. Sessions named

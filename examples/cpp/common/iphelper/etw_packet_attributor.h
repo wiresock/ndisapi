@@ -753,14 +753,17 @@ namespace iphelper
 		struct attributor_config
 		{
 			/// <summary>Real-time session name. Empty (default):
-			/// "<session_name_prefix>-<pid>-<process creation time, 16 hex digits>-<n>",
-			/// where n is a per-process instance counter, so concurrent instances (in other
-			/// processes or in the same one) never share (and never stop) each other's
-			/// session. A non-empty name is used verbatim. In both cases, if a session with
-			/// that name already exists, start() fails instead of stopping it.</summary>
+			/// "<session_name_prefix>-<pid>-<process creation time, 16 hex>-<module, hex>-<n>",
+			/// where module is the base address of the module (EXE or DLL) that contains this
+			/// code and n counts instances in that module, so concurrent instances (in other
+			/// processes, in other modules of the same process, or in the same module) never
+			/// share (and never stop) each other's session. A non-empty name is used verbatim.
+			/// If a session with the name already exists, start() fails instead of stopping it.
+			/// The one exception: if stop() failed to stop this object's own default-named
+			/// session, the next start() retries that STOP first.</summary>
 			std::wstring session_name;
 			/// <summary>Prefix of the default session name. At start, sessions named
-			/// "<prefix>-<pid>-<creation>-<n>" are stopped if no process with that pid AND
+			/// "<prefix>-<pid>-<creation>-..." are stopped if no process with that pid AND
 			/// that creation time is running (left behind by a crashed or killed instance; a
 			/// reused PID has a different creation time). Sessions of live processes are never
 			/// touched; if the creation time of a running pid cannot be read, its sessions are
@@ -822,13 +825,18 @@ namespace iphelper
 			own_creation_ = process_creation_time(GetCurrentProcess());
 			if (config_.session_name.empty())
 			{
-				// pid + creation time identify this process even after PID reuse; the counter
-				// separates instances inside it.
-				wchar_t creation[24];
-				std::swprintf(creation, sizeof(creation) / sizeof(creation[0]), L"%016llX",
-				              static_cast<unsigned long long>(own_creation_));
-				session_name_ = config_.session_name_prefix + L"-" + std::to_wstring(own_pid_) + L"-" + creation +
-					L"-" + std::to_wstring(instance_counter().fetch_add(1) + 1);
+				// pid + creation time identify this process even after PID reuse; the module
+				// base address and the counter (one per module: each EXE/DLL that includes
+				// this header has its own) separate instances inside it.
+				HMODULE module = nullptr;
+				GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				                   reinterpret_cast<LPCWSTR>(&instance_counter()), &module);
+				wchar_t ids[64];
+				std::swprintf(ids, sizeof(ids) / sizeof(ids[0]), L"%016llX-%llX",
+				              static_cast<unsigned long long>(own_creation_),
+				              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(module)));
+				session_name_ = config_.session_name_prefix + L"-" + std::to_wstring(own_pid_) + L"-" + ids + L"-" +
+					std::to_wstring(instance_counter().fetch_add(1) + 1);
 			}
 			else
 				session_name_ = config_.session_name;
@@ -1479,7 +1487,14 @@ namespace iphelper
 			if (session != 0)
 			{
 				auto props = make_properties();
-				ControlTraceW(session, nullptr, props.get(), EVENT_TRACE_CONTROL_STOP);
+				const auto status = ControlTraceW(session, nullptr, props.get(), EVENT_TRACE_CONTROL_STOP);
+				// ERROR_MORE_DATA: stopped, the properties buffer was only too small for the
+				// names; ERROR_WMI_INSTANCE_NOT_FOUND: the session is already gone.
+				own_stop_failed_ = status != ERROR_SUCCESS && status != ERROR_MORE_DATA &&
+					status != ERROR_WMI_INSTANCE_NOT_FOUND;
+				if (own_stop_failed_)
+					log("ControlTraceW(STOP) of " + narrow(session_name_) + " returned " + std::to_string(status) +
+						": the session may still run (stop it with logman stop <name> -ets)");
 			}
 			if (consumer_handle_ != invalid_processtrace_handle())
 			{
@@ -1595,7 +1610,7 @@ namespace iphelper
 		/// <summary>
 		/// Stops sessions left behind by an instance that was killed (a real-time session
 		/// outlives its process):
-		/// "<session_name_prefix>-<pid>-<creation>-<n>" if no process with that pid and that
+		/// "<session_name_prefix>-<pid>-<creation>-<instance>" if no process with that pid and that
 		/// creation time is running. The name of a live instance always matches its own
 		/// running process, so it is never stopped, and a PID reused between enumeration and
 		/// ControlTrace(STOP) cannot make a live session match. If the creation time of a
@@ -1649,7 +1664,7 @@ namespace iphelper
 					reinterpret_cast<const char*>(p) + p->LoggerNameOffset));
 				if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0)
 					continue;
-				// "<pid>" or "<pid>-<16 hex creation>-<decimal n>"
+				// "<pid>" or "<pid>-<16 hex creation>-<instance id: hex digits and '-'>"
 				const auto rest = name.substr(prefix.size());
 				const auto dash1 = rest.find(L'-');
 				const auto digits = rest.substr(0, dash1);
@@ -1667,9 +1682,9 @@ namespace iphelper
 					if (dash2 == std::wstring::npos || dash2 - dash1 - 1 != 16)
 						continue;
 					const auto hex = rest.substr(dash1 + 1, 16);
-					const auto counter = rest.substr(dash2 + 1);
-					if (hex.find_first_not_of(L"0123456789ABCDEFabcdef") != std::wstring::npos || counter.empty() ||
-						counter.size() > 10 || counter.find_first_not_of(L"0123456789") != std::wstring::npos)
+					const auto instance = rest.substr(dash2 + 1);
+					if (hex.find_first_not_of(L"0123456789ABCDEFabcdef") != std::wstring::npos || instance.empty() ||
+						instance.size() > 40 || instance.find_first_not_of(L"0123456789ABCDEFabcdef-") != std::wstring::npos)
 						continue;
 					const auto creation = static_cast<uint64_t>(std::wcstoull(hex.c_str(), nullptr, 16));
 					if (pid == own_pid_ && creation == own_creation_)
@@ -1691,7 +1706,20 @@ namespace iphelper
 		bool start_session(const bool ms_timer)
 		{
 			if (config_.session_name.empty())
+			{
 				stop_stale_sessions();
+				if (own_stop_failed_)
+				{
+					// Our own session from an earlier start() of this object (the default name
+					// is unique to it) whose STOP failed: retry the STOP by name.
+					auto stop = make_properties();
+					const auto stop_status =
+						ControlTraceW(0, session_name_.c_str(), stop.get(), EVENT_TRACE_CONTROL_STOP);
+					own_stop_failed_ = false;
+					log("retried STOP of this object's own session " + narrow(session_name_) + ", status=" +
+						std::to_string(stop_status));
+				}
+			}
 
 			auto props = make_properties();
 			SYSTEM_INFO si{};
@@ -1712,9 +1740,9 @@ namespace iphelper
 			report_.flush_timer = props->FlushTimer;
 			report_.session_name = narrow(session_name_);
 
-			// An existing session with this name is never stopped here: the default name is
-			// unique per process (pid + creation time) and per instance, so it can only exist
-			// if this very object is still running it (e.g. an earlier STOP failed).
+			// An existing session with this name is not stopped: the default name is unique per
+			// process (pid + creation time), module and instance, so it can only exist if this
+			// very object created it and its STOP failed, which was retried above.
 			TRACEHANDLE handle = 0;
 			auto status = StartTraceW(&handle, session_name_.c_str(), props.get());
 			report_.start_status = status;
@@ -4096,6 +4124,8 @@ namespace iphelper
 		uint32_t own_pid_{};
 		/// <summary>Creation time of this process (FILETIME), part of the default session name</summary>
 		uint64_t own_creation_{};
+		/// <summary>The last STOP of this object's session failed (lifecycle thread only)</summary>
+		bool own_stop_failed_{false};
 		/// <summary>false while start() is still running its gates: intermediate
 		/// availability changes are not logged, only the final verdict is</summary>
 		std::atomic<bool> gate_final_{false};
