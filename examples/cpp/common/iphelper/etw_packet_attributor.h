@@ -948,6 +948,11 @@ namespace iphelper
 		/// periodic self-test still passes)</summary>
 		[[nodiscard]] bool available() const noexcept { return available_.load(); }
 
+		/// <summary>true while TCP owners are served: available(), TCP enabled, a TCP connect
+		/// schema accepted, and the loopback TCP self-test at start attributed the connect
+		/// to this process. lookup() and wait_for() return nothing for TCP tuples otherwise.</summary>
+		[[nodiscard]] bool tcp_available() const noexcept { return tcp_available_.load(); }
+
 		// ****************************************************************************
 		/// <summary>Gate report snapshot (schemas, unrequested ids and DNS tier are live)</summary>
 		// ****************************************************************************
@@ -994,7 +999,7 @@ namespace iphelper
 		                                      const etw::match_kind kind = etw::match_kind::datagram,
 		                                      const bool accept_unknown = false)
 		{
-			if (!available_.load())
+			if (!available_.load() || (tuple.protocol == IPPROTO_TCP && !tcp_available_.load()))
 				return std::nullopt;
 			auto result = find_owner(tuple, packet_qpc, kind);
 			if (result && result->is_unknown() && !accept_unknown)
@@ -1053,7 +1058,8 @@ namespace iphelper
 			for (;;)
 			{
 				const auto seen = generation();
-				if (!available_.load() || stopping_.load())
+				if (!available_.load() || stopping_.load() ||
+					(tuple.protocol == IPPROTO_TCP && !tcp_available_.load()))
 					break;
 				if (auto r = find_owner(tuple, packet_qpc, kind); r && !r->is_unknown())
 				{
@@ -1402,6 +1408,7 @@ namespace iphelper
 			stopping_ = true;
 			live_ = false;
 			available_ = false;
+			tcp_available_ = false;
 			{
 				std::lock_guard<std::mutex> lock(wake_mutex_);
 				++generation_;
@@ -1421,6 +1428,7 @@ namespace iphelper
 			// more. Store the final state again in case one ran concurrently with the stores
 			// at the top.
 			available_ = false;
+			tcp_available_ = false;
 			{
 				std::lock_guard<std::mutex> lock(report_mutex_);
 				report_.available = false;
@@ -3337,6 +3345,52 @@ namespace iphelper
 			return t;
 		}
 
+		/// <summary>Non-blocking loopback connect + accept bounded by timeout: a firewall that
+		/// drops (rather than rejects) loopback connects must not hold the maintenance thread,
+		/// and with it stop(), for the OS connect timeout.</summary>
+		static bool connect_loopback(const SOCKET sender, const SOCKET listener, SOCKET& accepted,
+		                             sockaddr_storage& target, const int len, const std::chrono::milliseconds timeout)
+		{
+			u_long non_blocking = 1;
+			if (ioctlsocket(sender, FIONBIO, &non_blocking) != 0 || ioctlsocket(listener, FIONBIO, &non_blocking) != 0)
+				return false;
+			const auto deadline = clock::now() + timeout;
+			auto wait = [&deadline](const SOCKET s, const bool write)
+			{
+				const auto left = std::chrono::duration_cast<std::chrono::microseconds>(deadline - clock::now());
+				if (left.count() <= 0)
+					return false;
+				fd_set set, except;
+				FD_ZERO(&set);
+				FD_ZERO(&except);
+				FD_SET(s, &set);
+				FD_SET(s, &except);
+				timeval tv{static_cast<long>(left.count() / 1000000), static_cast<long>(left.count() % 1000000)};
+				return select(0, write ? nullptr : &set, write ? &set : nullptr, &except, &tv) > 0 &&
+					FD_ISSET(s, &set) && !FD_ISSET(s, &except);
+			};
+			if (connect(sender, reinterpret_cast<sockaddr*>(&target), len) != 0)
+			{
+				if (WSAGetLastError() != WSAEWOULDBLOCK)
+					return false;
+				if (!wait(sender, true))
+				{
+					int error = 0;
+					int error_len = sizeof(error);
+					getsockopt(sender, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &error_len);
+					WSASetLastError(error != 0 ? error : WSAETIMEDOUT);
+					return false;
+				}
+			}
+			if (!wait(listener, false))
+			{
+				WSASetLastError(WSAETIMEDOUT);
+				return false;
+			}
+			accepted = accept(listener, nullptr, nullptr);
+			return accepted != INVALID_SOCKET;
+		}
+
 		/// <summary>One self-test probe. use_flush: issue EVENT_TRACE_CONTROL_FLUSH every
 		/// 10 ms while waiting (on-demand mode); otherwise rely on the session timer.</summary>
 		self_test_result self_test_once(const uint16_t family, const bool tcp, const bool use_flush,
@@ -3384,11 +3438,7 @@ namespace iphelper
 			const auto t0 = qpc_now();
 			bool sent;
 			if (tcp)
-			{
-				sent = connect(sender.s, reinterpret_cast<sockaddr*>(&target), len) == 0;
-				if (sent)
-					accepted.s = accept(receiver.s, nullptr, nullptr);
-			}
+				sent = connect_loopback(sender.s, receiver.s, accepted.s, target, len, timeout);
 			else
 			{
 				char nonce[16];
@@ -3735,6 +3785,7 @@ namespace iphelper
 			}
 
 			bool available;
+			bool tcp_available;
 			std::string log_line;
 			{
 				std::lock_guard<std::mutex> lock(report_mutex_);
@@ -3744,8 +3795,14 @@ namespace iphelper
 						!provider_unfiltered_[i].load();
 				};
 				const bool udp_provider = filtered_enabled(kernel_network_index) || filtered_enabled(tcpip_index);
+				// The TCP self-test gates TCP only: it runs once at start (the periodic self-test
+				// is UDP), and a failure (wrong owner, or loopback TCP blocked) switches TCP owners
+				// off for this session while UDP stays on. The IPv6 self-test is reported only:
+				// it is skipped when ::1 cannot be bound, and IPv6 events are unmeasured.
+				const bool tcp_self_test_ok = !report_.self_test.tcp_attempted || report_.self_test.tcp_ok;
 				report_.udp_available = udp_provider && udp_schema && live_.load();
-				report_.tcp_available = config_.enable_tcp && udp_provider && tcp_schema && live_.load();
+				report_.tcp_available = config_.enable_tcp && udp_provider && tcp_schema && tcp_self_test_ok &&
+					live_.load();
 				report_.dns_available = config_.enable_dns && filtered_enabled(dns_client_index) && live_.load();
 				(void)dns_schema; // DNS schemas are checked lazily on the first DNS event
 
@@ -3768,7 +3825,9 @@ namespace iphelper
 				else if (available)
 					report_.failure.clear();
 				report_.available = available;
+				tcp_available = available && report_.tcp_available;
 			}
+			tcp_available_ = tcp_available;
 			const bool was = available_.exchange(available);
 			// While start() runs its gates, schemas arrive one by one and the verdict is not
 			// final yet ("no accepted UDP send schema" before the first 42/1169): stay quiet.
@@ -3860,6 +3919,7 @@ namespace iphelper
 		bool wsa_started_{false};
 		std::atomic<bool> stopping_{false};
 		std::atomic<bool> available_{false};
+		std::atomic<bool> tcp_available_{false};
 		std::atomic<bool> live_{false};
 		std::atomic<bool> consumer_running_{false};
 		std::atomic<etw::dns_tier> dns_tier_seen_{etw::dns_tier::none};

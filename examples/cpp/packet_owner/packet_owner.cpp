@@ -969,7 +969,10 @@ namespace
 					if (is_duplicate(item) || is_seen_flow(item))
 						continue;
 					request_iph_refresh(item);
-					item.etw_attempted = etw_enabled_ && attributor_.available();
+					// TCP owners are not served when the TCP gate failed: do not hold TCP rows
+					// waiting for them.
+					item.etw_attempted = etw_enabled_ && attributor_.available() &&
+						(item.tuple.protocol != IPPROTO_TCP || attributor_.tcp_available());
 					if (try_resolve(item, intake))
 						finalize(item);
 					else
@@ -1445,11 +1448,12 @@ int main(int argc, char* argv[])
 			std::cout << "\nETW attribution is NOT available on this system (" << attributor.report().failure
 				<< ").\nContinuing with IP Helper only.\n";
 		}
-		else if (opt.tcp && !attributor.report().tcp_available)
-			std::cout << "\nNote: no accepted TCP connect schema yet; TCP rows may show no ETW owner.\n";
 		else if (opt.tcp && attributor.report().self_test.tcp_attempted && !attributor.report().self_test.tcp_ok)
-			std::cout << "\nNote: the loopback TCP self-test did not attribute the connect to this process"
-				" (see tcp-owner above); treat TCP ETW owners with care.\n";
+			std::cout << "\nNote: the loopback TCP self-test failed (see tcp= and tcp-owner above): TCP ETW owners"
+				" are switched off; TCP rows use IP Helper only.\n";
+		else if (opt.tcp && !attributor.report().tcp_available)
+			std::cout << "\nNote: no accepted TCP connect schema: TCP ETW owners are switched off; TCP rows use"
+				" IP Helper only.\n";
 		if (!opt.iph_refresh)
 			std::cout << "IP Helper refresh disabled (--no-iph-refresh): IP Helper shows cached tables only\n";
 		if (opt.dns)
