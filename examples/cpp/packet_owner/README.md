@@ -258,6 +258,18 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    **No PID at SYN time:** if 1031 has no usable PID (payload 0 and header 0 or 4), the
    owner is filled from that first 1033/1034 (`[pid-from-outcome]`). KN 12 is not used for
    either; it decides only when it arrives inside the match window.
+   **Assumptions and edge cases of the attempt logic:** 1031 is assumed to be written
+   once per connect, not per SYN retransmission (consistent with the measurements, not
+   verified); if it were written per retransmission, an attempt would end at the next
+   1031 and the earlier SYN row would show `(unknown)`, degraded but not misattributed.
+   The choice of the matched record itself is not attempt-aware: a 1031 with a known PID
+   from another attempt of the same 5-tuple inside the match window (or within the 120 s
+   cache lifetime for `--tcp-existing`) outranks a PID-less 1031 of the right attempt.
+   For connection matches decided by a record other than 1031, earlier records of the
+   same attempt are not scanned. If a reused tuple's next 1031 has not been delivered yet
+   while its 1033 has (per-CPU buffer order), an earlier attempt without a 1033/1034 of
+   its own can briefly take that 1033's outcome and PID. The first and the last case need
+   the same 5-tuple to be reused quickly (normally an RST plus an explicit bind).
 4. **Image names** are resolved on the ETW consumer thread when the event arrives, and are
    checked against PID reuse with the process start key or the process creation time.
    Events without a start key (Kernel-Network, one per datagram) reuse the last
@@ -354,9 +366,9 @@ to the flush delay.
   PID at SYN time; the owner then comes from the attempt's 1033/1034 one RTT later (or
   from KN 12 if it arrives within 50 ms of the SYN), and its latency includes that RTT. If
   neither arrives within `--late-ms`, the row shows `no PID`. Such rows are not part of
-  the latency statistics (see "Output"). A remote RST
-  (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again, but
-  1031 is written once per connect (as measured, see "Matching"): a retransmission read 50 ms or more after it falls
+  the latency statistics (see "Output"). A remote RST (1034) and IPv6 (KN 28) are not
+  measured yet. Retransmitted SYNs are reported again, but 1031 is assumed to be written
+  once per connect (see "Matching"): a retransmission read 50 ms or more after it falls
   outside the strict window and usually gets ETW `none`, unless 1033 / KN 12 arrives
   within 50 ms of the retransmission.
 * **Header PID override (1031 vs 1033/1034)** is implemented but the asynchronous
