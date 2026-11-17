@@ -460,6 +460,15 @@ namespace iphelper
 			uint32_t connect_status{};
 			/// <summary>TCP only: TCPIP 1033 or Kernel-Network 12/28 (connected) was seen</summary>
 			bool connect_completed{};
+			/// <summary>TCP only: the owner was first taken from a TCPIP 1031 header PID, and a
+			/// TCPIP 1033/1034 record for the same connection named a different (nonzero)
+			/// payload PID, which replaced it (pid, process_start_key and image now come from
+			/// that record; source, event id and latency stay those of the first match).
+			/// Guards against a connect completed in another process's context, e.g. by a
+			/// WFP callout that pends ALE connect authorization; that case is not verified.</summary>
+			bool header_pid_overridden{};
+			/// <summary>The 1031 header PID that was replaced (0 if none)</summary>
+			uint32_t overridden_header_pid{};
 
 			/// <summary>PID 4 (System). PID 0 is "unknown", not a system owner.</summary>
 			[[nodiscard]] bool is_system() const noexcept { return pid == 4; }
@@ -1016,8 +1025,10 @@ namespace iphelper
 		/// TCP connect outcome for a SYN read at packet_qpc: scans every record of the
 		/// tuple written from window_before ahead of the SYN onwards (1033/1034 and KN 12
 		/// come about one RTT later, a local abort much later [M26300]) and fills
-		/// connect_completed / connect_failed / connect_status of owner. Does not count as
-		/// a lookup. Returns true if the outcome (completed or failed) is known.
+		/// connect_completed / connect_failed / connect_status of owner. If owner came from
+		/// a 1031 header PID and 1033/1034 names a different payload PID, that PID replaces
+		/// it (header_pid_overridden). Does not count as a lookup. Returns true if the
+		/// outcome (completed or failed) is known.
 		/// </summary>
 		// ****************************************************************************
 		bool tcp_outcome(const etw::packet_tuple& tuple, const int64_t packet_qpc, etw::owner_info& owner) const
@@ -1027,10 +1038,14 @@ namespace iphelper
 			const auto it = cache_.find(tuple);
 			if (it == cache_.end())
 				return owner.connect_completed || owner.connect_failed;
+			const etw::owner_info* payload_tcp = nullptr;
 			for (const auto& r : it->second)
 			{
 				if (r.event_qpc < packet_qpc - before)
 					continue;
+				if (r.pid != 0 && is_payload_override_source(r.source) &&
+					(!payload_tcp || r.source == etw::event_source::tcpip_tcp_connected))
+					payload_tcp = &r;
 				owner.sources_seen |= 1u << static_cast<unsigned>(r.source);
 				if (r.pid != 0 && owner.pid != 0 && r.pid != owner.pid)
 					owner.conflict = true;
@@ -1043,6 +1058,8 @@ namespace iphelper
 					r.source == etw::event_source::kn_tcp_connect)
 					owner.connect_completed = true;
 			}
+			if (payload_tcp)
+				apply_payload_override(owner, *payload_tcp);
 			return owner.connect_completed || owner.connect_failed;
 		}
 
@@ -2952,6 +2969,30 @@ namespace iphelper
 			records.push_back(owner);
 		}
 
+		/// <summary>TCPIP 1033 / 1034: payload PID written for the connection itself</summary>
+		static bool is_payload_override_source(const etw::event_source s) noexcept
+		{
+			return s == etw::event_source::tcpip_tcp_connected || s == etw::event_source::tcpip_tcp_failed;
+		}
+
+		/// <summary>S8: a 1031 header PID is only as good as the context the event was written
+		/// in. If 1033/1034 for the same connection names a different payload PID, the payload
+		/// wins and the owner is marked header_pid_overridden.</summary>
+		static void apply_payload_override(etw::owner_info& owner, const etw::owner_info& payload)
+		{
+			if (!owner.pid_from_header || payload.pid == 0 || payload.pid == owner.pid ||
+				!is_payload_override_source(payload.source))
+				return;
+			owner.overridden_header_pid = owner.pid;
+			owner.pid = payload.pid;
+			owner.process_start_key = payload.process_start_key;
+			owner.image_path = payload.image_path;
+			owner.image_verified = payload.image_verified;
+			owner.pid_from_header = false;
+			owner.header_pid_overridden = true;
+			owner.conflict = true;
+		}
+
 		static int source_rank(const etw::event_source s) noexcept
 		{
 			// Lower is preferred. UDP: 1169 (start key, written earlier) over 42/58 (plan 3.1).
@@ -3007,6 +3048,7 @@ namespace iphelper
 			bool completed = false;
 			uint32_t failed_status = 0;
 			int64_t best_distance = 0;
+			const etw::owner_info* payload_tcp = nullptr; // 1033/1034 with a payload PID
 			for (const auto& r : it->second)
 			{
 				bool in_window;
@@ -3039,6 +3081,9 @@ namespace iphelper
 				else if (tcp && (r.source == etw::event_source::tcpip_tcp_connected ||
 					r.source == etw::event_source::kn_tcp_connect))
 					completed = true;
+				if (tcp && r.pid != 0 && is_payload_override_source(r.source) &&
+					(!payload_tcp || r.source == etw::event_source::tcpip_tcp_connected))
+					payload_tcp = &r;
 				const auto distance = r.event_qpc > packet_qpc ? r.event_qpc - packet_qpc : packet_qpc - r.event_qpc;
 				if (!best || better(r, distance, *best, best_distance))
 				{
@@ -3058,6 +3103,8 @@ namespace iphelper
 				result.connect_failed = true;
 				result.connect_status = failed_status;
 			}
+			if (payload_tcp)
+				apply_payload_override(result, *payload_tcp);
 
 			if (result.process_start_key == 0 && !tcp)
 			{
