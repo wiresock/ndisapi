@@ -697,7 +697,7 @@ namespace
 						"etw_image_verified,etw_source,etw_event,etw_version,etw_latency_ms,etw_event_offset_ms,etw_sources,"
 						"etw_conflict,"
 						"verdict,dns_qname,dns_qtype,dns_tier,dns_callers,dns_wire_confirmed,"
-						"etw_pid_from_header,tcp_outcome,tcp_connect_status,etw_overridden_header_pid\n";
+						"etw_pid_from_header,tcp_outcome,tcp_connect_status,etw_overridden_header_pid,etw_pid_from_outcome\n";
 				else
 					std::cerr << "cannot open " << opt_.csv_path << "\n";
 			}
@@ -1200,6 +1200,7 @@ namespace
 									    ? "[header-pid " + std::to_string(item.etw->overridden_header_pid) +
 									    " overridden by 1033/1034]"
 									    : "")
+								<< (item.etw->pid_from_outcome ? "[pid-from-outcome]" : "")
 								<< (item.etw->image_verified ? "" : "[unverified]");
 						else
 							os << "no PID";
@@ -1268,7 +1269,7 @@ namespace
 				csv_ << ",";
 				if (etw_event && item.etw->header_pid_overridden)
 					csv_ << item.etw->overridden_header_pid;
-				csv_ << "\n";
+				csv_ << "," << (etw_found ? (item.etw->pid_from_outcome ? "1" : "0") : "") << "\n";
 			}
 		}
 

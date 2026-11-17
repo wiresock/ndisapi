@@ -54,6 +54,7 @@
 #include <cwchar>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -460,15 +461,21 @@ namespace iphelper
 			uint32_t connect_status{};
 			/// <summary>TCP only: TCPIP 1033 or Kernel-Network 12/28 (connected) was seen</summary>
 			bool connect_completed{};
-			/// <summary>TCP only: the owner was first taken from a TCPIP 1031 header PID, and a
-			/// TCPIP 1033/1034 record for the same connection named a different (nonzero)
-			/// payload PID, which replaced it (pid, process_start_key and image now come from
-			/// that record; source, event id and latency stay those of the first match).
-			/// Guards against a connect completed in another process's context, e.g. by a
-			/// WFP callout that pends ALE connect authorization; that case is not verified.</summary>
+			/// <summary>TCP only: the owner was first taken from a TCPIP 1031 header PID, and the
+			/// first TCPIP 1033/1034 of the same connect attempt (after that 1031 and before the
+			/// next 1031 of the tuple) named a different (nonzero) payload PID, which replaced
+			/// it (pid, process_start_key and image now come from that record; source, event
+			/// id and latency stay those of the 1031). Guards against a connect completed in
+			/// another process's context, e.g. by a WFP callout that pends ALE connect
+			/// authorization; that case is not verified.</summary>
 			bool header_pid_overridden{};
 			/// <summary>The 1031 header PID that was replaced (0 if none)</summary>
 			uint32_t overridden_header_pid{};
+			/// <summary>TCP only: the matching 1031 had no usable PID (payload 0, header 0 or
+			/// 4), and the owner was filled from the first 1033/1034 of the same connect attempt;
+			/// source, event id, event time and latency are those of that record (about one RTT
+			/// after the SYN).</summary>
+			bool pid_from_outcome{};
 
 			/// <summary>PID 4 (System). PID 0 is "unknown", not a system owner.</summary>
 			[[nodiscard]] bool is_system() const noexcept { return pid == 4; }
@@ -1028,10 +1035,13 @@ namespace iphelper
 		/// TCP connect outcome for a SYN read at packet_qpc: scans every record of the
 		/// tuple written from window_before ahead of the SYN onwards (1033/1034 and KN 12
 		/// come about one RTT later, a local abort much later [M26300]) and fills
-		/// connect_completed / connect_failed / connect_status of owner. If owner came from
-		/// a 1031 header PID and 1033/1034 names a different payload PID, that PID replaces
-		/// it (header_pid_overridden). Does not count as a lookup. Returns true if the
-		/// outcome (completed or failed) is known.
+		/// connect_completed / connect_failed / connect_status of owner. Only records of the
+		/// same connect attempt count: from the owner's 1031 up to the next 1031 of the tuple
+		/// (connect_attempt()). If owner came from a 1031 header PID and the first 1033/1034
+		/// of the attempt names a different payload PID, that PID replaces it
+		/// (header_pid_overridden); if owner has no PID, it is filled from that record
+		/// (pid_from_outcome). Does not count as a lookup. Returns true if the outcome
+		/// (completed or failed) is known.
 		/// </summary>
 		// ****************************************************************************
 		bool tcp_outcome(const etw::packet_tuple& tuple, const int64_t packet_qpc, etw::owner_info& owner) const
@@ -1041,28 +1051,20 @@ namespace iphelper
 			const auto it = cache_.find(tuple);
 			if (it == cache_.end())
 				return owner.connect_completed || owner.connect_failed;
-			const etw::owner_info* payload_tcp = nullptr;
-			for (const auto& r : it->second)
+			const auto attempt = scan_attempt(it->second,
+			                                  connect_attempt(it->second, (std::min)(packet_qpc - before, owner.event_qpc),
+			                                                  owner.event_qpc));
+			owner.sources_seen |= attempt.sources;
+			if (attempt.pids_differ || (owner.pid != 0 && attempt.known_pid != 0 && attempt.known_pid != owner.pid))
+				owner.conflict = true;
+			owner.connect_completed = owner.connect_completed || attempt.completed;
+			if (attempt.failed)
 			{
-				if (r.event_qpc < packet_qpc - before)
-					continue;
-				if (r.pid != 0 && is_payload_override_source(r.source) &&
-					(!payload_tcp || r.source == etw::event_source::tcpip_tcp_connected))
-					payload_tcp = &r;
-				owner.sources_seen |= 1u << static_cast<unsigned>(r.source);
-				if (r.pid != 0 && owner.pid != 0 && r.pid != owner.pid)
-					owner.conflict = true;
-				if (r.source == etw::event_source::tcpip_tcp_failed)
-				{
-					owner.connect_failed = true;
-					owner.connect_status = r.status;
-				}
-				else if (r.source == etw::event_source::tcpip_tcp_connected ||
-					r.source == etw::event_source::kn_tcp_connect)
-					owner.connect_completed = true;
+				owner.connect_failed = true;
+				owner.connect_status = attempt.failed_status;
 			}
-			if (payload_tcp)
-				apply_payload_override(owner, *payload_tcp);
+			if (attempt.payload)
+				apply_payload_pid(owner, *attempt.payload);
 			return owner.connect_completed || owner.connect_failed;
 		}
 
@@ -2978,13 +2980,111 @@ namespace iphelper
 			return s == etw::event_source::tcpip_tcp_connected || s == etw::event_source::tcpip_tcp_failed;
 		}
 
-		/// <summary>S8: a 1031 header PID is only as good as the context the event was written
-		/// in. If 1033/1034 for the same connection names a different payload PID, the payload
-		/// wins and the owner is marked header_pid_overridden.</summary>
-		static void apply_payload_override(etw::owner_info& owner, const etw::owner_info& payload)
+		/// <summary>Event-time range [lo, hi) of one TCP connect attempt of a tuple</summary>
+		struct attempt_range
 		{
-			if (!owner.pid_from_header || payload.pid == 0 || payload.pid == owner.pid ||
-				!is_payload_override_source(payload.source))
+			int64_t lo{};
+			int64_t hi{};
+		};
+
+		/// <summary>
+		/// The connect attempt that owner_qpc belongs to: from the latest TCPIP 1031 at or
+		/// after from_qpc and at or before owner_qpc (from_qpc if there is none) up to, but
+		/// not including, the next 1031 of the tuple after owner_qpc. A reused 5-tuple (fast
+		/// reconnect, fixed source port, another process getting the same port) starts a
+		/// new attempt with its own 1031, so its 1033/1034/KN 12 are not mixed in.
+		/// </summary>
+		static attempt_range connect_attempt(const std::vector<etw::owner_info>& records, const int64_t from_qpc,
+		                                     const int64_t owner_qpc) noexcept
+		{
+			attempt_range a{from_qpc, (std::numeric_limits<int64_t>::max)()};
+			for (const auto& r : records)
+			{
+				if (r.source != etw::event_source::tcpip_tcp_connect)
+					continue;
+				if (r.event_qpc >= from_qpc && r.event_qpc <= owner_qpc)
+					a.lo = (std::max)(a.lo, r.event_qpc);
+				else if (r.event_qpc > owner_qpc)
+					a.hi = (std::min)(a.hi, r.event_qpc);
+			}
+			return a;
+		}
+
+		struct attempt_scan
+		{
+			/// <summary>First (by event time) 1033/1034 of the attempt with a payload PID</summary>
+			const etw::owner_info* payload{};
+			bool completed{};
+			bool failed{};
+			uint32_t failed_status{};
+			uint32_t sources{};
+			/// <summary>First known (nonzero) PID of the attempt</summary>
+			uint32_t known_pid{};
+			/// <summary>Records of the attempt named different known PIDs</summary>
+			bool pids_differ{};
+		};
+
+		/// <summary>Outcome records of one connect attempt. Caller holds cache_mutex_; the
+		/// payload pointer is valid only while it does.</summary>
+		static attempt_scan scan_attempt(const std::vector<etw::owner_info>& records, const attempt_range& range) noexcept
+		{
+			attempt_scan a;
+			for (const auto& r : records)
+			{
+				if (r.event_qpc < range.lo || r.event_qpc >= range.hi)
+					continue;
+				a.sources |= 1u << static_cast<unsigned>(r.source);
+				if (r.pid != 0)
+				{
+					if (a.known_pid == 0)
+						a.known_pid = r.pid;
+					else if (r.pid != a.known_pid)
+						a.pids_differ = true;
+				}
+				if (r.source == etw::event_source::tcpip_tcp_failed)
+				{
+					a.failed = true;
+					a.failed_status = r.status;
+				}
+				else if (r.source == etw::event_source::tcpip_tcp_connected ||
+					r.source == etw::event_source::kn_tcp_connect)
+					a.completed = true;
+				if (r.pid != 0 && is_payload_override_source(r.source) &&
+					(!a.payload || r.event_qpc < a.payload->event_qpc))
+					a.payload = &r;
+			}
+			return a;
+		}
+
+		/// <summary>
+		/// Applies the payload PID of the attempt's first 1033/1034 to owner:
+		/// - owner has no PID (1031 payload 0, header 0 or 4): owner becomes that record
+		///   (pid_from_outcome); the connect's PID is known only from then on;
+		/// - owner came from a 1031 header PID and the payload names another PID (S8): a
+		///   header PID is only as good as the context the event was written in, so the
+		///   payload wins and the owner is marked header_pid_overridden.
+		/// </summary>
+		static void apply_payload_pid(etw::owner_info& owner, const etw::owner_info& payload)
+		{
+			if (payload.pid == 0 || !is_payload_override_source(payload.source))
+				return;
+			if (owner.pid == 0)
+			{
+				const auto sources = owner.sources_seen;
+				const auto conflict = owner.conflict;
+				const auto completed = owner.connect_completed;
+				const auto failed = owner.connect_failed;
+				const auto status = owner.connect_status;
+				owner = payload;
+				owner.sources_seen = sources | payload.sources_seen;
+				owner.conflict = conflict;
+				owner.connect_completed = completed;
+				owner.connect_failed = failed;
+				owner.connect_status = status;
+				owner.pid_from_outcome = true;
+				return;
+			}
+			if (!owner.pid_from_header || payload.pid == owner.pid)
 				return;
 			owner.overridden_header_pid = owner.pid;
 			owner.pid = payload.pid;
@@ -3047,11 +3147,7 @@ namespace iphelper
 			uint32_t seen = 0;
 			uint32_t known_pid = 0;
 			bool conflict = false;
-			bool failed = false;
-			bool completed = false;
-			uint32_t failed_status = 0;
 			int64_t best_distance = 0;
-			const etw::owner_info* payload_tcp = nullptr; // 1033/1034 with a payload PID
 			for (const auto& r : it->second)
 			{
 				bool in_window;
@@ -3076,17 +3172,6 @@ namespace iphelper
 						conflict = true;
 					known_pid = r.pid;
 				}
-				if (tcp && r.source == etw::event_source::tcpip_tcp_failed)
-				{
-					failed = true;
-					failed_status = r.status;
-				}
-				else if (tcp && (r.source == etw::event_source::tcpip_tcp_connected ||
-					r.source == etw::event_source::kn_tcp_connect))
-					completed = true;
-				if (tcp && r.pid != 0 && is_payload_override_source(r.source) &&
-					(!payload_tcp || r.source == etw::event_source::tcpip_tcp_connected))
-					payload_tcp = &r;
 				const auto distance = r.event_qpc > packet_qpc ? r.event_qpc - packet_qpc : packet_qpc - r.event_qpc;
 				if (!best || better(r, distance, *best, best_distance))
 				{
@@ -3100,14 +3185,22 @@ namespace iphelper
 			etw::owner_info result = *best;
 			result.sources_seen = seen;
 			result.conflict = conflict;
-			result.connect_completed = completed;
-			if (failed)
+			if (tcp)
 			{
-				result.connect_failed = true;
-				result.connect_status = failed_status;
+				// Outcome and payload PID come from the connect attempt of the chosen record
+				// only (not limited to the match window: 1033 comes one RTT after the SYN).
+				const auto attempt = scan_attempt(it->second,
+				                                  connect_attempt(it->second, (std::min)(packet_qpc - before, best->event_qpc),
+				                                                  best->event_qpc));
+				result.connect_completed = attempt.completed;
+				if (attempt.failed)
+				{
+					result.connect_failed = true;
+					result.connect_status = attempt.failed_status;
+				}
+				if (attempt.payload)
+					apply_payload_pid(result, *attempt.payload);
 			}
-			if (payload_tcp)
-				apply_payload_override(result, *payload_tcp);
 
 			if (result.process_start_key == 0 && !tcp)
 			{

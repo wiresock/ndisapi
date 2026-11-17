@@ -148,17 +148,20 @@ not a lock: a filter that starts between the check and `packet_owner`'s own
   see "Matching"). `no PID` with state `no-pid` means an event matched but none named a
   real PID; it is not counted as an ETW owner. `CONFLICT{...}` lists the event sources when
   they named different (nonzero) PIDs. `[header-pid N overridden by 1033/1034]` means the
-  1031 header PID N was replaced by the different payload PID of TCPIP 1033/1034 for the
-  same connection (see "Matching").
-* TCP SYN rows end with the connect outcome seen later for the same connection:
+  1031 header PID N was replaced by the different payload PID of TCPIP 1033/1034 of the
+  same connect attempt; `[pid-from-outcome]` means 1031 had no usable PID and the owner
+  was taken from that 1033/1034 (see "Matching").
+* TCP SYN rows end with the connect outcome seen later for the same connect attempt:
   `(connected)` (TCPIP 1033 or Kernel-Network 12/28), `(connect failed, 1034 status 0x...)`,
   or `(unknown)` if neither arrived within `--late-ms`. The event and latency shown are
   still those of the first matching event; the owner is too, unless a 1033/1034 payload
-  PID overrode a 1031 header PID.
+  PID overrode a 1031 header PID. With `[pid-from-outcome]` the event, its time and the
+  latency are those of the 1033/1034, because the owner was not known before it.
 * Verdict: `agree`, `DISAGREE`, `etw-only`, `iph-only` or `neither`.
 * CSV columns added after `dns_wire_confirmed`: `etw_pid_from_header`, `tcp_outcome`
   (`connected` / `failed` / `unknown`), `tcp_connect_status` (the 1034 status) and
-  `etw_overridden_header_pid` (the replaced 1031 header PID, empty if none).
+  `etw_overridden_header_pid` (the replaced 1031 header PID, empty if none) and
+  `etw_pid_from_outcome` (1 if the owner came from 1033/1034 because 1031 had no PID).
 * `DNS ... via Dnscache`: the callers of a query sent by Dnscache. `tier1:ClientPID` comes
   from the `ClientPID` field of DNS-Client 3019/3010 (newer builds); `tier2:3006-header-PID`
   matches DNS-Client 3006 events by name and type (including DNS search suffixes).
@@ -228,12 +231,19 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    A header PID of 0 or 4 is not used. 1033 has header PID 4 and the real PID in the
    payload; 1034 carried the real PID in both after a local abort; both use the payload.
    PID 0 is shown as "unknown", never as a verified Idle process.
+   **Connect attempt:** the outcome and the payload PID are taken only from records of
+   the same connect attempt: from the matched 1031 up to the next 1031 of the 5-tuple (a
+   reused tuple, e.g. a fast reconnect from the same port, starts a new attempt), and the
+   first 1033/1034 of that attempt is used. These records are not limited to the 50 ms
+   match window, because 1033 comes one RTT after the SYN.
    **Header PID override:** a header PID is only right if 1031 is written in the
-   connecting process's context, as measured. If TCPIP 1033 or 1034 for the same
-   connection names a different nonzero payload PID, that PID replaces the header PID and
-   the row is marked (see "Output"). The case this guards against, a connect completed
-   in another process's context (e.g. a WFP callout that pends ALE connect authorization),
-   has not been observed or tested. KN 12 is not used for the override.
+   connecting process's context, as measured. If that first 1033/1034 names a different
+   nonzero payload PID, it replaces the header PID and the row is marked (see "Output").
+   The case this guards against, a connect completed in another process's context (e.g. a
+   WFP callout that pends ALE connect authorization), has not been observed or tested.
+   **No PID at SYN time:** if 1031 has no usable PID (payload 0 and header 0 or 4), the
+   owner is filled from that first 1033/1034 (`[pid-from-outcome]`). KN 12 is not used for
+   either; it decides only when it arrives inside the match window.
 4. **Image names** are resolved on the ETW consumer thread when the event arrives, and are
    checked against PID reuse with the process start key or the process creation time.
    Events without a start key (Kernel-Network, one per datagram) reuse the last
@@ -326,7 +336,9 @@ to the flush delay.
 * **Loopback traffic** does not pass the driver, so it is never reported (it is used only
   for the self-test).
 * **TCP:** a connect issued from kernel mode or one whose 1031 header PID is 0 or 4 has no
-  PID at SYN time; the owner then comes from 1033 / KN 12 one RTT later. A remote RST
+  PID at SYN time; the owner then comes from the attempt's 1033/1034 one RTT later (or
+  from KN 12 if it arrives within 50 ms of the SYN), and its latency includes that RTT. If
+  neither arrives within `--late-ms`, the row shows `no PID`. A remote RST
   (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again, but
   1031 is written once per connect: a retransmission read 50 ms or more after it falls
   outside the strict window and usually gets ETW `none`, unless 1033 / KN 12 arrives
