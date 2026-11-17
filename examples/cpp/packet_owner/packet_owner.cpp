@@ -208,6 +208,20 @@ namespace
 		return s;
 	}
 
+	/// <summary>Adapter friendly names come from the registry in the ANSI code page
+	/// (RegQueryValueExA); the console is switched to UTF-8, so convert them for display.</summary>
+	std::string ansi_to_utf8(const std::string& s)
+	{
+		if (s.empty())
+			return {};
+		const int n = MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+		if (n <= 0)
+			return s;
+		std::wstring w(static_cast<size_t>(n), L'\0');
+		MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()), &w[0], n);
+		return to_utf8(w);
+	}
+
 	std::wstring file_name(const std::wstring& path)
 	{
 		const auto pos = path.find_last_of(L"\\/");
@@ -1316,6 +1330,8 @@ namespace
 	// ----------------------------------------------------------------------------
 	HANDLE g_stop_event = nullptr;
 	HANDLE g_cleanup_done_event = nullptr;
+	/// <summary>Console output code page before main switched it to UTF-8 (0: not switched)</summary>
+	UINT g_saved_output_cp = 0;
 	/// <summary>Set by the console handler; cuts the ETW gates short (attributor_config::cancel_start)</summary>
 	std::atomic<bool> g_stop_requested{false};
 
@@ -1383,7 +1399,7 @@ namespace
 			if (partial_count == 1)
 				return partial;
 			if (partial_count > 1)
-				std::cerr << "adapter name '" << wanted << "' is ambiguous\n";
+				std::cerr << "adapter name '" << ansi_to_utf8(wanted) << "' is ambiguous\n";
 			return std::nullopt;
 		}
 
@@ -1411,18 +1427,25 @@ int main(int argc, char* argv[])
 	}
 	// Declared before the attributor and the filter, so it signals the console handler only
 	// after both are destroyed (ETW session stopped, adapter mode reset) on every return path.
+	// It also restores the console output code page, which outlives the process otherwise.
 	struct cleanup_done_signal
 	{
-		~cleanup_done_signal() { SetEvent(g_cleanup_done_event); }
+		~cleanup_done_signal()
+		{
+			if (g_saved_output_cp != 0)
+				SetConsoleOutputCP(g_saved_output_cp);
+			SetEvent(g_cleanup_done_event);
+		}
 	} cleanup_done;
 	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 
-	SetConsoleOutputCP(CP_UTF8);
-
-	const auto parsed = parse_options(argc, argv);
+	const auto parsed = parse_options(argc, argv); // --help exits here, before the code page changes
 	if (!parsed)
 		return 2;
 	const options opt = *parsed;
+
+	g_saved_output_cp = GetConsoleOutputCP();
+	SetConsoleOutputCP(CP_UTF8);
 
 	if (!is_elevated())
 	{
@@ -1488,10 +1511,13 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	const auto names = filter->get_interface_names_list();
+	const auto names = filter->get_interface_names_list(); // ANSI: matched against argv as is
+	std::vector<std::string> display_names;
+	for (const auto& n : names)
+		display_names.push_back(ansi_to_utf8(n));
 	std::cout << "Available network interfaces:\n\n";
-	for (size_t i = 0; i < names.size(); ++i)
-		std::cout << (i + 1) << ")\t" << names[i] << "\n";
+	for (size_t i = 0; i < display_names.size(); ++i)
+		std::cout << (i + 1) << ")\t" << display_names[i] << "\n";
 
 	const auto adapter = select_adapter(names, opt.adapter);
 	if (!adapter && opt.adapter.empty())
@@ -1525,7 +1551,7 @@ int main(int argc, char* argv[])
 		std::cerr << "Warning: could not query the current filter mode of the selected adapter\n";
 	else if (current_mode.dwFlags != 0)
 	{
-		std::cerr << (opt.force_adapter ? "Warning: " : "Error: ") << "adapter '" << names[*adapter]
+		std::cerr << (opt.force_adapter ? "Warning: " : "Error: ") << "adapter '" << display_names[*adapter]
 			<< "' is already being filtered by another process (filter mode 0x" << std::hex
 			<< current_mode.dwFlags << std::dec << ").\n"
 			"The Windows Packet Filter driver is designed to be used by a single filtering process at a\n"
@@ -1539,7 +1565,7 @@ int main(int argc, char* argv[])
 		std::cerr << "--force-adapter given: starting anyway (unsupported).\n";
 	}
 
-	std::cout << "\nFiltering: " << names[*adapter] << "\n\n";
+	std::cout << "\nFiltering: " << display_names[*adapter] << "\n\n";
 
 	// Ctrl+C only signals g_stop_event (handler installed at the top of main): the gates
 	// below take a few seconds and a default Ctrl+C would leave the ETW session running
