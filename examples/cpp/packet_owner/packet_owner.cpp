@@ -1336,6 +1336,8 @@ namespace
 			// the ETW session within 4 s. During the gates, g_stop_requested cuts the
 			// probes short (about 1.5 s left at most). If the time still runs out, only the
 			// ETW session can be left behind; the next start stops it.
+			// Before anything is started main returns at its next stop check (or the
+			// cleanup_done signal fires on any earlier return), so the wait is short.
 			g_stop_requested = true;
 			SetEvent(g_stop_event);
 			WaitForSingleObject(g_cleanup_done_event, 4000);
@@ -1395,6 +1397,26 @@ namespace
 
 int main(int argc, char* argv[])
 {
+	// The console handler goes in first, so Ctrl+C, Ctrl+Break or a console close at any
+	// point after the image has loaded takes the same path: g_stop_requested is set and
+	// main stops at its next check, before the ETW session or the adapter is touched (or
+	// cleans both up if they already are). Only a signal during process start-up itself,
+	// before main runs, still gets the default handling (nothing is started then).
+	g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	g_cleanup_done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	if (!g_stop_event || !g_cleanup_done_event)
+	{
+		std::cerr << "CreateEvent failed\n";
+		return 1;
+	}
+	// Declared before the attributor and the filter, so it signals the console handler only
+	// after both are destroyed (ETW session stopped, adapter mode reset) on every return path.
+	struct cleanup_done_signal
+	{
+		~cleanup_done_signal() { SetEvent(g_cleanup_done_event); }
+	} cleanup_done;
+	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
 	SetConsoleOutputCP(CP_UTF8);
 
 	const auto parsed = parse_options(argc, argv);
@@ -1416,15 +1438,6 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	g_cleanup_done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	// Declared before the attributor and the filter, so it signals the console handler only
-	// after both are destroyed (ETW session stopped, adapter mode reset) on every return path.
-	struct cleanup_done_signal
-	{
-		~cleanup_done_signal() { SetEvent(g_cleanup_done_event); }
-	} cleanup_done;
-
 	std::mutex output_mutex;
 
 	iphelper::etw::attributor_config config;
@@ -1441,10 +1454,12 @@ int main(int argc, char* argv[])
 
 	if (opt.gates_only)
 	{
-		// Ctrl+C during the gates must not kill the process with the ETW session running.
-		SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-		const bool ok = attributor.start();
-		std::cout << attributor.report().to_string() << "\n";
+		// Ctrl+C during the gates must not kill the process with the ETW session running
+		// (the handler installed at the top of main covers this).
+		const bool stopped_before_start = g_stop_requested.load();
+		const bool ok = !stopped_before_start && attributor.start();
+		if (!stopped_before_start)
+			std::cout << attributor.report().to_string() << "\n";
 		attributor.stop();
 		WSACleanup();
 		if (!ok && g_stop_requested.load())
@@ -1479,6 +1494,13 @@ int main(int argc, char* argv[])
 		std::cout << (i + 1) << ")\t" << names[i] << "\n";
 
 	const auto adapter = select_adapter(names, opt.adapter);
+	if (!adapter && g_stop_requested.load())
+	{
+		// Ctrl+C at the interactive prompt ends the console read.
+		std::cout << "\nStopped during start-up; the adapter was not touched.\n";
+		WSACleanup();
+		return 0;
+	}
 	if (!adapter)
 	{
 		std::cerr << "No valid adapter selected\n";
@@ -1513,14 +1535,16 @@ int main(int argc, char* argv[])
 
 	std::cout << "\nFiltering: " << names[*adapter] << "\n\n";
 
-	// From here on Ctrl+C only signals g_stop_event: the gates below take a few seconds and
-	// a default Ctrl+C would leave the ETW session running until the next start. (Not
-	// earlier: the interactive adapter prompt should stay interruptible.)
-	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-
+	// Ctrl+C only signals g_stop_event (handler installed at the top of main): the gates
+	// below take a few seconds and a default Ctrl+C would leave the ETW session running
+	// until the next start. A stop that arrived before this point skips the gates.
 	bool etw_ok = false;
 	if (opt.no_etw)
 		std::cout << "ETW attribution disabled (--no-etw): IP Helper only\n";
+	else if (g_stop_requested.load())
+	{
+		// Reported as stopped below.
+	}
 	else
 	{
 		std::cout << "Starting ETW session and running the capability gates...\n";

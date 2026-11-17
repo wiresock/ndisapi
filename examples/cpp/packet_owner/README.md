@@ -102,8 +102,12 @@ session", up to about 5 s if probes time out) cuts the self-test probes short, s
 gates end within about 1.5 s; the session is then stopped and the program prints
 "Stopped during start-up" (the self-test detail reads `cancelled`; this is not an ETW
 verdict) and exits without touching the adapter. In the rare worst case where closing the window still takes longer
-than Windows allows, only the ETW session is left behind (stopped by the next start). At
-the interactive adapter prompt Ctrl+C exits immediately (nothing has been started yet).
+than Windows allows, only the ETW session is left behind (stopped by the next start). Ctrl+C,
+Ctrl+Break or closing the window earlier, from the first lines of `main` on (including
+at the interactive adapter prompt), takes the same path: nothing is started, and the
+program prints "Stopped during start-up" and exits. Only a signal during process
+start-up itself, before `main` runs, ends the process with the default Windows handling;
+nothing has been started at that point either.
 
 ### One filtering process per adapter
 
