@@ -1520,8 +1520,12 @@ int main(int argc, char* argv[])
 				" IP Helper only.\n";
 		if (!opt.iph_refresh)
 			std::cout << "IP Helper refresh disabled (--no-iph-refresh): IP Helper shows cached tables only\n";
-		if (opt.dns)
-			std::cout << "Dnscache PID: " << attributor.dnscache_pid(true) << "\n";
+	}
+	if (opt.dns)
+	{
+		// Queried once here, off the packet path. A started attributor refreshes it every 10 s;
+		// without ETW (--no-etw, or gates failed) this start-up value is kept.
+		std::cout << "Dnscache PID: " << attributor.dnscache_pid(true) << "\n";
 	}
 	if (WaitForSingleObject(g_stop_event, 0) == WAIT_OBJECT_0)
 	{

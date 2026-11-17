@@ -923,7 +923,10 @@ namespace iphelper
 				return fail_start("OpenTraceW failed");
 
 			if (config_.enable_dns)
+			{
 				refresh_suffixes();
+				refresh_dnscache_pid();
+			}
 			started_ = true;
 			maintenance_thread_ = std::thread(&etw_packet_attributor::maintenance_proc, this);
 
@@ -1163,19 +1166,18 @@ namespace iphelper
 		}
 
 		// ****************************************************************************
-		/// <summary>Dnscache service PID (QueryServiceStatusEx on "Dnscache"), 0 if unknown.
-		/// Cached for 10 s.</summary>
+		/// <summary>Dnscache service PID, 0 if unknown. Returns a snapshot (no I/O): it is
+		/// queried from the SCM in start() and every 10 s on the maintenance thread (with
+		/// enable_dns), so a caller on the packet path never waits for SCM RPCs.
+		/// refresh = true queries the SCM synchronously on the caller's thread and updates
+		/// the snapshot; use it only off the packet path (e.g. at start-up, or when the
+		/// attributor is not started).</summary>
 		// ****************************************************************************
 		uint32_t dnscache_pid(const bool refresh = false)
 		{
-			const auto now = clock::now();
-			std::lock_guard<std::mutex> lock(dnscache_mutex_);
-			if (refresh || dnscache_pid_ == 0 || now - dnscache_checked_ > std::chrono::seconds(10))
-			{
-				dnscache_pid_ = query_service_pid(L"Dnscache");
-				dnscache_checked_ = now;
-			}
-			return dnscache_pid_;
+			if (refresh)
+				refresh_dnscache_pid();
+			return dnscache_pid_.load();
 		}
 
 		// ****************************************************************************
@@ -1505,6 +1507,8 @@ namespace iphelper
 			CloseHandle(token);
 			return ok;
 		}
+
+		void refresh_dnscache_pid() { dnscache_pid_ = query_service_pid(L"Dnscache"); }
 
 		static uint32_t query_service_pid(const wchar_t* service)
 		{
@@ -3867,12 +3871,14 @@ namespace iphelper
 			if (!fallback_reason.empty())
 				log(fallback_reason);
 			effective_flush_ = mode;
-			live_ = mode != etw::effective_flush::none;
 			{
 				std::lock_guard<std::mutex> lock(report_mutex_);
 				report_.self_test = st;
 				report_.flush = mode;
 			}
+			// After the result is in report_: a concurrent refresh_availability() must not see
+			// live_ with the TCP self-test still unrecorded (it would treat TCP as passed).
+			live_ = mode != etw::effective_flush::none;
 		}
 
 		void run_periodic_self_test()
@@ -3953,7 +3959,7 @@ namespace iphelper
 			}
 
 			bool available;
-			bool tcp_available;
+			bool was;
 			std::string log_line;
 			{
 				std::lock_guard<std::mutex> lock(report_mutex_);
@@ -3993,10 +3999,12 @@ namespace iphelper
 				else if (available)
 					report_.failure.clear();
 				report_.available = available;
-				tcp_available = available && report_.tcp_available;
+				// Publish under the same lock as the computation: two threads refreshing at
+				// once (consumer: new schema; maintenance: self-test) must not leave an older
+				// verdict in the atomics after a newer one.
+				tcp_available_ = available && report_.tcp_available;
+				was = available_.exchange(available);
 			}
-			tcp_available_ = tcp_available;
-			const bool was = available_.exchange(available);
 			// While start() runs its gates, schemas arrive one by one and the verdict is not
 			// final yet ("no accepted UDP send schema" before the first 42/1169): stay quiet.
 			if (!gate_final_.load())
@@ -4014,6 +4022,7 @@ namespace iphelper
 			auto next_loss_check = clock::now() + std::chrono::seconds(5);
 			auto next_self_test = clock::now() + config_.self_test_interval;
 			auto next_suffix_refresh = clock::now() + std::chrono::seconds(30);
+			auto next_dnscache_refresh = clock::now() + std::chrono::seconds(10);
 			ULONG last_lost = 0;
 			bool consumer_dead_logged = false;
 
@@ -4033,6 +4042,11 @@ namespace iphelper
 				{
 					next_suffix_refresh = now + std::chrono::seconds(30);
 					refresh_suffixes();
+				}
+				if (config_.enable_dns && now >= next_dnscache_refresh)
+				{
+					next_dnscache_refresh = now + std::chrono::seconds(10);
+					refresh_dnscache_pid();
 				}
 
 				if (!consumer_running_.load() && !consumer_dead_logged)
@@ -4150,9 +4164,7 @@ namespace iphelper
 		std::atomic<int> self_test_active_{0};
 		int consecutive_self_test_failures_{0};
 
-		std::mutex dnscache_mutex_;
-		uint32_t dnscache_pid_{0};
-		clock::time_point dnscache_checked_{};
+		std::atomic<uint32_t> dnscache_pid_{0};
 
 		mutable std::mutex suffix_mutex_;
 		std::shared_ptr<const std::vector<std::wstring>> suffixes_{std::make_shared<const std::vector<std::wstring>>()};
