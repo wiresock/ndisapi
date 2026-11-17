@@ -798,6 +798,12 @@ namespace iphelper
 			bool ignore_own_process = true;
 			/// <summary>Optional diagnostic sink (called from internal threads)</summary>
 			std::function<void(const std::string&)> log;
+			/// <summary>Optional: while start() runs its gates, a true value makes the
+			/// self-test probes stop waiting and start() fail ("start cancelled") within about
+			/// 1.5 s instead of after up to ~5 s of probe timeouts. Point it at a flag with
+			/// static storage duration (e.g. one set by a console control handler); it is
+			/// read only during start().</summary>
+			const std::atomic<bool>* cancel_start = nullptr;
 		};
 	}
 
@@ -941,6 +947,8 @@ namespace iphelper
 			// Gate 4 (TDH schema) runs on the first event of each (provider, id, version).
 			// Gate 5: the loopback self-test proves liveness and picks the flush mode.
 			run_initial_self_test();
+			if (start_cancelled())
+				return fail_start("start cancelled");
 
 			if (config_.enable_tcp && config_.tcp_rundown && provider_enabled(tcpip_index))
 			{
@@ -3469,6 +3477,12 @@ namespace iphelper
 			return false;
 		}
 
+		/// <summary>config_.cancel_start is set while start() runs its gates</summary>
+		bool start_cancelled() const noexcept
+		{
+			return !gate_final_.load() && config_.cancel_start && config_.cancel_start->load();
+		}
+
 		static bool is_connect_source(const etw::event_source s) noexcept
 		{
 			return s == etw::event_source::tcpip_tcp_connect || s == etw::event_source::tcpip_tcp_connected ||
@@ -3669,7 +3683,7 @@ namespace iphelper
 				{
 					const auto seen = generation();
 					slot_state(sources, first);
-					if (first != 0 || clock::now() >= deadline || stopping_.load())
+					if (first != 0 || clock::now() >= deadline || stopping_.load() || start_cancelled())
 						break;
 					if (use_flush)
 						flush_now();
@@ -3740,7 +3754,7 @@ namespace iphelper
 		                   const std::chrono::milliseconds timeout)
 		{
 			probe_series s;
-			for (int i = 0; i < runs && !stopping_.load(); ++i)
+			for (int i = 0; i < runs && !stopping_.load() && !start_cancelled(); ++i)
 			{
 				const auto r = self_test_once(family, tcp, use_flush, timeout);
 				s.sources |= r.sources;

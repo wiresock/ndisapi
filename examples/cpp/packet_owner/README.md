@@ -96,10 +96,13 @@ Press **Ctrl+C** to stop. The filter is stopped first (this restores the adapter
 releases queued packets), then the final statistics and the gate report are printed, and
 then the ETW session is stopped. Closing the console window does the same within the
 about 5 s Windows allows for it (the adapter mode is restored first; if time runs out,
-only the ETW session is left behind, and the next start stops it). Ctrl+C while the
-gates run (a few seconds after "Starting ETW session") takes effect when they finish: the
-session is stopped and the program exits without touching the adapter. At the
-interactive adapter prompt Ctrl+C exits immediately (nothing has been started yet).
+only the ETW session is left behind, and the next start stops it). Ctrl+C or closing
+the window while the gates run (normally well under a second after "Starting ETW
+session", up to about 5 s if probes time out) cuts the self-test probes short, so the
+gates end within about 1.5 s; the session is then stopped and the program exits without
+touching the adapter. In the rare worst case where closing the window still takes longer
+than Windows allows, only the ETW session is left behind (stopped by the next start). At
+the interactive adapter prompt Ctrl+C exits immediately (nothing has been started yet).
 
 ### One filtering process per adapter
 
@@ -254,8 +257,9 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    process was created no later than the event (a PID is not reused while its process
    object exists), so the process is opened about once per delivered buffer per PID
    rather than once per event.
-5. **DNS search suffixes** (used by tier 2) are loaded at start and refreshed every 30 s
-   on the attributor's maintenance thread; `dns_lookup()` only reads a snapshot.
+5. **DNS search suffixes** (used by tier 2) and the **Dnscache PID** are loaded at start
+   and refreshed on the attributor's maintenance thread (every 30 s and 10 s);
+   `dns_lookup()` and `dnscache_pid()` only read snapshots.
 
 ## Events used
 
@@ -350,8 +354,10 @@ to the flush delay.
   completion case it targets has not been verified; check it with a WFP callout that
   pends connects before relying on it in a product.
 * **Image resolution and DNS suffixes under load:** the per-PID open reuse and the
-  background suffix refresh remove the obvious per-event and per-lookup costs, but neither
-  has been measured at high datagram rates (tens of thousands per second).
+  background refresh of the DNS suffixes and the Dnscache PID remove the obvious per-event
+  and per-lookup costs, but none of this has been measured at high datagram rates (tens
+  of thousands per second). Without ETW (`--no-etw`, or failed gates) the Dnscache PID is
+  read once at start.
 * **Under heavy load on small machines** delivery can exceed the hold budget; such packets
   are reported as `late` (or `none` after `--late-ms`).
 * **Stale sessions:** a killed instance leaves its `NdisApi-PacketOwner-<pid>-<creation>-...`

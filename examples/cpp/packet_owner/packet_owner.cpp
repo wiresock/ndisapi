@@ -1309,6 +1309,8 @@ namespace
 	// ----------------------------------------------------------------------------
 	HANDLE g_stop_event = nullptr;
 	HANDLE g_cleanup_done_event = nullptr;
+	/// <summary>Set by the console handler; cuts the ETW gates short (attributor_config::cancel_start)</summary>
+	std::atomic<bool> g_stop_requested{false};
 
 	BOOL WINAPI console_ctrl_handler(const DWORD type)
 	{
@@ -1316,6 +1318,7 @@ namespace
 		{
 		case CTRL_C_EVENT:
 		case CTRL_BREAK_EVENT:
+			g_stop_requested = true;
 			SetEvent(g_stop_event);
 			return TRUE;
 		case CTRL_CLOSE_EVENT:
@@ -1323,8 +1326,10 @@ namespace
 		case CTRL_SHUTDOWN_EVENT:
 			// The process is terminated when the handler returns, and Windows allows about
 			// 5 s for CTRL_CLOSE_EVENT: let main restore the adapter mode (first) and stop
-			// the ETW session within 4 s. If that runs out, only the ETW session can be
-			// left behind; the next start stops it.
+			// the ETW session within 4 s. During the gates, g_stop_requested cuts the
+			// probes short (about 1.5 s left at most). If the time still runs out, only the
+			// ETW session can be left behind; the next start stops it.
+			g_stop_requested = true;
 			SetEvent(g_stop_event);
 			WaitForSingleObject(g_cleanup_done_event, 4000);
 			return TRUE;
@@ -1419,6 +1424,7 @@ int main(int argc, char* argv[])
 	config.enable_tcp = opt.tcp;
 	config.enable_dns = opt.dns;
 	config.flush = opt.flush;
+	config.cancel_start = &g_stop_requested;
 	config.log = [&output_mutex](const std::string& message)
 	{
 		std::lock_guard<std::mutex> lock(output_mutex);
