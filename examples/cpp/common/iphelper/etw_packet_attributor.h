@@ -4138,12 +4138,19 @@ namespace iphelper
 				}
 				else if (available)
 					report_.failure.clear();
-				report_.available = available;
 				// Publish under the same lock as the computation: two threads refreshing at
 				// once (consumer: new schema; maintenance: self-test) must not leave an older
-				// verdict in the atomics after a newer one.
-				tcp_available_ = available && report_.tcp_available;
-				was = available_.exchange(available);
+				// verdict in the atomics after a newer one. Publish only once start() has run
+				// every gate: a schema that arrives earlier (e.g. 1300 right after the
+				// capture-state request) must not turn available() on before that.
+				if (gate_final_.load())
+				{
+					report_.available = available;
+					tcp_available_ = available && report_.tcp_available;
+					was = available_.exchange(available);
+				}
+				else
+					was = available_.load();
 			}
 			// While start() runs its gates, schemas arrive one by one and the verdict is not
 			// final yet ("no accepted UDP send schema" before the first 42/1169): stay quiet.
