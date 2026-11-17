@@ -903,6 +903,8 @@ namespace iphelper
 			if (!start_consumer())
 				return fail_start("OpenTraceW failed");
 
+			if (config_.enable_dns)
+				refresh_suffixes();
 			started_ = true;
 			maintenance_thread_ = std::thread(&etw_packet_attributor::maintenance_proc, this);
 
@@ -1176,7 +1178,7 @@ namespace iphelper
 				config_.dns_window).count());
 			const auto to = packet_qpc + us_to_qpc(config_.window_after.count());
 			const auto dnscache = dnscache_pid();
-			const auto suffixes = search_suffixes();
+			const auto suffixes = search_suffixes(); // snapshot; refreshed by the maintenance thread
 
 			std::vector<etw::dns_caller> tier1;
 			std::vector<etw::dns_caller> tier2;
@@ -1208,7 +1210,7 @@ namespace iphelper
 							(config_.ignore_own_process && e.caller.pid == own_pid_))
 							continue;
 						bool via_suffix = false;
-						if (!name_matches(wire, e.caller.query_name, suffixes, via_suffix))
+						if (!name_matches(wire, e.caller.query_name, *suffixes, via_suffix))
 							continue;
 						if (!contains(tier2, e.caller.pid))
 						{
@@ -2800,6 +2802,11 @@ namespace iphelper
 			uint64_t start_key{};
 			uint64_t creation{};
 			std::wstring image;
+			/// <summary>QPC taken just before the last OpenProcess that found this PID held by
+			/// the process with this creation time. A PID cannot be reused while any process
+			/// object holds it, so every event written before this moment by this PID with
+			/// a creation time at or before the event came from that process.</summary>
+			int64_t verified_qpc{};
 		};
 
 		void resolve_image(etw::owner_info& owner)
@@ -2825,7 +2832,26 @@ namespace iphelper
 				return;
 			}
 
+			// (pid, creation, time) memo for events without a start key (Kernel-Network, one
+			// per datagram system-wide): an event written before the last successful open of
+			// this PID, by a process created no later than the event, is that process. This
+			// re-opens about once per delivered buffer per PID instead of once per event.
+			const auto event_ft = qpc_to_filetime(owner.event_qpc);
+			constexpr uint64_t tolerance = 20 * 10000; // 20 ms in 100 ns units
+			if (it != image_memo_.end() && it->second.creation != 0 && !it->second.image.empty() &&
+				it->second.verified_qpc != 0 && owner.event_qpc <= it->second.verified_qpc &&
+				it->second.creation <= event_ft + tolerance &&
+				(owner.process_start_key == 0 || it->second.start_key == 0))
+			{
+				if (owner.process_start_key != 0)
+					it->second.start_key = owner.process_start_key;
+				owner.image_path = it->second.image;
+				owner.image_verified = true;
+				return;
+			}
+
 			++image_lookups_;
+			const auto open_qpc = qpc_now();
 			const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner.pid);
 			if (!process)
 			{
@@ -2841,14 +2867,9 @@ namespace iphelper
 				return;
 			}
 
-			FILETIME creation{}, exit_time{}, kernel_time{}, user_time{};
-			uint64_t created = 0;
-			if (GetProcessTimes(process, &creation, &exit_time, &kernel_time, &user_time))
-				created = (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+			const uint64_t created = process_creation_time(process);
 
 			// A process created after the event cannot have emitted it: the PID was reused.
-			const auto event_ft = qpc_to_filetime(owner.event_qpc);
-			constexpr uint64_t tolerance = 20 * 10000; // 20 ms in 100 ns units
 			if (created != 0 && created > event_ft + tolerance)
 			{
 				CloseHandle(process);
@@ -2862,6 +2883,7 @@ namespace iphelper
 			{
 				if (owner.process_start_key != 0)
 					it->second.start_key = owner.process_start_key;
+				it->second.verified_qpc = open_qpc;
 				owner.image_path = it->second.image;
 				owner.image_verified = true;
 				CloseHandle(process);
@@ -2878,7 +2900,7 @@ namespace iphelper
 
 			if (image_memo_.size() > 4096)
 				image_memo_.clear();
-			image_memo_[owner.pid] = image_memo{owner.process_start_key, created, image};
+			image_memo_[owner.pid] = image_memo{owner.process_start_key, created, image, created != 0 ? open_qpc : 0};
 			owner.image_path = std::move(image);
 			owner.image_verified = !owner.image_path.empty();
 			if (!owner.image_verified)
@@ -3186,15 +3208,19 @@ namespace iphelper
 			return s;
 		}
 
-		/// <summary>DNS search suffixes: per-adapter DnsSuffix plus the global/policy
-		/// SearchList and primary domain. Cached for 30 s.</summary>
-		std::vector<std::wstring> search_suffixes()
+		/// <summary>Current DNS search suffix snapshot (never empty pointer, no I/O)</summary>
+		std::shared_ptr<const std::vector<std::wstring>> search_suffixes() const
 		{
 			std::lock_guard<std::mutex> lock(suffix_mutex_);
-			const auto now = clock::now();
-			if (suffix_loaded_ && now - suffix_checked_ < std::chrono::seconds(30))
-				return suffixes_;
+			return suffixes_;
+		}
 
+		/// <summary>Reloads the DNS search suffixes: per-adapter DnsSuffix plus the
+		/// global/policy SearchList and primary domain. GetAdaptersAddresses can take tens of
+		/// ms, so this runs in start() and every 30 s on the maintenance thread, never on a
+		/// dns_lookup() caller's thread.</summary>
+		void refresh_suffixes()
+		{
 			std::vector<std::wstring> out;
 			ULONG size = 16 * 1024;
 			std::vector<uint8_t> buffer;
@@ -3223,10 +3249,9 @@ namespace iphelper
 			add_suffix_list(out, read_registry_string(tcpip, L"NV Domain"));
 			add_suffix_list(out, read_registry_string(tcpip, L"DhcpDomain"));
 
-			suffixes_ = std::move(out);
-			suffix_loaded_ = true;
-			suffix_checked_ = now;
-			return suffixes_;
+			auto snapshot = std::make_shared<const std::vector<std::wstring>>(std::move(out));
+			std::lock_guard<std::mutex> lock(suffix_mutex_);
+			suffixes_ = std::move(snapshot);
 		}
 
 		// ------------------------------------------------------------------------
@@ -3845,6 +3870,7 @@ namespace iphelper
 		{
 			auto next_loss_check = clock::now() + std::chrono::seconds(5);
 			auto next_self_test = clock::now() + config_.self_test_interval;
+			auto next_suffix_refresh = clock::now() + std::chrono::seconds(30);
 			ULONG last_lost = 0;
 			bool consumer_dead_logged = false;
 
@@ -3859,6 +3885,12 @@ namespace iphelper
 
 				prune();
 				const auto now = clock::now();
+
+				if (config_.enable_dns && now >= next_suffix_refresh)
+				{
+					next_suffix_refresh = now + std::chrono::seconds(30);
+					refresh_suffixes();
+				}
 
 				if (!consumer_running_.load() && !consumer_dead_logged)
 				{
@@ -3979,10 +4011,8 @@ namespace iphelper
 		uint32_t dnscache_pid_{0};
 		clock::time_point dnscache_checked_{};
 
-		std::mutex suffix_mutex_;
-		bool suffix_loaded_{false};
-		clock::time_point suffix_checked_{};
-		std::vector<std::wstring> suffixes_;
+		mutable std::mutex suffix_mutex_;
+		std::shared_ptr<const std::vector<std::wstring>> suffixes_{std::make_shared<const std::vector<std::wstring>>()};
 
 		std::atomic<uint64_t> events_total_{0};
 		std::array<std::atomic<uint64_t>, static_cast<size_t>(etw::event_source::count)> events_by_source_{};
