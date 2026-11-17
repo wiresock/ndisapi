@@ -143,6 +143,11 @@ namespace
 					std::cerr << a << " needs a non-negative number\n";
 					return std::nullopt;
 				}
+				if (a == "--stats-sec" && n > 86400) // seconds * 1000 must fit the DWORD wait
+				{
+					std::cerr << "--stats-sec must be at most 86400\n";
+					return std::nullopt;
+				}
 				(a == "--hold-ms"
 					 ? o.hold_ms
 					 : a == "--late-ms"
@@ -350,13 +355,17 @@ namespace
 				return std::nullopt;
 			const auto* ip = reinterpret_cast<const iphdr*>(frame + l2_len);
 			const size_t ihl = static_cast<size_t>(ip->ip_hl) * 4;
-			if (ihl < 20 || length < l2_len + ihl)
+			if (ip->ip_v != 4 || ihl < 20 || length < l2_len + ihl)
 				return std::nullopt;
 			if ((ntohs(ip->ip_off) & 0x1FFF) != 0)
 				return std::nullopt; // non-first fragment
 			protocol = ip->ip_p;
 			l4 = reinterpret_cast<const uint8_t*>(ip) + ihl;
 			l4_len = length - l2_len - ihl;
+			// Use the IP total length when it fits (excludes Ethernet padding); 0 or a larger
+			// value (e.g. a large send offload frame) keeps the frame length.
+			if (const size_t total = ntohs(ip->ip_len); total >= ihl && total - ihl < l4_len)
+				l4_len = total - ihl;
 			out.tuple.family = AF_INET;
 			std::memcpy(out.tuple.local_ip.data(), &ip->ip_src, 4);
 			std::memcpy(out.tuple.remote_ip.data(), &ip->ip_dst, 4);
@@ -368,6 +377,10 @@ namespace
 			const auto* ip6 = reinterpret_cast<const ipv6hdr*>(frame + l2_len);
 			const auto* p = reinterpret_cast<const uint8_t*>(ip6 + 1);
 			size_t remaining = length - l2_len - sizeof(ipv6hdr);
+			// Payload length when it fits (excludes Ethernet padding); 0 (jumbogram, large
+			// send offload) keeps the frame length.
+			if (const size_t payload = ntohs(ip6->ip6_len); payload != 0 && payload < remaining)
+				remaining = payload;
 			uint8_t next = ip6->ip6_next;
 			// Skip hop-by-hop (0), routing (43), destination options (60) and the fragment
 			// header (44) of a first fragment; a non-first fragment has no L4 header.
@@ -704,6 +717,17 @@ namespace
 			QueryPerformanceFrequency(&f);
 			qpc_frequency_ = f.QuadPart;
 			start_qpc_ = iphelper::etw_packet_attributor::qpc_now();
+		}
+
+		~engine() { stop(); }
+
+		engine(const engine&) = delete;
+		engine& operator=(const engine&) = delete;
+
+		void start()
+		{
+			// The CSV is opened (and truncated) only here, after every start-up check passed:
+			// a refused or failed start must not wipe an earlier CSV.
 			if (!opt_.csv_path.empty())
 			{
 				csv_.open(opt_.csv_path, std::ios::out | std::ios::trunc);
@@ -716,10 +740,6 @@ namespace
 				else
 					std::cerr << "cannot open " << opt_.csv_path << "\n";
 			}
-		}
-
-		void start()
-		{
 			if (opt_.iph_refresh)
 				refresher_.start();
 			worker_ = std::thread(&engine::worker_proc, this);
@@ -958,7 +978,9 @@ namespace
 			{
 				if (!iph_done)
 					return false;
-				if (opt_.dns && item.dns && attributor_.dnscache_pid() == item.iph_pid)
+				// A Dnscache PID of 0 is unknown: it must not equal an IP Helper miss (pid 0).
+				if (const auto dnscache = attributor_.dnscache_pid();
+					opt_.dns && item.dns && dnscache != 0 && dnscache == item.iph_pid)
 					item.dnscache_owner = true;
 				return true;
 			}
@@ -1353,7 +1375,9 @@ namespace
 			// probes short (about 1.5 s left at most). If the time still runs out, only the
 			// ETW session can be left behind; the next start stops it.
 			// Before anything is started main returns at its next stop check (or the
-			// cleanup_done signal fires on any earlier return), so the wait is short.
+			// cleanup_done signal fires on any earlier return), so the wait is usually
+			// short. If main is blocked in the adapter prompt and the close does not end
+			// that console read, the full 4 s pass; nothing has been started then.
 			g_stop_requested = true;
 			SetEvent(g_stop_event);
 			WaitForSingleObject(g_cleanup_done_event, 4000);
@@ -1437,7 +1461,9 @@ int main(int argc, char* argv[])
 			SetEvent(g_cleanup_done_event);
 		}
 	} cleanup_done;
-	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+	if (!SetConsoleCtrlHandler(console_ctrl_handler, TRUE))
+		std::cerr << "Warning: SetConsoleCtrlHandler failed (" << GetLastError()
+			<< "): Ctrl+C or closing the console ends the process without cleanup\n";
 
 	const auto parsed = parse_options(argc, argv); // --help exits here, before the code page changes
 	if (!parsed)

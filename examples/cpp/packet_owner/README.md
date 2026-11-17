@@ -81,10 +81,10 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--flush` | How ETW buffers are delivered (see below). Default `auto`. |
 | `--hold-ms` | Budget used to classify an ETW answer as `in-budget` or `late`. Default 75 ms. Nothing is actually held. |
 | `--late-ms` | Stop waiting for an ETW owner after this many ms and report `none`. Default 2000. |
-| `--csv` | Write one row per reported packet. |
+| `--csv` | Write one row per reported packet. The file is created (or truncated) only once the start-up checks have passed. |
 | `--udp-all` | Report every datagram. By default a UDP 5-tuple is reported once per 5 s. With `--dns`, DNS query datagrams are always reported (Dnscache sends all queries from one socket, so per-5-tuple suppression would hide all but the first). |
 | `--tcp-existing` | Also report the first packet of TCP connections whose SYN was not seen (for example, connections opened before the program started). These are matched against any connection event or the TCPIP rundown. |
-| `--stats-sec` | Print statistics periodically. Final statistics are always printed. |
+| `--stats-sec` | Print statistics every N seconds (at most 86400). Final statistics are always printed. |
 | `--quiet` | No per-packet lines. |
 | `--no-etw` | IP Helper only. |
 | `--no-iph-refresh` | Diagnostic: never refresh the IP Helper tables on a miss; the IP Helper column shows only what the cached tables knew. |
