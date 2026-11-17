@@ -1615,6 +1615,12 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
+	// Build the IP Helper tables now: the singletons are created on first use, and the
+	// first lookup would otherwise run GetExtended*Table plus a module lookup per row on
+	// the filter thread (tens to hundreds of ms), with the adapter's traffic queued.
+	(void)iphelper::process_lookup<net::ip_address_v4>::get_process_helper();
+	(void)iphelper::process_lookup<net::ip_address_v6>::get_process_helper();
+
 	eng.set_etw_enabled(etw_ok);
 	eng.start();
 
