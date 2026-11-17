@@ -447,8 +447,9 @@ namespace iphelper
 			int64_t received_qpc{};
 			/// <summary>Number of events this record stands for. UDP records merge consecutive
 			/// events of one owner (same source, PID, start key and image) written within
-			/// 1 ms of the record's first event, so that a busy 5-tuple (Dnscache, a steady
-			/// flow) does not push the event of an earlier packet out of the per-tuple cache.
+			/// 1 ms of the record's first event, so that a busy 5-tuple (a long-lived socket
+			/// sending at a high rate) does not push the event of an earlier packet out of the
+			/// per-tuple cache.
 			/// event_qpc and received_qpc stay those of the first event; 1 for TCP.</summary>
 			uint32_t merged_events{1};
 			/// <summary>Timestamp of the last merged event (== event_qpc if merged_events is 1)</summary>

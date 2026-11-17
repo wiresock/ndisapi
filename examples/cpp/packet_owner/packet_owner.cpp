@@ -738,7 +738,7 @@ namespace
 						"verdict,dns_qname,dns_qtype,dns_tier,dns_callers,dns_wire_confirmed,"
 						"etw_pid_from_header,tcp_outcome,tcp_connect_status,etw_overridden_header_pid,etw_pid_from_outcome\n";
 				else
-					std::cerr << "cannot open " << opt_.csv_path << "\n";
+					std::cerr << "cannot open " << ansi_to_utf8(opt_.csv_path) << "\n";
 			}
 			if (opt_.iph_refresh)
 				refresher_.start();
