@@ -160,7 +160,10 @@ not a lock: a filter that starts between the check and `packet_owner`'s own
   or `(unknown)` if neither arrived within `--late-ms`. The event and latency shown are
   still those of the first matching event; the owner is too, unless a 1033/1034 payload
   PID overrode a 1031 header PID. With `[pid-from-outcome]` the event, its time and the
-  latency are those of the 1033/1034, because the owner was not known before it.
+  latency are those of the 1033/1034, because the owner was not known before it. That
+  latency is about one RTT (connect time, not ETW delivery), so such a row is usually
+  `late`, and it is left out of the latency statistics (`ETW delivery latency` summary
+  and the latency histogram); the statistics count these rows as `owner from outcome N`.
 * Verdict: `agree`, `DISAGREE`, `etw-only`, `iph-only` or `neither`.
 * CSV columns added after `dns_wire_confirmed`: `etw_pid_from_header`, `tcp_outcome`
   (`connected` / `failed` / `unknown`), `tcp_connect_status` (the 1034 status) and
@@ -350,9 +353,10 @@ to the flush delay.
 * **TCP:** a connect issued from kernel mode or one whose 1031 header PID is 0 or 4 has no
   PID at SYN time; the owner then comes from the attempt's 1033/1034 one RTT later (or
   from KN 12 if it arrives within 50 ms of the SYN), and its latency includes that RTT. If
-  neither arrives within `--late-ms`, the row shows `no PID`. A remote RST
+  neither arrives within `--late-ms`, the row shows `no PID`. Such rows are not part of
+  the latency statistics (see "Output"). A remote RST
   (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again, but
-  1031 is written once per connect: a retransmission read 50 ms or more after it falls
+  1031 is written once per connect (as measured, see "Matching"): a retransmission read 50 ms or more after it falls
   outside the strict window and usually gets ETW `none`, unless 1033 / KN 12 arrives
   within 50 ms of the retransmission.
 * **Header PID override (1031 vs 1033/1034)** is implemented but the asynchronous

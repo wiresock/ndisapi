@@ -631,6 +631,7 @@ namespace
 		uint64_t etw_late{};
 		uint64_t etw_none{};
 		uint64_t etw_unknown_pid{};
+		uint64_t etw_pid_from_outcome{}; // owner filled from 1033/1034: not in latency_ms
 		uint64_t agree{};
 		uint64_t disagree{};
 		uint64_t etw_only{};
@@ -787,6 +788,7 @@ namespace
 				os << "  ETW: in budget " << s.etw_in_budget << " (" << percent(s.etw_in_budget, s.total) << "), late "
 					<< s.etw_late << " (" << percent(s.etw_late, s.total) << "), none " << s.etw_none << " ("
 					<< percent(s.etw_none, s.total) << "), event without PID " << s.etw_unknown_pid
+					<< ", owner from outcome " << s.etw_pid_from_outcome << " (not in latency)"
 					<< "; image unverified " << s.image_unverified << ", conflicts " << s.conflicts << "\n"
 					<< "  ETW delivery latency: " << latency_summary(s.latency_ms) << "\n"
 					<< "  verdict: agree " << s.agree << ", disagree " << s.disagree << ", ETW only " << s.etw_only
@@ -966,7 +968,8 @@ namespace
 			{
 				// Keep the SYN until 1033/KN 12 (connected) or 1034 (failed, with its status)
 				// is seen, so the row can show the outcome even though 1031 decided the owner.
-				// The owner and its latency stay those of the first match.
+				// The owner and its latency stay those of the first match, unless a 1033/1034
+				// of the same connect attempt overrides the header PID or fills a missing PID.
 				item.tcp_outcome_done = attributor_.tcp_outcome(item.tuple, item.qpc, *item.etw) || expired;
 				if (!item.tcp_outcome_done)
 					return false;
@@ -1141,7 +1144,11 @@ namespace
 						++s.etw_unknown_pid;
 					else
 						++s.etw_none;
-					if (etw_found && latency >= 0 && s.latency_ms.size() < 2000000)
+					// An owner filled from 1033/1034 (pid_from_outcome) is delivered about one RTT
+					// after the SYN: its latency measures the connect, not ETW delivery.
+					if (etw_found && item.etw->pid_from_outcome)
+						++s.etw_pid_from_outcome;
+					else if (etw_found && latency >= 0 && s.latency_ms.size() < 2000000)
 						s.latency_ms.push_back(latency);
 					if (etw_found && !item.etw->image_verified)
 						++s.image_unverified;

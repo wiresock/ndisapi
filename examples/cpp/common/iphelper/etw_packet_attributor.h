@@ -744,7 +744,8 @@ namespace iphelper
 			ULONG events_lost{};
 			ULONG log_buffers_lost{};
 			ULONG realtime_buffers_lost{};
-			/// <summary>Delivery latency (event received - packet read) of matches;
+			/// <summary>Delivery latency (event received - packet read) of matches, except
+			/// owners filled from 1033/1034 (pid_from_outcome: that is connect time);
 			/// slot i counts latency in (bound[i-1], bound[i]]; the last slot counts > 1000 ms</summary>
 			std::array<uint64_t, latency_bucket_ms.size() + 1> latency_histogram{};
 		};
@@ -1349,7 +1350,10 @@ namespace iphelper
 			++matches_;
 			if (r.conflict)
 				++conflicts_;
-			record_latency(r.received_qpc - packet_qpc);
+			// An owner filled from 1033/1034 arrives about one RTT after the SYN: that is
+			// connect time, not delivery latency, so it stays out of the histogram.
+			if (!r.pid_from_outcome)
+				record_latency(r.received_qpc - packet_qpc);
 		}
 
 		// ------------------------------------------------------------------------
