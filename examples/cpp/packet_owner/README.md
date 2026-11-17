@@ -187,7 +187,11 @@ or objects, without touching each other's session (on one adapter the driver sti
 allows only one of them, see above; `--gates-only` does not use the driver). An existing
 session with the same name is never stopped; `start()` fails instead. (Exception: if a
 STOP of the object's own session failed, which is logged, the next `start()` of that
-object retries it.) At start, sessions with that
+object retries it, and keeps retrying on later `start()` calls until a STOP succeeds.
+If a DLL whose STOP failed is unloaded and loaded again at the same base address, its
+counter restarts and a new object can get the leaked session's name: that object's
+`start()` fails with "already exists" (it never stops the leaked session) and it gets no
+ETW until the process exits or the session is stopped by hand.) At start, sessions with that
 prefix whose process (PID and creation time) no longer runs are stopped: they were left
 behind by a killed instance (a real-time session outlives its process). Sessions of
 running processes are never stopped, and a reused PID does not make a live session look

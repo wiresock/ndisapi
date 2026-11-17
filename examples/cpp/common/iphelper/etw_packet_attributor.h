@@ -1723,7 +1723,9 @@ namespace iphelper
 					auto stop = make_properties();
 					const auto stop_status =
 						ControlTraceW(0, session_name_.c_str(), stop.get(), EVENT_TRACE_CONTROL_STOP);
-					own_stop_failed_ = false;
+					// Keep the flag on failure so that a later start() retries again.
+					own_stop_failed_ = stop_status != ERROR_SUCCESS && stop_status != ERROR_MORE_DATA &&
+						stop_status != ERROR_WMI_INSTANCE_NOT_FOUND;
 					log("retried STOP of this object's own session " + narrow(session_name_) + ", status=" +
 						std::to_string(stop_status));
 				}
