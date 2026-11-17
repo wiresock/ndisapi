@@ -3754,8 +3754,15 @@ namespace iphelper
 		                   const std::chrono::milliseconds timeout)
 		{
 			probe_series s;
-			for (int i = 0; i < runs && !stopping_.load() && !start_cancelled(); ++i)
+			for (int i = 0; i < runs && !stopping_.load(); ++i)
 			{
+				if (start_cancelled())
+				{
+					// A cut series is not a pass (an empty loop would leave ok == true).
+					s.ok = false;
+					s.error = "cancelled";
+					break;
+				}
 				const auto r = self_test_once(family, tcp, use_flush, timeout);
 				s.sources |= r.sources;
 				if (tcp)
@@ -3797,6 +3804,25 @@ namespace iphelper
 			return ok;
 		}
 
+		/// <summary>Records a self-test cut short by config.cancel_start: no probe result,
+		/// no flush mode, no log line (start() then fails with "start cancelled").</summary>
+		void record_cancelled_self_test()
+		{
+			etw::self_test_status st;
+			st.ran = true;
+			st.runs = 1;
+			st.failures = 1;
+			st.detail = "cancelled";
+			st.own_pid = own_pid_;
+			effective_flush_ = etw::effective_flush::none;
+			{
+				std::lock_guard<std::mutex> lock(report_mutex_);
+				report_.self_test = st;
+				report_.flush = etw::effective_flush::none;
+			}
+			live_ = false;
+		}
+
 		void run_initial_self_test()
 		{
 			etw::self_test_status st;
@@ -3818,6 +3844,8 @@ namespace iphelper
 			if (ms_bit_kept && config_.flush != etw::flush_mode::on_demand)
 			{
 				const auto t = probe(AF_INET, false, false, 5, std::chrono::milliseconds(500));
+				if (start_cancelled())
+					return record_cancelled_self_test();
 				st.timer_samples = t.samples;
 				st.timer_ms = t.ok ? t.median : -1;
 				st.timer_ok = t.ok && t.median <= 50.0;
@@ -3832,6 +3860,8 @@ namespace iphelper
 					<< "); ";
 
 			const auto od = probe(AF_INET, false, true, 3, std::chrono::milliseconds(1500));
+			if (start_cancelled())
+				return record_cancelled_self_test();
 			st.ipv4_ok = od.ok;
 			st.on_demand_ms = od.ok ? od.worst : -1;
 			st.on_demand_samples = od.samples;
@@ -3843,6 +3873,8 @@ namespace iphelper
 			{
 				st.ipv6_attempted = true;
 				const auto v6 = probe(AF_INET6, false, true, 1, std::chrono::milliseconds(1500));
+				if (start_cancelled())
+					return record_cancelled_self_test();
 				st.ipv6_ok = v6.ok;
 				st.ipv6_sources = v6.sources;
 				if (!v6.ok)
@@ -3853,6 +3885,8 @@ namespace iphelper
 			{
 				st.tcp_attempted = true;
 				const auto t = probe(AF_INET, true, true, 2, std::chrono::milliseconds(1500));
+				if (start_cancelled())
+					return record_cancelled_self_test();
 				st.tcp_ok = t.ok;
 				st.tcp_on_demand_ms = t.ok ? t.worst : -1;
 				st.tcp_sources = t.sources;

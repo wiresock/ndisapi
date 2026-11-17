@@ -1513,7 +1513,12 @@ int main(int argc, char* argv[])
 		std::cout << "Starting ETW session and running the capability gates...\n";
 		etw_ok = attributor.start();
 		std::cout << attributor.report().to_string() << "\n";
-		if (!etw_ok)
+		if (!etw_ok && g_stop_requested.load())
+		{
+			// Ctrl+C or console close during the gates: not a capability verdict (the
+			// "Stopped during start-up" line follows below).
+		}
+		else if (!etw_ok)
 		{
 			std::cout << "\nETW attribution is NOT available on this system (" << attributor.report().failure
 				<< ").\nContinuing with IP Helper only.\n";
