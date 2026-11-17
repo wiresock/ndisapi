@@ -229,7 +229,7 @@ namespace
 
 	std::string csv_escape(const std::string& s)
 	{
-		if (s.find_first_of(",\"\n") == std::string::npos)
+		if (s.find_first_of(",\"\r\n") == std::string::npos)
 			return s;
 		std::string r = "\"";
 		for (const auto c : s)
@@ -316,44 +316,67 @@ namespace
 		uint8_t protocol = 0;
 		parsed_packet out;
 
-		if (ntohs(eth->h_proto) == ETH_P_IP)
+		// Skip up to two 802.1Q / 802.1ad tags (NDIS normally moves the tag out of band,
+		// but a tagged frame must not be dropped from the report).
+		size_t l2_len = sizeof(ether_header);
+		uint16_t ether_type = ntohs(eth->h_proto);
+		for (int tags = 0; tags < 2 && (ether_type == 0x8100 || ether_type == 0x88A8); ++tags)
 		{
-			if (length < sizeof(ether_header) + sizeof(iphdr))
+			if (length < l2_len + 4)
 				return std::nullopt;
-			const auto* ip = reinterpret_cast<const iphdr*>(eth + 1);
+			uint16_t inner = 0;
+			std::memcpy(&inner, frame + l2_len + 2, sizeof(inner));
+			ether_type = ntohs(inner);
+			l2_len += 4;
+		}
+
+		if (ether_type == ETH_P_IP)
+		{
+			if (length < l2_len + sizeof(iphdr))
+				return std::nullopt;
+			const auto* ip = reinterpret_cast<const iphdr*>(frame + l2_len);
 			const size_t ihl = static_cast<size_t>(ip->ip_hl) * 4;
-			if (ihl < 20 || length < sizeof(ether_header) + ihl)
+			if (ihl < 20 || length < l2_len + ihl)
 				return std::nullopt;
 			if ((ntohs(ip->ip_off) & 0x1FFF) != 0)
 				return std::nullopt; // non-first fragment
 			protocol = ip->ip_p;
 			l4 = reinterpret_cast<const uint8_t*>(ip) + ihl;
-			l4_len = length - sizeof(ether_header) - ihl;
+			l4_len = length - l2_len - ihl;
 			out.tuple.family = AF_INET;
 			std::memcpy(out.tuple.local_ip.data(), &ip->ip_src, 4);
 			std::memcpy(out.tuple.remote_ip.data(), &ip->ip_dst, 4);
 		}
-		else if (ntohs(eth->h_proto) == ETH_P_IPV6)
+		else if (ether_type == ETH_P_IPV6)
 		{
-			if (length < sizeof(ether_header) + sizeof(ipv6hdr))
+			if (length < l2_len + sizeof(ipv6hdr))
 				return std::nullopt;
-			const auto* ip6 = reinterpret_cast<const ipv6hdr*>(eth + 1);
+			const auto* ip6 = reinterpret_cast<const ipv6hdr*>(frame + l2_len);
 			const auto* p = reinterpret_cast<const uint8_t*>(ip6 + 1);
-			size_t remaining = length - sizeof(ether_header) - sizeof(ipv6hdr);
+			size_t remaining = length - l2_len - sizeof(ipv6hdr);
 			uint8_t next = ip6->ip6_next;
-			// Skip hop-by-hop (0), routing (43) and destination options (60)
-			for (int i = 0; i < 8 && (next == 0 || next == 43 || next == 60); ++i)
+			// Skip hop-by-hop (0), routing (43), destination options (60) and the fragment
+			// header (44) of a first fragment; a non-first fragment has no L4 header.
+			for (int i = 0; i < 8 && (next == 0 || next == 43 || next == 60 || next == 44); ++i)
 			{
 				if (remaining < 8)
 					return std::nullopt;
-				const size_t ext = (static_cast<size_t>(p[1]) + 1) * 8;
+				size_t ext;
+				if (next == 44)
+				{
+					if (((static_cast<unsigned>(p[2]) << 8 | p[3]) & 0xFFF8u) != 0)
+						return std::nullopt; // non-first fragment
+					ext = 8;
+				}
+				else
+					ext = (static_cast<size_t>(p[1]) + 1) * 8;
 				if (remaining < ext)
 					return std::nullopt;
 				next = p[0];
 				p += ext;
 				remaining -= ext;
 			}
-			protocol = next; // fragments (44) are ignored
+			protocol = next;
 			l4 = p;
 			l4_len = remaining;
 			out.tuple.family = AF_INET6;
@@ -737,7 +760,17 @@ namespace
 
 		void print_stats(const bool final_stats)
 		{
-			std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+			// Copy under the lock, sort and format outside it: latency_summary() sorts up to
+			// 2M samples per block, which must not block finalize() on the worker.
+			proto_stats udp, tcp_syn, tcp_existing;
+			dns_stats dns;
+			{
+				std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+				udp = udp_;
+				tcp_syn = tcp_syn_;
+				tcp_existing = tcp_existing_;
+				dns = dns_;
+			}
 			std::ostringstream os;
 			os << "\n==== " << (final_stats ? "final statistics" : "statistics") << " (hold budget " << opt_.hold_ms
 				<< " ms, late limit " << opt_.late_ms << " ms) ====\n";
@@ -759,15 +792,15 @@ namespace
 					<< "  verdict: agree " << s.agree << ", disagree " << s.disagree << ", ETW only " << s.etw_only
 					<< ", IP Helper only " << s.iph_only << ", neither " << s.neither << "\n";
 			};
-			block("UDP", udp_);
-			block("TCP SYN", tcp_syn_);
-			block("TCP existing", tcp_existing_);
-			if (opt_.dns && dns_.dnscache_queries)
+			block("UDP", udp);
+			block("TCP SYN", tcp_syn);
+			block("TCP existing", tcp_existing);
+			if (opt_.dns && dns.dnscache_queries)
 			{
-				os << "DNS (queries sent by Dnscache): " << dns_.dnscache_queries << ", tier1 (ClientPID) " << dns_.tier1
-					<< ", tier2 (3006 header PID) " << dns_.tier2 << ", no caller " << dns_.none << ", several callers "
-					<< dns_.multi_caller << ", via search suffix " << dns_.suffix << ", wire-confirmed "
-					<< dns_.wire_confirmed << "\n";
+				os << "DNS (queries sent by Dnscache): " << dns.dnscache_queries << ", tier1 (ClientPID) " << dns.tier1
+					<< ", tier2 (3006 header PID) " << dns.tier2 << ", no caller " << dns.none << ", several callers "
+					<< dns.multi_caller << ", via search suffix " << dns.suffix << ", wire-confirmed "
+					<< dns.wire_confirmed << "\n";
 			}
 			if (etw_enabled_)
 			{
@@ -804,7 +837,7 @@ namespace
 					<< " misses (max " << refresher_.max_us() << " us, min interval " << opt_.iph_refresh_ms << " ms)\n";
 			else
 				os << "IP Helper refresh off (--no-iph-refresh)\n";
-			os << "queue dropped " << queue_dropped_.load() << ", UDP duplicates suppressed " << udp_suppressed_ << "\n";
+			os << "queue dropped " << queue_dropped_.load() << ", UDP duplicates suppressed " << udp_suppressed_.load() << "\n";
 			std::lock_guard<std::mutex> lock(output_mutex_);
 			std::cout << os.str() << std::flush;
 		}
@@ -985,20 +1018,24 @@ namespace
 				const auto generation = attributor_.generation();
 				const auto now = clock_type::now();
 				size_t waiting_for_owner = 0;
-				for (auto it = pending.begin(); it != pending.end();)
+				// Compact in place (order kept): erasing from the middle of a vector of
+				// ~2000 items per pass was quadratic.
+				size_t kept = 0;
+				for (size_t i = 0; i < pending.size(); ++i)
 				{
-					if (try_resolve(*it, now))
+					auto& item = pending[i];
+					if (try_resolve(item, now))
 					{
-						finalize(*it);
-						it = pending.erase(it);
+						finalize(item);
+						continue;
 					}
-					else
-					{
-						if (it->etw_attempted && !it->etw)
-							++waiting_for_owner;
-						++it;
-					}
+					if (item.etw_attempted && !item.etw)
+						++waiting_for_owner;
+					if (kept != i)
+						pending[kept] = std::move(item);
+					++kept;
 				}
+				pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(kept), pending.end());
 				if (waiting_for_owner != 0)
 				{
 					// Only items still waiting for their owner drive on-demand flushes; items
@@ -1259,7 +1296,8 @@ namespace
 		proto_stats tcp_syn_;
 		proto_stats tcp_existing_;
 		dns_stats dns_;
-		uint64_t udp_suppressed_{};
+		/// <summary>Written by the worker, read by print_stats on the main thread</summary>
+		std::atomic<uint64_t> udp_suppressed_{0};
 
 		std::mutex csv_mutex_;
 		std::ofstream csv_;
@@ -1282,8 +1320,10 @@ namespace
 		case CTRL_CLOSE_EVENT:
 		case CTRL_LOGOFF_EVENT:
 		case CTRL_SHUTDOWN_EVENT:
-			// The process is terminated when the handler returns: let main restore the
-			// adapter mode and stop the ETW session first.
+			// The process is terminated when the handler returns, and Windows allows about
+			// 5 s for CTRL_CLOSE_EVENT: let main restore the adapter mode (first) and stop
+			// the ETW session within 4 s. If that runs out, only the ETW session can be
+			// left behind; the next start stops it.
 			SetEvent(g_stop_event);
 			WaitForSingleObject(g_cleanup_done_event, 4000);
 			return TRUE;
@@ -1365,6 +1405,12 @@ int main(int argc, char* argv[])
 
 	g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 	g_cleanup_done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	// Declared before the attributor and the filter, so it signals the console handler only
+	// after both are destroyed (ETW session stopped, adapter mode reset) on every return path.
+	struct cleanup_done_signal
+	{
+		~cleanup_done_signal() { SetEvent(g_cleanup_done_event); }
+	} cleanup_done;
 
 	std::mutex output_mutex;
 
@@ -1381,6 +1427,8 @@ int main(int argc, char* argv[])
 
 	if (opt.gates_only)
 	{
+		// Ctrl+C during the gates must not kill the process with the ETW session running.
+		SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 		const bool ok = attributor.start();
 		std::cout << attributor.report().to_string() << "\n";
 		attributor.stop();
@@ -1421,6 +1469,9 @@ int main(int argc, char* argv[])
 	// The driver is designed for one filtering process at a time: a non-zero adapter mode
 	// means another process already filters this adapter. Starting anyway is unsupported:
 	// on exit the adapter mode is reset to 0, which stops the other process's filtering too.
+	// The driver resets the mode when its owning process exits or crashes, so a non-zero
+	// mode is a live filter. This is a check, not a lock: a filter that starts between it
+	// and start_filter() is not detected (the driver has no exclusive-open call for this).
 	ADAPTER_MODE current_mode{filter->get_interface_list()[*adapter]->get_adapter(), 0};
 	if (!filter->GetAdapterMode(&current_mode))
 		std::cerr << "Warning: could not query the current filter mode of the selected adapter\n";
@@ -1441,6 +1492,11 @@ int main(int argc, char* argv[])
 	}
 
 	std::cout << "\nFiltering: " << names[*adapter] << "\n\n";
+
+	// From here on Ctrl+C only signals g_stop_event: the gates below take a few seconds and
+	// a default Ctrl+C would leave the ETW session running until the next start. (Not
+	// earlier: the interactive adapter prompt should stay interruptible.)
+	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 
 	bool etw_ok = false;
 	if (opt.no_etw)
@@ -1466,10 +1522,16 @@ int main(int argc, char* argv[])
 		if (opt.dns)
 			std::cout << "Dnscache PID: " << attributor.dnscache_pid(true) << "\n";
 	}
+	if (WaitForSingleObject(g_stop_event, 0) == WAIT_OBJECT_0)
+	{
+		std::cout << "\nStopped during start-up; the adapter was not touched.\n";
+		attributor.stop();
+		WSACleanup();
+		return 0;
+	}
+
 	eng.set_etw_enabled(etw_ok);
 	eng.start();
-
-	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 
 	if (!filter->start_filter(*adapter))
 	{
@@ -1496,6 +1558,5 @@ int main(int argc, char* argv[])
 	filter.reset();
 	WSACleanup();
 	std::cout << "Done.\n";
-	SetEvent(g_cleanup_done_event);
 	return 0;
 }
