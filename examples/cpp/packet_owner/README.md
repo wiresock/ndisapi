@@ -106,9 +106,13 @@ window is closed). Ctrl+C, Ctrl+Break or closing the window earlier, from the fi
 of `main` on, takes the same path: nothing is started, and the program prints "Stopped
 during start-up" and exits. This includes the interactive adapter prompt: it waits for
 the typed line and for the stop signal at the same time (returning from a console
-control handler does not end a blocking console read), so it returns at once. Only a
-signal during process start-up itself, before `main` runs, ends the process with the
-default Windows handling; nothing has been started at that point either.
+control handler does not end a blocking console read), so it returns at once. A Ctrl+C
+or Ctrl+Break typed into the console can end that read before the handler has run, so
+invalid input typed at the console is reported only after up to 500 ms; redirected input
+is answered at once. Ctrl+C works even if the process was started with Ctrl+C disabled
+(for example with `CREATE_NEW_PROCESS_GROUP`): `main` turns normal Ctrl+C processing back
+on. Only a signal during process start-up itself, before `main` runs, ends the process
+with the default Windows handling; nothing has been started at that point either.
 
 ### One filtering process per adapter
 

@@ -1391,8 +1391,8 @@ namespace
 	/// Reads one line from stdin for the adapter prompt, or returns nullopt on EOF, a read
 	/// error or a stop request (g_stop_event).
 	/// Returning from the console control handler does not end a blocking console read
-	/// (measured for Ctrl+C and Ctrl+Break sent with GenerateConsoleCtrlEvent: std::cin
-	/// stayed blocked), and the handler only signals main. So the read runs on a helper thread
+	/// (measured with Ctrl+Break sent by GenerateConsoleCtrlEvent: std::cin stayed
+	/// blocked), and the handler only signals main. So the read runs on a helper thread
 	/// with ReadFile (not std::cin: a CRT stream lock held by a blocked thread could stall
 	/// the CRT shutdown in exit()), and main waits for either the line or g_stop_event.
 	/// On a stop request main returns normally (code page restored, nothing started); the
@@ -1424,17 +1424,10 @@ namespace
 			const HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
 			char c = 0;
 			DWORD n = 0;
-			DWORD error = ERROR_SUCCESS;
-			// One byte at a time: never reads past the line from a pipe or file
-			for (;;)
+			// One byte at a time: never reads past the line from a pipe or file.
+			// EOF is success with 0 bytes.
+			while (ReadFile(in, &c, 1, &n, nullptr) && n == 1)
 			{
-				SetLastError(ERROR_SUCCESS);
-				const BOOL read = ReadFile(in, &c, 1, &n, nullptr);
-				if (!read || n == 0)
-				{
-					error = GetLastError(); // EOF: success with 0 bytes
-					break;
-				}
 				if (c == '\n')
 				{
 					state->ok = true;
@@ -1443,15 +1436,7 @@ namespace
 				if (c != '\r')
 					state->line.push_back(c);
 			}
-			if (!state->ok && error == ERROR_OPERATION_ABORTED)
-			{
-				// Ctrl+C typed into the console ends a line-mode console read with 0 bytes
-				// and ERROR_OPERATION_ABORTED, possibly before the handler has run on its
-				// own thread: it is the same stop request.
-				g_stop_requested = true;
-				SetEvent(g_stop_event);
-			}
-			else if (!state->ok && !state->line.empty())
+			if (!state->ok && !state->line.empty())
 				state->ok = true; // last line without a newline (redirected stdin)
 			SetEvent(state->done);
 		}).detach();
@@ -1504,16 +1489,24 @@ namespace
 		}
 
 		std::cout << "\nSelect interface to filter: " << std::flush;
-		auto line = read_line_or_stop();
-		if (!line)
-			return std::nullopt;
-		const auto first = line->find_first_not_of(" \t");
-		const auto last = line->find_last_not_of(" \t");
-		int index = 0;
-		if (first == std::string::npos || !parse_int(line->substr(first, last - first + 1), index) ||
-			index < 1 || static_cast<size_t>(index) > names.size())
-			return std::nullopt;
-		return static_cast<size_t>(index - 1);
+		if (const auto line = read_line_or_stop())
+		{
+			const auto first = line->find_first_not_of(" \t");
+			const auto last = line->find_last_not_of(" \t");
+			int index = 0;
+			if (first != std::string::npos && parse_int(line->substr(first, last - first + 1), index) &&
+				index >= 1 && static_cast<size_t>(index) <= names.size())
+				return static_cast<size_t>(index - 1);
+		}
+		// Ctrl+C or Ctrl+Break typed into the console also ends the console read (measured:
+		// it came back as bad input), and the console runs the handler on a thread of its
+		// own, which can set g_stop_event only a little later. So for console input, wait
+		// up to 500 ms for that stop request before the caller reports bad input or EOF.
+		// Redirected input (file, pipe, NUL) is answered at once.
+		DWORD console_mode = 0;
+		if (GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &console_mode))
+			WaitForSingleObject(g_stop_event, 500);
+		return std::nullopt;
 	}
 }
 
@@ -1546,6 +1539,11 @@ int main(int argc, char* argv[])
 	if (!SetConsoleCtrlHandler(console_ctrl_handler, TRUE))
 		std::cerr << "Warning: SetConsoleCtrlHandler failed (" << GetLastError()
 			<< "): Ctrl+C or closing the console ends the process without cleanup\n";
+	// A process started with CREATE_NEW_PROCESS_GROUP, or by a parent that ignores Ctrl+C,
+	// inherits the "ignore CTRL+C" attribute, and then no handler is called for CTRL+C
+	// (only for Ctrl+Break and close). Restore normal CTRL+C processing, after the handler
+	// is in place, so Ctrl+C always takes the clean stop path.
+	SetConsoleCtrlHandler(nullptr, FALSE);
 
 	const auto parsed = parse_options(argc, argv); // --help exits here, before the code page changes
 	if (!parsed)
