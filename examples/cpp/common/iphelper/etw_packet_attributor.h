@@ -1235,7 +1235,7 @@ namespace iphelper
 				if (now >= deadline)
 					break;
 				request_flush(waiters_.load());
-				wait_for_events(seen, std::min(deadline, now + std::chrono::milliseconds(flush_interval_ms_.load())));
+				wait_for_events(seen, (std::min)(deadline, now + std::chrono::milliseconds(flush_interval_ms_.load())));
 			}
 			++timeouts_;
 			return std::nullopt;
@@ -1296,7 +1296,7 @@ namespace iphelper
 				// 10 ms once the backlog clears.
 				auto interval = flush_interval_ms_.load();
 				if (pending > 64 || us > 5000)
-					interval = std::min<uint32_t>(interval * 2, 50);
+					interval = (std::min<uint32_t>)(interval * 2, 50);
 				else
 					interval = 10;
 				flush_interval_ms_.store(interval);
@@ -1415,7 +1415,7 @@ namespace iphelper
 				if (now >= deadline)
 					return r;
 				request_flush(waiters_.load());
-				wait_for_events(seen, std::min(deadline, now + std::chrono::milliseconds(flush_interval_ms_.load())));
+				wait_for_events(seen, (std::min)(deadline, now + std::chrono::milliseconds(flush_interval_ms_.load())));
 			}
 		}
 
@@ -1930,7 +1930,7 @@ namespace iphelper
 			auto props = make_properties();
 			SYSTEM_INFO si{};
 			GetSystemInfo(&si);
-			const ULONG cpus = std::max<ULONG>(1, si.dwNumberOfProcessors);
+			const ULONG cpus = (std::max<ULONG>)(1, si.dwNumberOfProcessors);
 
 			props->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
 			props->Wnode.ClientContext = 1; // QPC: raw timestamps are comparable with QueryPerformanceCounter
@@ -2485,7 +2485,7 @@ namespace iphelper
 				{
 					detail << narrow(schema->props[found].name) << ":ok ";
 					schema->field_prop[spec.id] = found;
-					schema->last_needed = std::max(schema->last_needed, found);
+					schema->last_needed = (std::max)(schema->last_needed, found);
 				}
 				else
 				{
@@ -3125,7 +3125,7 @@ namespace iphelper
 						// DoH for the known caller only (an answer without a caller matches any
 						// caller's 8043, see doh_seen_locked()).
 						k->answer.doh = k->answer.doh || doh_seen_locked(c.name, k->answer.client_pid, c.event_qpc);
-						k->received_qpc = std::max(k->received_qpc, received);
+						k->received_qpc = (std::max)(k->received_qpc, received);
 						continue;
 					}
 				}
@@ -3148,7 +3148,7 @@ namespace iphelper
 						// for any caller) is not carried over.
 						if (!has_own)
 						{
-							const auto kept_received = std::max(u->received_qpc, received);
+							const auto kept_received = (std::max)(u->received_qpc, received);
 							u->answer = c;
 							u->received_qpc = kept_received;
 							continue;
@@ -3168,7 +3168,7 @@ namespace iphelper
 					if (c.event_qpc >= r->answer.event_qpc)
 						r->answer = c;
 					r->answer.doh = doh;
-					r->received_qpc = std::max(r->received_qpc, received);
+					r->received_qpc = (std::max)(r->received_qpc, received);
 					continue;
 				}
 				if (records.size() >= max_names_per_address)
@@ -3847,7 +3847,7 @@ namespace iphelper
 		{
 			int64_t newest = 0;
 			for (const auto& r : v)
-				newest = std::max(newest, r.received_qpc);
+				newest = (std::max)(newest, r.received_qpc);
 			return newest;
 		}
 
@@ -4286,7 +4286,7 @@ namespace iphelper
 						break;
 					if (use_flush)
 						flush_now();
-					wait_for_events(seen, std::min(deadline, clock::now() + std::chrono::milliseconds(10)));
+					wait_for_events(seen, (std::min)(deadline, clock::now() + std::chrono::milliseconds(10)));
 				}
 				if (first != 0)
 				{
@@ -4378,7 +4378,7 @@ namespace iphelper
 					s.error = r.error;
 					break;
 				}
-				s.worst = std::max(s.worst, r.ms);
+				s.worst = (std::max)(s.worst, r.ms);
 			}
 			if (!s.samples.empty())
 			{
