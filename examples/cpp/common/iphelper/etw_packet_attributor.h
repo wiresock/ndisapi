@@ -469,9 +469,11 @@ namespace iphelper
 			/// <summary>TCPIP Status field where present (1031/1033/1034/1017), else 0</summary>
 			uint32_t status{};
 			/// <summary>Bit mask (1 << event_source) of every source that produced a matching
-			/// record for this lookup (lets callers compare 42 vs 1169, 1031 vs KN12, ...)</summary>
+			/// record for this lookup (lets callers compare 42 vs 1169, 1031 vs KN12, ...); for
+			/// TCP also every source of the chosen record's connect attempt</summary>
 			uint32_t sources_seen{};
-			/// <summary>true if matching records named different (known, nonzero) PIDs</summary>
+			/// <summary>true if matching records (for TCP also the records of the chosen
+			/// record's connect attempt) named different (known, nonzero) PIDs</summary>
 			bool conflict{};
 			/// <summary>TCP only, filled by etw_packet_attributor::tcp_outcome(): a TCPIP 1034
 			/// (connect failed) record exists for this connection attempt</summary>
@@ -2934,7 +2936,7 @@ namespace iphelper
 					return;
 				}
 				tuple.family = ev.addr_family[f_saddr];
-				tuple.protocol = source == etw::event_source::kn_udp_send ? IPPROTO_UDP : IPPROTO_TCP;
+				tuple.protocol = static_cast<uint8_t>(source == etw::event_source::kn_udp_send ? IPPROTO_UDP : IPPROTO_TCP);
 				tuple.local_ip = ev.addr[f_saddr];
 				tuple.remote_ip = ev.addr[f_daddr];
 				tuple.local_port = static_cast<uint16_t>(ev.num[f_sport]);
@@ -2950,7 +2952,7 @@ namespace iphelper
 					return;
 				}
 				tuple.family = ev.addr_family[f_local_sockaddr];
-				tuple.protocol = source == etw::event_source::tcpip_udp_send ? IPPROTO_UDP : IPPROTO_TCP;
+				tuple.protocol = static_cast<uint8_t>(source == etw::event_source::tcpip_udp_send ? IPPROTO_UDP : IPPROTO_TCP);
 				tuple.local_ip = ev.addr[f_local_sockaddr];
 				tuple.remote_ip = ev.addr[f_remote_sockaddr];
 				tuple.local_port = ev.addr_port[f_local_sockaddr];
@@ -3666,6 +3668,13 @@ namespace iphelper
 				const auto attempt = scan_attempt(it->second,
 				                                  connect_attempt(it->second, (std::min)(packet_qpc - before, best->event_qpc),
 				                                                  best->event_qpc));
+				// Sources and conflicts of the whole attempt, as tcp_outcome() merges them, so a
+				// caller of lookup() / wait_for() that does not call tcp_outcome() sees them
+				// too (and the lookup counts such a conflict; tcp_outcome() then does not).
+				result.sources_seen |= attempt.sources;
+				if (attempt.pids_differ ||
+					(result.pid != 0 && attempt.known_pid != 0 && attempt.known_pid != result.pid))
+					result.conflict = true;
 				result.connect_completed = attempt.completed;
 				if (attempt.failed)
 				{
@@ -4230,7 +4239,7 @@ namespace iphelper
 				return result;
 			}
 
-			const auto tuple = loopback_tuple(family, tcp ? IPPROTO_TCP : IPPROTO_UDP, port_of(local),
+			const auto tuple = loopback_tuple(family, static_cast<uint8_t>(tcp ? IPPROTO_TCP : IPPROTO_UDP), port_of(local),
 			                                  port_of(target));
 			const auto slot_id = ++self_test_seq_;
 			{
