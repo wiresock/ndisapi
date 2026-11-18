@@ -164,19 +164,21 @@ With `--domains` every row ends with the destination's name (illustrative):
   event's own timestamp relative to the packet read: negative means the event was written
   before the driver saw the packet. `[unverified]` means the
   image path could not be proven to belong to that PID (the process exited and its PID may
-  have been reused). `[header-pid]` means the PID came from the event header (TCPIP 1031,
-  see "Matching"). `no PID` with state `no-pid` means an event matched but none named a
+  have been reused, the event's process start key names another process than the one now
+  holding the PID, or the image name could not be read). `[header-pid]` means the PID
+  came from the event header (TCPIP 1031, see "Matching"). `no PID` with state `no-pid` means an event matched but none named a
   real PID; it is not counted as an ETW owner. `CONFLICT{...}` lists the event sources when
   they named different (nonzero) PIDs. `[header-pid N overridden by 1033/1034]` means the
   1031 header PID N was replaced by the different payload PID of TCPIP 1033/1034 of the
-  same connect attempt; `[pid-from-outcome]` means 1031 had no usable PID and the owner
-  was taken from that 1033/1034 (see "Matching").
+  same connect attempt; `[pid-from-outcome]` means no 1031 with a usable PID decided the
+  owner (it had none, or none was inside the match window) and the owner was taken from a
+  later 1033/1034 or KN 12 (see "Matching").
 * TCP SYN rows end with the connect outcome seen later for the same connect attempt:
   `(connected)` (TCPIP 1033 or Kernel-Network 12/28), `(connect failed, 1034 status 0x...)`,
   or `(unknown)` if neither arrived within `--late-ms`. The event and latency shown are
   still those of the first matching event; the owner is too, unless a 1033/1034 payload
   PID overrode a 1031 header PID. With `[pid-from-outcome]` the event, its time and the
-  latency are those of the 1033/1034, because the owner was not known before it. That
+  latency are those of the 1033/1034/KN 12, because the owner was not known before it. That
   latency is about one RTT (connect time, not ETW delivery), so such a row is usually
   `late`, and it is left out of the latency statistics (`ETW delivery latency` summary
   and the latency histogram); the statistics count these rows as `owner from outcome N`.
@@ -184,7 +186,8 @@ With `--domains` every row ends with the destination's name (illustrative):
 * CSV columns added after `dns_wire_confirmed`: `etw_pid_from_header`, `tcp_outcome`
   (`connected` / `failed` / `unknown`), `tcp_connect_status` (the 1034 status) and
   `etw_overridden_header_pid` (the replaced 1031 header PID, empty if none) and
-  `etw_pid_from_outcome` (1 if the owner came from 1033/1034 because 1031 had no PID).
+  `etw_pid_from_outcome` (1 if the owner came from 1033/1034/KN 12 because no 1031 with a
+  PID decided it).
 * `domain` (`--domains`): `name (exact|ambiguous: all names, same-pid|other-pid N|pid-unknown, DoH)`,
   `-` if no live answer contained the destination address, `off` if ETW is not available.
   See "Domain mapping". CSV columns added at the end, only with `--domains`: `domain`,
@@ -195,7 +198,21 @@ With `--domains` every row ends with the destination's name (illustrative):
 * `DNS ... via Dnscache`: the callers of a query sent by Dnscache. `tier1:ClientPID` comes
   from the `ClientPID` field of DNS-Client 3019/3010 (newer builds); `tier2:3006-header-PID`
   matches DNS-Client 3006 events by name and type (including DNS search suffixes).
-  Coalesced queries list several callers.
+  Coalesced queries list several callers. The callers are looked up when the query's owner
+  is Dnscache: the ETW owner, or the IP Helper owner if ETW found no owner (none, or an
+  event without a PID) within `--late-ms`. While the callers are missing, the row keeps
+  asking for on-demand flushes for up to `--hold-ms`, then waits without them (Dnscache's
+  own queries have no caller event) until a caller arrives or `--late-ms` passes.
+* Statistics (every `--stats-sec` and at exit), per block (UDP, TCP SYN, TCP existing):
+  the ETW line counts the rows for which ETW was asked; percentages are of those rows. If
+  ETW was not asked for any row of the block (e.g. TCP rows while TCP owners are off, or
+  rows read while ETW was unavailable), the block shows `ETW: not attempted for these
+  rows (IP Helper only)`; if it was asked only for some, `ETW (attempted for N of M)`. The `ETW counters` line shows `lookups N
+  (matched N, event without PID N, timed out N)`: lookups = matched + event without PID +
+  timed out; an event without a PID is not a match and is not in the latency histogram or
+  the conflict count. Rows still waiting for their ETW owner when the program stops are
+  reported with ETW `none` and counted as timed out. A conflict found later by the TCP
+  connect outcome (1033/1034 of the same attempt) is counted once in the ETW counters.
 
 At start-up the gate report is printed: the session name and `LogFileMode` requested and
 read back, each provider's enable status and event IDs, every event schema seen (by TDH,
@@ -288,7 +305,10 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    WFP callout that pends ALE connect authorization), has not been observed or tested.
    **No PID at SYN time:** if 1031 has no usable PID (payload 0 and header 0 or 4), the
    owner is filled from that first 1033/1034 (`[pid-from-outcome]`). KN 12 is not used for
-   either; it decides only when it arrives inside the match window.
+   either; it decides only when it arrives inside the match window. A 1033/1034 or KN 12
+   that decides a SYN from inside the match window is marked `[pid-from-outcome]` as well;
+   that happens when no 1031 with a PID is in the window and the handshake completes
+   within 50 ms of the SYN.
    **Assumptions and edge cases of the attempt logic:** 1031 is assumed to be written
    once per connect, not per SYN retransmission (consistent with the measurements, not
    verified); if it were written per retransmission, an attempt would end at the next
@@ -336,7 +356,9 @@ answer instead, and that is the source of truth here:
   answers for the same name and client PID written from 10 s before to 2 s after it as
   `DoH`, in either delivery order.
 * The map keeps up to 8 (name, asking process) pairs per address and up to 16384
-  addresses; the least recently answered go first. The events carry no TTL, so an answer
+  addresses; the least recently answered go first. A 3020 without `ClientPID` (v0) and a
+  3008 for the same name written within 2 s of each other are kept as one pair, with the
+  3008 caller, so one query does not take two slots. The events carry no TTL, so an answer
   maps its addresses for a fixed 10 minutes after the latest answer that contained them.
 * A row is looked up when it is final, by its destination address and owner (ETW owner,
   else IP Helper owner). If the owner asked for a name that resolved to the address, the
@@ -450,12 +472,12 @@ to the flush delay.
 * **TCP:** a connect issued from kernel mode or one whose 1031 header PID is 0 or 4 has no
   PID at SYN time; the owner then comes from the attempt's 1033/1034 one RTT later (or
   from KN 12 if it arrives within 50 ms of the SYN), and its latency includes that RTT. If
-  neither arrives within `--late-ms`, the row shows `no PID`. Such rows are not part of
-  the latency statistics (see "Output"). A remote RST (1034) and IPv6 (KN 28) are not
-  measured yet. Retransmitted SYNs are reported again, but 1031 is assumed to be written
+  neither arrives within `--late-ms`, the row shows `no PID`. Such rows are marked
+  `[pid-from-outcome]` (or `no PID`) and are not part of the latency statistics (see
+  "Output"). A remote RST (1034) and IPv6 (KN 28) are not measured yet. Retransmitted SYNs are reported again, but 1031 is assumed to be written
   once per connect (see "Matching"): a retransmission read 50 ms or more after it falls
   outside the strict window and usually gets ETW `none`, unless 1033 / KN 12 arrives
-  within 50 ms of the retransmission.
+  within 50 ms of the retransmission (then the row is marked `[pid-from-outcome]`).
 * **Header PID override (1031 vs 1033/1034)** is implemented but the asynchronous
   completion case it targets has not been verified; check it with a WFP callout that
   pends connects before relying on it in a product.

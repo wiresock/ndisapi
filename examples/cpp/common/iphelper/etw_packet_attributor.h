@@ -491,10 +491,12 @@ namespace iphelper
 			bool header_pid_overridden{};
 			/// <summary>The 1031 header PID that was replaced (0 if none)</summary>
 			uint32_t overridden_header_pid{};
-			/// <summary>TCP only: the matching 1031 had no usable PID (payload 0, header 0 or
-			/// 4), and the owner was filled from the first 1033/1034 of the same connect attempt;
-			/// source, event id, event time and latency are those of that record (about one RTT
-			/// after the SYN).</summary>
+			/// <summary>TCP SYN only: no 1031 with a usable PID decided the owner (the matching
+			/// 1031 had no usable PID: payload 0, header 0 or 4; or no 1031 was inside the
+			/// match window), and the owner came from a later record: the first 1033/1034 of the
+			/// same connect attempt, or a 1033/1034/KN 12 inside the match window. Source, event
+			/// id, event time and latency are those of that record (about one RTT after the
+			/// SYN).</summary>
 			bool pid_from_outcome{};
 
 			/// <summary>PID 4 (System). PID 0 is "unknown", not a system owner.</summary>
@@ -815,10 +817,16 @@ namespace iphelper
 			uint64_t events_schema_rejected{};
 			uint64_t events_parse_failed{};
 			uint64_t events_own_process{};
-			/// <summary>Finished lookups: matches + timeouts. A caller that polls lookup()
-			/// for one packet counts once (when it matches or calls record_timeout()).</summary>
+			/// <summary>Finished lookups: matches + no_pid_matches + timeouts. A caller that
+			/// polls lookup() for one packet counts once (when it matches, when it accepts a
+			/// record without a PID, or when it calls record_timeout()).</summary>
 			uint64_t lookups{};
+			/// <summary>Lookups that returned an owner with a known (nonzero) PID</summary>
 			uint64_t matches{};
+			/// <summary>lookup(..., accept_unknown = true) calls that returned only a record
+			/// without a PID: an event was seen, the owner is unknown. Not in matches, conflicts
+			/// or the latency histogram.</summary>
+			uint64_t no_pid_matches{};
 			uint64_t timeouts{};
 			uint64_t conflicts{};
 			uint64_t flush_calls{};
@@ -834,7 +842,7 @@ namespace iphelper
 			ULONG log_buffers_lost{};
 			ULONG realtime_buffers_lost{};
 			/// <summary>Delivery latency (event received - packet read) of matches, except
-			/// owners filled from 1033/1034 (pid_from_outcome: that is connect time);
+			/// owners decided by 1033/1034/KN 12 (pid_from_outcome: that is connect time);
 			/// slot i counts latency in (bound[i-1], bound[i]]; the last slot counts > 1000 ms</summary>
 			std::array<uint64_t, latency_bucket_ms.size() + 1> latency_histogram{};
 		};
@@ -1009,6 +1017,9 @@ namespace iphelper
 			stopping_ = false;
 			live_ = false;
 			gate_final_ = false;
+			// Periodic self-test history belongs to the previous session (the maintenance
+			// thread that uses it is not running here: stop() joined it, or it never ran).
+			consecutive_self_test_failures_ = 0;
 			// A "filter not honoured" observation belongs to the previous session: the
 			// providers are enabled again below. TDH schemas are kept (they do not change).
 			for (auto& u : provider_unfiltered_)
@@ -1128,8 +1139,9 @@ namespace iphelper
 		/// <summary>
 		/// Non-blocking lookup. Returns the owner if an event for this tuple has already
 		/// been consumed. packet_qpc is QueryPerformanceCounter() at packet read.
-		/// Each successful call counts as one match: callers that poll should stop after
-		/// the first match, and call record_timeout() when they give up.
+		/// Each successful call counts once (as a match, or as a no-PID match if it returns
+		/// a record without a PID): callers that poll should stop after the first result,
+		/// and call record_timeout() when they give up.
 		/// Records whose PID is unknown (0) never outrank a record with a real PID. If only
 		/// unknown-PID records match, nullopt is returned unless accept_unknown is true
 		/// (pass true on the last attempt to report "an event was seen, owner unknown").
@@ -1159,11 +1171,14 @@ namespace iphelper
 		/// (connect_attempt()). If owner came from a 1031 header PID and the first 1033/1034
 		/// of the attempt names a different payload PID, that PID replaces it
 		/// (header_pid_overridden); if owner has no PID, it is filled from that record
-		/// (pid_from_outcome). Does not count as a lookup. Returns true if the outcome
-		/// (completed or failed) is known.
+		/// (pid_from_outcome). Does not count as a lookup. If it marks an owner with a known
+		/// PID as conflicting for the first time, that is added to counters.conflicts (the
+		/// lookup that returned the owner counted only what it saw then). Call it again with
+		/// the same owner while polling: a conflict is counted once. Returns true if the
+		/// outcome (completed or failed) is known.
 		/// </summary>
 		// ****************************************************************************
-		bool tcp_outcome(const etw::packet_tuple& tuple, const int64_t packet_qpc, etw::owner_info& owner) const
+		bool tcp_outcome(const etw::packet_tuple& tuple, const int64_t packet_qpc, etw::owner_info& owner)
 		{
 			const auto before = us_to_qpc(config_.window_before.count());
 			std::shared_lock<std::shared_mutex> lock(cache_mutex_);
@@ -1173,6 +1188,8 @@ namespace iphelper
 			const auto attempt = scan_attempt(it->second,
 			                                  connect_attempt(it->second, (std::min)(packet_qpc - before, owner.event_qpc),
 			                                                  owner.event_qpc));
+			const bool counted = !owner.is_unknown();
+			const bool was_conflict = owner.conflict;
 			owner.sources_seen |= attempt.sources;
 			if (attempt.pids_differ || (owner.pid != 0 && attempt.known_pid != 0 && attempt.known_pid != owner.pid))
 				owner.conflict = true;
@@ -1184,6 +1201,9 @@ namespace iphelper
 			}
 			if (attempt.payload)
 				apply_payload_pid(owner, *attempt.payload);
+			// Only owners counted as matches (known PID at lookup) count conflicts.
+			if (counted && !was_conflict && owner.conflict)
+				++conflicts_;
 			return owner.connect_completed || owner.connect_failed;
 		}
 
@@ -1341,6 +1361,7 @@ namespace iphelper
 							continue;
 						result.wire_confirmed = true;
 						if (e.has_client_pid && e.caller.pid != 0 && e.caller.pid != dnscache &&
+							!(config_.ignore_own_process && e.caller.pid == own_pid_) &&
 							!contains(tier1, e.caller.pid))
 							tier1.push_back(e.caller);
 					}
@@ -1464,8 +1485,9 @@ namespace iphelper
 			c.events_parse_failed = events_parse_failed_.load();
 			c.events_own_process = events_own_process_.load();
 			c.matches = matches_.load();
+			c.no_pid_matches = no_pid_matches_.load();
 			c.timeouts = timeouts_.load();
-			c.lookups = c.matches + c.timeouts;
+			c.lookups = c.matches + c.no_pid_matches + c.timeouts;
 			c.conflicts = conflicts_.load();
 			c.flush_calls = flush_calls_.load();
 			c.flush_call_max_us = flush_call_max_us_.load();
@@ -1504,10 +1526,16 @@ namespace iphelper
 
 		void count_match(const etw::owner_info& r, const int64_t packet_qpc)
 		{
+			if (r.is_unknown())
+			{
+				// An event was seen but named no owner: not a match (see counters).
+				++no_pid_matches_;
+				return;
+			}
 			++matches_;
 			if (r.conflict)
 				++conflicts_;
-			// An owner filled from 1033/1034 arrives about one RTT after the SYN: that is
+			// An owner decided by 1033/1034/KN 12 arrives about one RTT after the SYN: that is
 			// connect time, not delivery latency, so it stays out of the histogram.
 			if (!r.pid_from_outcome)
 				record_latency(r.received_qpc - packet_qpc);
@@ -3067,11 +3095,65 @@ namespace iphelper
 			c.source = source;
 			c.event_qpc = event_qpc;
 
+			// An answer without a caller (3020 v0, no ClientPID [M19045]) and the same name's
+			// answer with a known caller (3008 header PID) written within answer_merge_us of
+			// each other are one query seen twice: keep one record with the known caller, so a
+			// query does not take two of the max_names_per_address slots. The record's names
+			// are unchanged, so exact / ambiguous does not change.
+			const auto merge_span = us_to_qpc(answer_merge_us);
+			auto same_query = [&](const domain_record& x)
+			{
+				return x.answer.name == c.name && x.answer.event_qpc <= c.event_qpc + merge_span &&
+					c.event_qpc <= x.answer.event_qpc + merge_span;
+			};
 			std::lock_guard<std::mutex> lock(domain_mutex_);
 			c.doh = doh_seen_locked(c.name, c.client_pid, event_qpc);
 			for (const auto& a : addresses)
 			{
 				auto& records = domains_[a];
+				if (c.client_pid == 0)
+				{
+					// Caller unknown, the same query is already recorded with its caller: refresh it.
+					const auto k = std::find_if(records.begin(), records.end(), [&](const domain_record& x)
+					{
+						return x.answer.client_pid != 0 && same_query(x);
+					});
+					if (k != records.end())
+					{
+						// DoH for the known caller only (an answer without a caller matches any
+						// caller's 8043, see doh_seen_locked()).
+						k->answer.doh = k->answer.doh || doh_seen_locked(c.name, k->answer.client_pid, c.event_qpc);
+						k->received_qpc = std::max(k->received_qpc, received);
+						continue;
+					}
+				}
+				else
+				{
+					// Caller known, the same query was recorded without one: that record is
+					// replaced by this one (in place, or dropped if this caller already has a
+					// record for the name, which is refreshed below).
+					const auto u = std::find_if(records.begin(), records.end(), [&](const domain_record& x)
+					{
+						return x.answer.client_pid == 0 && same_query(x);
+					});
+					if (u != records.end())
+					{
+						const bool has_own = std::any_of(records.begin(), records.end(), [&c](const domain_record& x)
+						{
+							return x.answer.client_pid == c.client_pid && x.answer.name == c.name;
+						});
+						// c.doh was computed for the known caller; the record's own doh (matched
+						// for any caller) is not carried over.
+						if (!has_own)
+						{
+							const auto kept_received = std::max(u->received_qpc, received);
+							u->answer = c;
+							u->received_qpc = kept_received;
+							continue;
+						}
+						records.erase(u);
+					}
+				}
 				auto r = std::find_if(records.begin(), records.end(), [&c](const domain_record& x)
 				{
 					return x.answer.client_pid == c.client_pid && x.answer.name == c.name;
@@ -3216,8 +3298,9 @@ namespace iphelper
 				if (it != image_memo_.end())
 				{
 					owner.image_path = it->second.image;
+					// An empty image (QueryFullProcessImageNameW failed) is never verified.
 					owner.image_verified = owner.process_start_key != 0 &&
-						it->second.start_key == owner.process_start_key;
+						it->second.start_key == owner.process_start_key && !it->second.image.empty();
 				}
 				if (!owner.image_verified)
 					++image_unverified_;
@@ -3232,6 +3315,16 @@ namespace iphelper
 				CloseHandle(process);
 				if (it != image_memo_.end() && it->second.creation != 0 && it->second.creation <= event_ft + tolerance)
 					owner.image_path = it->second.image; // the earlier process with this PID (unverified)
+				++image_unverified_;
+				return;
+			}
+
+			// A known start key that differs from the memo's names another process, even if the
+			// creation time matches within the tolerance above (PID reused right after the event).
+			if (it != image_memo_.end() && owner.process_start_key != 0 && it->second.start_key != 0 &&
+				owner.process_start_key != it->second.start_key && created != 0 && it->second.creation == created)
+			{
+				CloseHandle(process);
 				++image_unverified_;
 				return;
 			}
@@ -3581,6 +3674,15 @@ namespace iphelper
 				}
 				if (attempt.payload)
 					apply_payload_pid(result, *attempt.payload);
+				// A record with a known PID always outranks a PID-less one, and 1031 outranks
+				// the others, so a 1033/1034 or KN 12 decides a SYN only when no 1031 with a
+				// usable PID is inside the match window (PID-less, not seen, or written 50 ms or
+				// more before a retransmitted SYN). Such a record is written about one RTT after
+				// the SYN (inside the 50 ms window on a short path): the owner is known only from
+				// then on, as with apply_payload_pid() above, so its latency is connect time.
+				if (kind == etw::match_kind::datagram && result.pid != 0 &&
+					(is_payload_override_source(best->source) || best->source == etw::event_source::kn_tcp_connect))
+					result.pid_from_outcome = true;
 			}
 
 			if (result.process_start_key == 0 && !tcp)
@@ -3726,6 +3828,9 @@ namespace iphelper
 		/// <summary>Names (per caller) kept per address, and DoH markers kept per name. A CDN
 		/// address shared by more names than this keeps the most recently answered ones.</summary>
 		static constexpr size_t max_names_per_address = 8;
+		/// <summary>3020 without ClientPID and 3008 of the same name within this span are
+		/// treated as one query (on_answer_event)</summary>
+		static constexpr int64_t answer_merge_us = 2 * 1000000LL;
 		/// <summary>Addresses taken from one answer (a large answer keeps its first ones)</summary>
 		static constexpr size_t max_addresses_per_answer = 64;
 
@@ -4751,6 +4856,7 @@ namespace iphelper
 		std::atomic<uint64_t> events_parse_failed_{0};
 		std::atomic<uint64_t> events_own_process_{0};
 		std::atomic<uint64_t> matches_{0};
+		std::atomic<uint64_t> no_pid_matches_{0};
 		std::atomic<uint64_t> timeouts_{0};
 		std::atomic<uint64_t> conflicts_{0};
 		std::atomic<uint64_t> flush_calls_{0};

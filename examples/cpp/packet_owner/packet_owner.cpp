@@ -666,7 +666,8 @@ namespace
 		uint64_t etw_late{};
 		uint64_t etw_none{};
 		uint64_t etw_unknown_pid{};
-		uint64_t etw_pid_from_outcome{}; // owner filled from 1033/1034: not in latency_ms
+		uint64_t etw_pid_from_outcome{}; // owner decided by 1033/1034/KN 12: not in latency_ms
+		uint64_t etw_attempted{}; // rows for which ETW was asked (TCP rows are not while TCP owners are off)
 		uint64_t agree{};
 		uint64_t disagree{};
 		uint64_t etw_only{};
@@ -845,9 +846,21 @@ namespace
 					<< percent(s.iph_miss, s.total) << ")\n";
 				if (!etw_enabled_)
 					return;
-				os << "  ETW: in budget " << s.etw_in_budget << " (" << percent(s.etw_in_budget, s.total) << "), late "
-					<< s.etw_late << " (" << percent(s.etw_late, s.total) << "), none " << s.etw_none << " ("
-					<< percent(s.etw_none, s.total) << "), event without PID " << s.etw_unknown_pid
+				if (s.etw_attempted == 0)
+				{
+					// e.g. TCP rows while the TCP gate is failed: nothing to count
+					os << "  ETW: not attempted for these rows (IP Helper only)\n";
+					return;
+				}
+				// Percentages are of the rows ETW was asked for (all rows unless TCP owners were
+				// off for some of them).
+				const auto n = s.etw_attempted;
+				os << "  ETW";
+				if (n != s.total)
+					os << " (attempted for " << n << " of " << s.total << ")";
+				os << ": in budget " << s.etw_in_budget << " (" << percent(s.etw_in_budget, n) << "), late "
+					<< s.etw_late << " (" << percent(s.etw_late, n) << "), none " << s.etw_none << " ("
+					<< percent(s.etw_none, n) << "), event without PID " << s.etw_unknown_pid
 					<< ", owner from outcome " << s.etw_pid_from_outcome << " (not in latency)"
 					<< "; image unverified " << s.image_unverified << ", conflicts " << s.conflicts << "\n"
 					<< "  ETW delivery latency: " << latency_summary(s.latency_ms) << "\n"
@@ -876,7 +889,8 @@ namespace
 				os << "ETW counters: events " << c.events_total << ", unrequested " << c.events_unrequested
 					<< ", schema-rejected " << c.events_schema_rejected << ", parse-failed " << c.events_parse_failed
 					<< ", own-process " << c.events_own_process << "\n"
-					<< "  lookups " << c.lookups << " (matched " << c.matches << ", timed out " << c.timeouts << ")\n"
+					<< "  lookups " << c.lookups << " (matched " << c.matches << ", event without PID " << c.no_pid_matches
+					<< ", timed out " << c.timeouts << ")\n"
 					<< "  per source:";
 				for (size_t i = 1; i < c.events_by_source.size(); ++i)
 				{
@@ -998,7 +1012,8 @@ namespace
 			if (!opt_.dns || !item.dns)
 				return false;
 			const auto dnscache = attributor_.dnscache_pid();
-			const uint32_t owner = item.etw ? item.etw->pid : item.iph_pid;
+			// IP Helper decides when ETW gave no owner (none, or an event without a PID).
+			const uint32_t owner = item.etw && !item.etw->is_unknown() ? item.etw->pid : item.iph_pid;
 			return dnscache != 0 && owner == dnscache;
 		}
 
@@ -1029,9 +1044,17 @@ namespace
 			}
 			if (!item.etw)
 			{
-				if (expired)
-					attributor_.record_timeout();
-				return expired && iph_done;
+				if (!expired)
+					return false;
+				attributor_.record_timeout();
+				// No ETW owner in time: if IP Helper names Dnscache, the DNS-Client callers are
+				// still looked up (the events may have arrived even though the send event did not).
+				if (iph_done && needs_dns(item))
+				{
+					item.dnscache_owner = true;
+					item.dns_attr = attributor_.dns_lookup(item.dns->qname, item.dns->qtype, item.qpc);
+				}
+				return iph_done;
 			}
 			if (item.kind == item_kind::tcp_syn && !item.tcp_outcome_done)
 			{
@@ -1090,6 +1113,11 @@ namespace
 				const auto generation = attributor_.generation();
 				const auto now = clock_type::now();
 				size_t waiting_for_owner = 0;
+				// A Dnscache query whose owner is known but whose DNS-Client caller events have
+				// not arrived drives flushes too, but only within the hold budget: Dnscache's own
+				// queries (no caller event at all) must not keep flushing for the whole late
+				// window.
+				const auto dns_flush_limit = std::chrono::milliseconds(opt_.hold_ms);
 				// Compact in place (order kept): erasing from the middle of a vector of
 				// ~2000 items per pass was quadratic.
 				size_t kept = 0;
@@ -1101,7 +1129,9 @@ namespace
 						finalize(item);
 						continue;
 					}
-					if (item.etw_attempted && !item.etw)
+					if (item.etw_attempted &&
+						(!item.etw || (item.dnscache_owner && item.dns_attr.callers.empty() &&
+							now - item.seen < dns_flush_limit)))
 						++waiting_for_owner;
 					if (kept != i)
 						pending[kept] = std::move(item);
@@ -1110,8 +1140,9 @@ namespace
 				pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(kept), pending.end());
 				if (waiting_for_owner != 0)
 				{
-					// Only items still waiting for their owner drive on-demand flushes; items
-					// waiting for a TCP outcome or an IP Helper refresh do not.
+					// Only items still waiting for their owner (or, within the hold budget, for
+					// their DNS-Client callers) drive on-demand flushes; items waiting for a TCP
+					// outcome or an IP Helper refresh do not.
 					attributor_.request_flush(waiting_for_owner);
 					attributor_.wait_for_events(generation, clock_type::now() + std::chrono::milliseconds(5));
 				}
@@ -1121,8 +1152,14 @@ namespace
 					queue_cv_.wait_for(lock, std::chrono::milliseconds(5), [this] { return stopping_ || !queue_.empty(); });
 				}
 			}
+			// Stopping: rows still waiting for their ETW owner are reported as "none" and count
+			// as timed-out lookups, so the ETW counters agree with the row statistics.
 			for (auto& item : pending)
+			{
+				if (item.etw_attempted && !item.etw)
+					attributor_.record_timeout();
 				finalize(item);
+			}
 		}
 
 		void finalize(work_item& item)
@@ -1231,6 +1268,7 @@ namespace
 					++s.iph_miss;
 				if (etw_attempted)
 				{
+					++s.etw_attempted;
 					if (etw_state == "in-budget")
 						++s.etw_in_budget;
 					else if (etw_state == "late")
@@ -1239,7 +1277,7 @@ namespace
 						++s.etw_unknown_pid;
 					else
 						++s.etw_none;
-					// An owner filled from 1033/1034 (pid_from_outcome) is delivered about one RTT
+					// An owner decided by 1033/1034/KN 12 (pid_from_outcome) is delivered about one RTT
 					// after the SYN: its latency measures the connect, not ETW delivery.
 					if (etw_found && item.etw->pid_from_outcome)
 						++s.etw_pid_from_outcome;
