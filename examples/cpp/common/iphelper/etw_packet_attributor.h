@@ -1399,8 +1399,8 @@ namespace iphelper
 		// ****************************************************************************
 		/// <summary>
 		/// Destination address to domain name, from DNS-Client answers (enable_domains).
-		/// Every successful 3020 (Dnscache, one per network answer, including DoH) and 3008
-		/// (the calling process, also for answers served from the Dnscache cache [U]) maps
+		/// Every successful 3020 (Dnscache, network answers only, including DoH) and 3008
+		/// (the calling process, every answer including Dnscache cache hits) maps
 		/// the IPv4/IPv6 addresses in its QueryResults to the query name for
 		/// domain_lifetime. owner_pid (0 = unknown) prefers the answers that process asked
 		/// for. Nothing is read from the packets, so DoH answers count like UDP ones.
@@ -3058,7 +3058,7 @@ namespace iphelper
 			if (c.name.empty())
 				return;
 			// 3020 is written by Dnscache: the caller is ClientPID (v1+). 3008 is written in the
-			// calling process, like 3006 [U]: the caller is the header PID.
+			// calling process, like 3006 [M26300][M19045]: the caller is the header PID.
 			if (source == etw::event_source::dns_query_completed)
 				c.client_pid = record->EventHeader.ProcessId;
 			else if (ev.has[f_client_pid])

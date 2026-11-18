@@ -318,12 +318,16 @@ With DNS over HTTPS the query is TLS to the resolver (on the wire: TCP to 1.1.1.
 owned by Dnscache), so the name cannot be read from the packets. The DNS Client logs the
 answer instead, and that is the source of truth here:
 
-* **DNS-Client 3020** ("query response", written by Dnscache for each network answer, DoH
-  included) carries `QueryName`, `Status`, `QueryResults` and, from v1, `ClientPID`, the
-  process that asked. **3008** ("query completed", written in the calling process like
-  3006, so its header PID is the caller [unverified]) carries the same results and should
-  also cover answers served from the Dnscache cache [unverified]. Answers with a nonzero
-  status (for example 3020 status 1460 on a parallel interface) are ignored.
+* **DNS-Client 3008** ("query completed") is written in the calling process, so its
+  header PID is the caller (3008 v0 has no `ClientPID` field). It carries `QueryName`,
+  `QueryStatus` and `QueryResults` and fires for every answer, including answers served
+  from the Dnscache cache (a cache hit logs only 3006 and 3008). In practice it is the
+  source that decides most rows.
+* **DNS-Client 3020** ("query response") is written by Dnscache for network answers only
+  (DoH included) and carries `QueryName`, `Status`, `QueryResults` and, from v1,
+  `ClientPID`: v2 with `ClientPID` on 26300, v0 without it on 19045 (rows there are still
+  `same-pid`, via 3008). Answers with a nonzero status (for example 3020 status 1460 on a
+  parallel interface) are ignored.
 * Every entry of `QueryResults` that parses as an IPv4 or IPv6 address
   (`104.20.26.136;172.66.157.237;`, `2606:4700:10::ac42:9ded;...`) maps that address to the
   query name; IPv4-mapped IPv6 entries are folded to IPv4, other entries (CNAME entries
@@ -350,14 +354,15 @@ Limits:
   their own DoH (browsers with secure DNS set to a custom provider, many VPN and proxy
   clients) bypass Dnscache; their rows show `-`. So do connections to literal IP addresses
   and names from the hosts file or other sources that produce no answer event [unverified].
+* **Explicit HTTPS proxies** and secure web gateways (for example Cisco SWG): every
+  connection goes to the proxy, so every row maps to the proxy's name, not the origin site.
 * **Ordering:** the lookup runs when the row is final, normally after the packet's own
   owner event has arrived; the answer that gave the application the address was written
   before the packet, so it is normally delivered by then. An answer still in another ETW
-  buffer at that moment is not waited for, and the row shows `-`.
-* **3020 v0** (no `ClientPID`) gives no per-process information; on Windows 7 the
-  DNS-Client events are unavailable (event-ID filters are not honoured).
-* Measured so far: the 3020 / 8043 fields and values above, from a trace on a 26H2 host
-  with DoH to 1.1.1.1; `packet_owner --domains` itself awaits a Windows run.
+  buffer at that moment is not waited for, and the row shows `-`. Measured: the answer
+  preceded the SYN in 70 of 70 resolve-then-connect runs (median 11–15 ms ahead, minimum
+  3.8 ms), and every row was named.
+* On Windows 7 the DNS-Client events are unavailable (event-ID filters are not honoured).
 
 ## Events used
 
@@ -372,7 +377,7 @@ Limits:
 | TCPIP 1017 TcpAcceptListenerComplete, Kernel-Network 15 / 31 | Inbound connections | 1017 v1 and KN 15 v0 seen in the loopback self-test |
 | TCPIP 1300 TcpConnectionRundown (capture state) | `--tcp-existing` | Measured: v3 on 26300, v1 on 19045 |
 | DNS-Client 3006 / 3010 / 3019 | Dnscache callers (`--dns`) | Measured on 19045 (no ClientPID) and 26300 (ClientPID) |
-| DNS-Client 3020 (v1+: ClientPID) / 3008, 8043 | Address to name map, DoH marker (`--domains`) | 3020 and 8043 fields seen in a trace with DoH; 3008 per manifest only; `--domains` not run yet |
+| DNS-Client 3008 v0, 3020 (v1+: ClientPID), 8043 | Address to name map, DoH marker (`--domains`) | Measured on 26300 (3020 v2) and 19045 (3020 v0); 3008 header PID = caller, also on cache hits |
 
 Manifest sources: [jdu2600/Windows10EtwEvents](https://github.com/jdu2600/Windows10EtwEvents)
 (per-release dumps 1511 to 25H2) and
