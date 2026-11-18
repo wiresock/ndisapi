@@ -29,6 +29,8 @@ namespace
 		bool udp = true;
 		bool tcp = true;
 		bool dns = false;
+		/// <summary>destination address to domain name from DNS-Client answers</summary>
+		bool domains = false;
 		iphelper::etw::flush_mode flush = iphelper::etw::flush_mode::automatic;
 		int hold_ms = 75;
 		int late_ms = 2000;
@@ -62,6 +64,8 @@ namespace
 			"  --tcp                    attribute outbound TCP SYNs only (default: both)\n"
 			"  --dns                    resolve the callers of DNS queries sent by the DNS Client\n"
 			"                           service (Dnscache) via Microsoft-Windows-DNS-Client events\n"
+			"  --domains                name the destination of each row from the DNS answers the\n"
+			"                           DNS Client logged (DoH included; see README)\n"
 			"  --flush auto|ondemand|timer\n"
 			"                           ETW delivery strategy (default auto; see README)\n"
 			"  --hold-ms N              latency budget for 'in budget' (default 75)\n"
@@ -119,6 +123,8 @@ namespace
 				tcp_flag = true;
 			else if (a == "--dns")
 				o.dns = true;
+			else if (a == "--domains")
+				o.domains = true;
 			else if (a == "--flush")
 			{
 				if (!value(v))
@@ -646,6 +652,8 @@ namespace
 		bool tcp_outcome_done{};
 		bool dnscache_owner{};
 		iphelper::etw::dns_attribution dns_attr;
+		/// <summary>--domains: set in finalize (nullopt: mapping off or ETW unavailable)</summary>
+		std::optional<iphelper::etw::domain_match> domain;
 	};
 
 	struct proto_stats
@@ -678,6 +686,17 @@ namespace
 		uint64_t multi_caller{};
 		uint64_t suffix{};
 		uint64_t wire_confirmed{};
+	};
+
+	struct domain_stats
+	{
+		uint64_t rows{};
+		uint64_t exact{};
+		uint64_t ambiguous{};
+		uint64_t none{};
+		uint64_t same_pid{};
+		uint64_t other_pid{};
+		uint64_t doh{};
 	};
 
 	std::string percent(const uint64_t part, const uint64_t total)
@@ -736,7 +755,12 @@ namespace
 						"etw_image_verified,etw_source,etw_event,etw_version,etw_latency_ms,etw_event_offset_ms,etw_sources,"
 						"etw_conflict,"
 						"verdict,dns_qname,dns_qtype,dns_tier,dns_callers,dns_wire_confirmed,"
-						"etw_pid_from_header,tcp_outcome,tcp_connect_status,etw_overridden_header_pid,etw_pid_from_outcome\n";
+						"etw_pid_from_header,tcp_outcome,tcp_connect_status,etw_overridden_header_pid,etw_pid_from_outcome"
+						<< (opt_.domains
+							    ? ",domain,domain_match,domain_pid_match,domain_query_pid,domain_doh,domain_source,"
+							    "domain_answer_offset_ms,domain_names"
+							    : "")
+						<< "\n";
 				else
 					std::cerr << "cannot open " << ansi_to_utf8(opt_.csv_path) << "\n";
 			}
@@ -799,12 +823,14 @@ namespace
 			// 2M samples per block, which must not block finalize() on the worker.
 			proto_stats udp, tcp_syn, tcp_existing;
 			dns_stats dns;
+			domain_stats domains;
 			{
 				std::lock_guard<std::mutex> stats_lock(stats_mutex_);
 				udp = udp_;
 				tcp_syn = tcp_syn_;
 				tcp_existing = tcp_existing_;
 				dns = dns_;
+				domains = domains_;
 			}
 			std::ostringstream os;
 			os << "\n==== " << (final_stats ? "final statistics" : "statistics") << " (hold budget " << opt_.hold_ms
@@ -838,6 +864,12 @@ namespace
 					<< dns.multi_caller << ", via search suffix " << dns.suffix << ", wire-confirmed "
 					<< dns.wire_confirmed << "\n";
 			}
+			if (opt_.domains && domains.rows)
+			{
+				os << "Domains (rows looked up): " << domains.rows << ", exact " << domains.exact << ", ambiguous "
+					<< domains.ambiguous << ", none " << domains.none << "; asked by the owner " << domains.same_pid
+					<< ", by another process " << domains.other_pid << ", DoH " << domains.doh << "\n";
+			}
 			if (etw_enabled_)
 			{
 				const auto c = attributor_.get_counters();
@@ -854,6 +886,7 @@ namespace
 				}
 				os << "\n  flush calls " << c.flush_calls << " (max " << c.flush_call_max_us << " us, interval "
 					<< c.flush_interval_ms << " ms), cache " << c.cache_entries << ", dns records " << c.dns_entries
+					<< (opt_.domains ? ", domain addresses " + std::to_string(c.domain_addresses) : "")
 					<< ", image lookups " << c.image_lookups << " (unverified " << c.image_unverified << ")\n"
 					<< "  EventsLost " << c.events_lost << ", RealTimeBuffersLost " << c.realtime_buffers_lost
 					<< ", LogBuffersLost " << c.log_buffers_lost << "\n  latency histogram (ms):";
@@ -1147,6 +1180,32 @@ namespace
 			else
 				verdict = "neither";
 
+			// --domains: looked up when the row is final. By then ETW has delivered the events
+			// up to this packet's owner event, and the answer that gave the application the
+			// address was written before the packet (see README for the remaining race).
+			std::string domain_name, domain_names, domain_offset;
+			const bool domain_found = [&]
+			{
+				if (!opt_.domains || !etw_enabled_)
+					return false;
+				const uint32_t owner = etw_found ? item.etw->pid : iph_found ? item.iph_pid : 0;
+				item.domain = attributor_.domain_lookup(item.tuple.family, item.tuple.remote_ip, owner);
+				return item.domain && item.domain->quality != domain_quality::none;
+			}();
+			if (domain_found)
+			{
+				domain_name = to_utf8(item.domain->best.name);
+				std::vector<std::wstring> seen;
+				for (const auto& c : item.domain->candidates)
+				{
+					if (std::find(seen.begin(), seen.end(), c.name) != seen.end())
+						continue;
+					seen.push_back(c.name);
+					domain_names += (domain_names.empty() ? "" : ";") + to_utf8(c.name);
+				}
+				domain_offset = format_ms(qpc_ms(item.domain->best.event_qpc - item.qpc));
+			}
+
 			std::string dns_callers;
 			for (const auto& c : item.dns_attr.callers)
 			{
@@ -1217,6 +1276,22 @@ namespace
 					if (item.dns_attr.wire_confirmed)
 						++dns_.wire_confirmed;
 				}
+				if (item.domain)
+				{
+					++domains_.rows;
+					if (item.domain->quality == domain_quality::exact)
+						++domains_.exact;
+					else if (item.domain->quality == domain_quality::ambiguous)
+						++domains_.ambiguous;
+					else
+						++domains_.none;
+					if (item.domain->pid_match == domain_pid_match::same)
+						++domains_.same_pid;
+					else if (item.domain->pid_match == domain_pid_match::other)
+						++domains_.other_pid;
+					if (domain_found && item.domain->best.doh)
+						++domains_.doh;
+				}
 			}
 
 			const double t = qpc_ms(item.qpc - start_qpc_) / 1000.0;
@@ -1277,6 +1352,27 @@ namespace
 							os << " (wire-confirmed)";
 					}
 				}
+				if (opt_.domains)
+				{
+					os << " | domain ";
+					if (!item.domain)
+						os << "off";
+					else if (!domain_found)
+						os << "-";
+					else
+					{
+						const auto& d = *item.domain;
+						os << domain_name << " (" << to_string(d.quality);
+						if (d.quality == domain_quality::ambiguous)
+							os << ": " << domain_names;
+						os << ", " << to_string(d.pid_match);
+						if (d.pid_match == domain_pid_match::other)
+							os << " " << d.best.client_pid;
+						if (d.best.doh)
+							os << ", DoH";
+						os << ")";
+					}
+				}
 				std::lock_guard<std::mutex> lock(output_mutex_);
 				std::cout << os.str() << "\n";
 			}
@@ -1312,7 +1408,22 @@ namespace
 				csv_ << ",";
 				if (etw_event && item.etw->header_pid_overridden)
 					csv_ << item.etw->overridden_header_pid;
-				csv_ << "," << (etw_found ? (item.etw->pid_from_outcome ? "1" : "0") : "") << "\n";
+				csv_ << "," << (etw_found ? (item.etw->pid_from_outcome ? "1" : "0") : "");
+				if (opt_.domains)
+				{
+					csv_ << "," << csv_escape(domain_name) << ","
+						<< (item.domain ? to_string(item.domain->quality) : "off") << ",";
+					if (domain_found)
+					{
+						const auto& d = *item.domain;
+						csv_ << to_string(d.pid_match) << "," << (d.best.client_pid ? std::to_string(d.best.client_pid) : "")
+							<< "," << (d.best.doh ? "1" : "0") << "," << to_string(d.best.source) << "," << domain_offset;
+					}
+					else
+						csv_ << ",,,,";
+					csv_ << "," << csv_escape(domain_names);
+				}
+				csv_ << "\n";
 			}
 		}
 
@@ -1340,6 +1451,7 @@ namespace
 		proto_stats tcp_syn_;
 		proto_stats tcp_existing_;
 		dns_stats dns_;
+		domain_stats domains_;
 		/// <summary>Written by the worker, read by print_stats on the main thread</summary>
 		std::atomic<uint64_t> udp_suppressed_{0};
 
@@ -1572,6 +1684,7 @@ int main(int argc, char* argv[])
 	iphelper::etw::attributor_config config;
 	config.enable_tcp = opt.tcp;
 	config.enable_dns = opt.dns;
+	config.enable_domains = opt.domains;
 	config.flush = opt.flush;
 	config.cancel_start = &g_stop_requested;
 	config.log = [&output_mutex](const std::string& message)

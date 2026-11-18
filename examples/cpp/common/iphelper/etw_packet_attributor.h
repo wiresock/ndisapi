@@ -2,7 +2,8 @@
 /// <summary>
 /// Module Name:  etw_packet_attributor.h
 /// Abstract: ETW based owner-process attribution for outbound UDP datagrams,
-/// TCP connection attempts and Dnscache DNS queries.
+/// TCP connection attempts and Dnscache DNS queries, and an optional destination
+/// address to domain name map built from DNS-Client answers (including DoH).
 ///
 /// Header-only and self-contained (Windows SDK + C++17 standard library only), so it
 /// can be dropped unchanged into other WinpkFilter based projects.
@@ -181,6 +182,9 @@ namespace iphelper
 		constexpr USHORT dns_query_called = 3006;
 		constexpr USHORT dns_query_sent = 3010;
 		constexpr USHORT dns_query_wire = 3019;
+		constexpr USHORT dns_query_completed = 3008;
+		constexpr USHORT dns_query_response = 3020;
+		constexpr USHORT dns_doh_query = 8043;
 
 		/// <summary>Which event produced an owner record</summary>
 		enum class event_source : uint8_t
@@ -199,6 +203,9 @@ namespace iphelper
 			dns_query_called,    // DNS-Client 3006
 			dns_query_sent,      // DNS-Client 3010
 			dns_query_wire,      // DNS-Client 3019
+			dns_query_completed, // DNS-Client 3008 (domain mapping)
+			dns_query_response,  // DNS-Client 3020 (domain mapping)
+			dns_doh_query,       // DNS-Client 8043 (domain mapping: DoH marker)
 			count
 		};
 
@@ -219,6 +226,9 @@ namespace iphelper
 			case event_source::dns_query_called: return "DNS3006";
 			case event_source::dns_query_sent: return "DNS3010";
 			case event_source::dns_query_wire: return "DNS3019";
+			case event_source::dns_query_completed: return "DNS3008";
+			case event_source::dns_query_response: return "DNS3020";
+			case event_source::dns_doh_query: return "DNS8043";
 			default: return "none";
 			}
 		}
@@ -556,6 +566,69 @@ namespace iphelper
 			bool suffix_match{};
 		};
 
+		/// <summary>One name that a DNS answer (3020 or 3008) returned for an address</summary>
+		struct domain_candidate
+		{
+			/// <summary>Query name (lower case, no trailing dot)</summary>
+			std::wstring name;
+			/// <summary>Process that asked: 3020 ClientPID (v1+), 3008 header PID; 0 = unknown</summary>
+			uint32_t client_pid{};
+			uint16_t query_type{};
+			/// <summary>Event of the latest answer (dns_query_response or dns_query_completed)</summary>
+			event_source source{event_source::none};
+			/// <summary>A DoH query (8043) was seen for this name and client PID</summary>
+			bool doh{};
+			/// <summary>Event time of the latest answer with this name for this address and PID</summary>
+			int64_t event_qpc{};
+		};
+
+		enum class domain_quality : uint8_t
+		{
+			none,      // no live answer contained the address
+			exact,     // one name
+			ambiguous  // several names (shared CDN or hosting addresses); best = most recent
+		};
+
+		inline const char* to_string(const domain_quality q) noexcept
+		{
+			switch (q)
+			{
+			case domain_quality::exact: return "exact";
+			case domain_quality::ambiguous: return "ambiguous";
+			default: return "none";
+			}
+		}
+
+		/// <summary>Did the process that asked for the name own the flow?</summary>
+		enum class domain_pid_match : uint8_t
+		{
+			unknown, // no owner PID, or the answer carried no client PID
+			same,
+			other
+		};
+
+		inline const char* to_string(const domain_pid_match m) noexcept
+		{
+			switch (m)
+			{
+			case domain_pid_match::same: return "same-pid";
+			case domain_pid_match::other: return "other-pid";
+			default: return "pid-unknown";
+			}
+		}
+
+		/// <summary>Result of a destination address to domain name lookup</summary>
+		struct domain_match
+		{
+			domain_quality quality{domain_quality::none};
+			domain_pid_match pid_match{domain_pid_match::unknown};
+			/// <summary>Chosen name: the most recent answer of the flow owner if it asked for
+			/// one, else the most recent answer of any process</summary>
+			domain_candidate best;
+			/// <summary>Every live answer for the address, most recent first</summary>
+			std::vector<domain_candidate> candidates;
+		};
+
 		/// <summary>Per (provider, id, version) schema verdict</summary>
 		struct schema_status
 		{
@@ -644,6 +717,8 @@ namespace iphelper
 			bool tcp_available{};
 			bool dns_available{};
 			dns_tier dns_tier_detected{dns_tier::none};
+			bool domains_requested{};
+			bool domains_available{};
 			bool available{};
 			std::string failure;
 
@@ -722,6 +797,8 @@ namespace iphelper
 				os << "\n  flush: requested=" << etw::to_string(requested_flush) << " effective=" << etw::to_string(flush)
 					<< "\n  udp=" << (udp_available ? "yes" : "no") << " tcp=" << (tcp_available ? "yes" : "no")
 					<< " dns=" << (dns_available ? "yes" : "no") << " dns-tier=" << etw::to_string(dns_tier_detected);
+				if (domains_requested)
+					os << " domains=" << (domains_available ? "yes" : "no");
 				return os.str();
 			}
 		};
@@ -751,6 +828,8 @@ namespace iphelper
 			uint64_t image_unverified{};
 			uint64_t cache_entries{};
 			uint64_t dns_entries{};
+			/// <summary>Addresses in the domain map (enable_domains)</summary>
+			uint64_t domain_addresses{};
 			ULONG events_lost{};
 			ULONG log_buffers_lost{};
 			ULONG realtime_buffers_lost{};
@@ -786,6 +865,14 @@ namespace iphelper
 			bool enable_tcp = true;
 			/// <summary>Enable DNS-Client events for Dnscache caller attribution</summary>
 			bool enable_dns = false;
+			/// <summary>Enable DNS-Client answers (3020, 3008) and DoH markers (8043) for the
+			/// destination address to domain name map (domain_lookup)</summary>
+			bool enable_domains = false;
+			/// <summary>How long an answer maps its addresses. The events carry no TTL, so this
+			/// is a fixed lifetime after the latest answer with the address.</summary>
+			std::chrono::seconds domain_lifetime{600};
+			/// <summary>Bound of the domain map; the least recently answered addresses go first</summary>
+			size_t max_domain_addresses = 16384;
 			/// <summary>Request a TCPIP capture-state (1300 rundown of existing connections) [U]</summary>
 			bool tcp_rundown = true;
 			flush_mode flush = flush_mode::automatic;
@@ -822,9 +909,10 @@ namespace iphelper
 	/// <summary>
 	/// ETW owner attributor: one real-time session, one consumer thread, one maintenance
 	/// thread. lookup(), wait_for(), tcp_outcome(), dns_lookup(), wait_for_dns(),
-	/// request_flush(), get_counters() and report() may be called from any thread, also
-	/// while another thread runs start() or stop() (lookup(), wait_for(), dns_lookup() and
-	/// wait_for_dns() return nothing while ETW is unavailable). start() and stop()
+	/// domain_lookup(), request_flush(), get_counters() and report() may be called from any
+	/// thread, also while another thread runs start() or stop() (lookup(), wait_for(),
+	/// dns_lookup(), wait_for_dns() and domain_lookup() return nothing while ETW is
+	/// unavailable). start() and stop()
 	/// serialize with each other; the destructor must not run concurrently with any call.
 	/// </summary>
 	// --------------------------------------------------------------------------------
@@ -911,6 +999,7 @@ namespace iphelper
 					p.enable_status = ERROR_SUCCESS;
 				}
 				report_.requested_flush = config_.flush;
+				report_.domains_requested = config_.enable_domains;
 				report_.elevated = is_elevated();
 			}
 
@@ -1308,6 +1397,60 @@ namespace iphelper
 		}
 
 		// ****************************************************************************
+		/// <summary>
+		/// Destination address to domain name, from DNS-Client answers (enable_domains).
+		/// Every successful 3020 (Dnscache, one per network answer, including DoH) and 3008
+		/// (the calling process, also for answers served from the Dnscache cache [U]) maps
+		/// the IPv4/IPv6 addresses in its QueryResults to the query name for
+		/// domain_lifetime. owner_pid (0 = unknown) prefers the answers that process asked
+		/// for. Nothing is read from the packets, so DoH answers count like UDP ones.
+		/// nullopt: domain mapping is off or ETW is unavailable.
+		/// </summary>
+		// ****************************************************************************
+		std::optional<etw::domain_match> domain_lookup(const uint16_t family, const std::array<uint8_t, 16>& ip,
+		                                               const uint32_t owner_pid) const
+		{
+			if (!available_.load() || !config_.enable_domains)
+				return std::nullopt;
+
+			etw::domain_match m;
+			std::lock_guard<std::mutex> lock(domain_mutex_);
+			const auto it = domains_.find(domain_key{family, ip});
+			if (it == domains_.end())
+				return m;
+			for (const auto& r : it->second)
+			{
+				auto c = r.answer;
+				c.doh = c.doh || doh_seen_locked(c.name, c.client_pid, c.event_qpc);
+				m.candidates.push_back(std::move(c));
+			}
+			std::sort(m.candidates.begin(), m.candidates.end(),
+			          [](const etw::domain_candidate& a, const etw::domain_candidate& b) { return a.event_qpc > b.event_qpc; });
+			if (m.candidates.empty())
+				return m;
+
+			// The owner's own answers decide when there are any; otherwise every answer counts.
+			auto own = [owner_pid](const etw::domain_candidate& c) { return owner_pid != 0 && c.client_pid == owner_pid; };
+			const bool owner_asked = std::any_of(m.candidates.begin(), m.candidates.end(), own);
+			const etw::domain_candidate* best = nullptr;
+			bool several_names = false;
+			for (const auto& c : m.candidates) // most recent first
+			{
+				if (owner_asked && !own(c))
+					continue;
+				if (!best)
+					best = &c;
+				else if (c.name != best->name)
+					several_names = true;
+			}
+			m.best = *best;
+			m.quality = several_names ? etw::domain_quality::ambiguous : etw::domain_quality::exact;
+			if (owner_pid != 0 && m.best.client_pid != 0)
+				m.pid_match = m.best.client_pid == owner_pid ? etw::domain_pid_match::same : etw::domain_pid_match::other;
+			return m;
+		}
+
+		// ****************************************************************************
 		/// <summary>Counter snapshot (EventsLost etc. read with EVENT_TRACE_CONTROL_QUERY)</summary>
 		// ****************************************************************************
 		etw::counters get_counters() const
@@ -1336,6 +1479,10 @@ namespace iphelper
 			{
 				std::lock_guard<std::mutex> lock(dns_mutex_);
 				c.dns_entries = dns_events_.size();
+			}
+			{
+				std::lock_guard<std::mutex> lock(domain_mutex_);
+				c.domain_addresses = domains_.size();
 			}
 			for (size_t i = 0; i < c.latency_histogram.size(); ++i)
 				c.latency_histogram[i] = latency_histogram_[i].load();
@@ -1422,9 +1569,14 @@ namespace iphelper
 			}
 
 			auto& dns = report_.providers[dns_client_index];
-			dns.requested = config_.enable_dns;
-			dns.keywords = 0; // 3006..3020 carry keyword mask 0 [V-manifest]
-			dns.event_ids = {etw::dns_query_called, etw::dns_query_sent, etw::dns_query_wire};
+			dns.requested = config_.enable_dns || config_.enable_domains;
+			dns.keywords = 0; // 3006..3020 and 8043 carry keyword mask 0 [V-manifest]
+			dns.event_ids.clear();
+			if (config_.enable_dns)
+				dns.event_ids = {etw::dns_query_called, etw::dns_query_sent, etw::dns_query_wire};
+			if (config_.enable_domains)
+				dns.event_ids.insert(dns.event_ids.end(),
+				                     {etw::dns_query_completed, etw::dns_query_response, etw::dns_doh_query});
 
 			for (size_t i = 0; i < provider_count; ++i)
 			{
@@ -1970,6 +2122,7 @@ namespace iphelper
 			f_query_type,
 			f_client_pid,
 			f_network_index,
+			f_query_results,
 			f_field_count
 		};
 
@@ -2103,6 +2256,9 @@ namespace iphelper
 				case etw::dns_query_called: return etw::event_source::dns_query_called;
 				case etw::dns_query_sent: return etw::event_source::dns_query_sent;
 				case etw::dns_query_wire: return etw::event_source::dns_query_wire;
+				case etw::dns_query_completed: return etw::event_source::dns_query_completed;
+				case etw::dns_query_response: return etw::event_source::dns_query_response;
+				case etw::dns_doh_query: return etw::event_source::dns_doh_query;
 				default: return etw::event_source::none;
 				}
 			}
@@ -2163,6 +2319,16 @@ namespace iphelper
 					query_name, query_type, client_pid,
 					{f_network_index, {L"NetworkIndex", nullptr, nullptr}, value_class::u32, false},
 				};
+			// Answers: 3020 v0 has no ClientPID (v1+ has); 3008 calls its status QueryStatus [V-manifest]
+			case es::dns_query_response:
+			case es::dns_query_completed:
+				return {
+					query_name, query_type, client_pid,
+					{f_status, {L"Status", L"QueryStatus", nullptr}, value_class::u32, true},
+					{f_query_results, {L"QueryResults", nullptr, nullptr}, value_class::wstring, true},
+				};
+			case es::dns_doh_query: // 8043 v0: Server, NameQuery, InterfaceName, Template, ClientPID [V-manifest]
+				return {{f_query_name, {L"NameQuery", nullptr, nullptr}, value_class::wstring, true}, client_pid};
 			default:
 				return {};
 			}
@@ -2473,7 +2639,10 @@ namespace iphelper
 			std::array<uint16_t, f_field_count> addr_family{};
 			std::array<std::array<uint8_t, 16>, f_field_count> addr{};
 			std::array<uint16_t, f_field_count> addr_port{};
+			/// <summary>f_query_name</summary>
 			std::wstring text;
+			/// <summary>f_query_results</summary>
+			std::wstring results;
 		};
 
 		/// <summary>SOCKADDR blob: family @0, port (network order) @+2, IPv4 @+4, IPv6 @+8
@@ -2561,12 +2730,16 @@ namespace iphelper
 					out.has[f] = true;
 					break;
 				case f_query_name:
-					if (sz >= 2)
+				case f_query_results:
 					{
-						out.text.assign(reinterpret_cast<const wchar_t*>(v), sz / 2);
-						while (!out.text.empty() && out.text.back() == L'\0')
-							out.text.pop_back();
-						out.has[f] = true;
+						auto& text = f == f_query_name ? out.text : out.results;
+						text.clear();
+						if (sz >= 2)
+							text.assign(reinterpret_cast<const wchar_t*>(v), sz / 2);
+						while (!text.empty() && text.back() == L'\0')
+							text.pop_back();
+						// An empty QueryResults (failed or empty answer) is still a parsed field
+						out.has[f] = sz >= 2 || f == f_query_results;
 					}
 					break;
 				default:
@@ -2706,6 +2879,13 @@ namespace iphelper
 			case etw::event_source::dns_query_sent:
 			case etw::event_source::dns_query_wire:
 				on_dns_event(record, *schema, source, ev, event_qpc, received);
+				return;
+			case etw::event_source::dns_query_completed:
+			case etw::event_source::dns_query_response:
+				on_answer_event(record, source, ev, event_qpc, received);
+				return;
+			case etw::event_source::dns_doh_query:
+				on_doh_event(ev, event_qpc, received);
 				return;
 			case etw::event_source::tcpip_udp_bind:
 				on_bind_event(ev, received);
@@ -2858,6 +3038,103 @@ namespace iphelper
 					dns_events_.pop_front();
 			}
 			bump_generation();
+		}
+
+		/// <summary>3020 / 3008: a successful answer maps each address in QueryResults to the
+		/// query name. A failed answer (e.g. 3020 Status 1460 on a parallel interface) and
+		/// entries that are not addresses (CNAME entries are logged as "type: 5 name") are
+		/// skipped.</summary>
+		void on_answer_event(const EVENT_RECORD* record, const etw::event_source source, const parsed_event& ev,
+		                     const int64_t event_qpc, const int64_t received)
+		{
+			if (!ev.has[f_query_name] || !ev.has[f_query_results] || !ev.has[f_status] || ev.num[f_status] != 0)
+				return;
+			const auto addresses = parse_query_results(ev.results);
+			if (addresses.empty())
+				return;
+
+			etw::domain_candidate c;
+			c.name = normalize_name(ev.text);
+			if (c.name.empty())
+				return;
+			// 3020 is written by Dnscache: the caller is ClientPID (v1+). 3008 is written in the
+			// calling process, like 3006 [U]: the caller is the header PID.
+			if (source == etw::event_source::dns_query_completed)
+				c.client_pid = record->EventHeader.ProcessId;
+			else if (ev.has[f_client_pid])
+				c.client_pid = static_cast<uint32_t>(ev.num[f_client_pid]);
+			c.query_type = ev.has[f_query_type] ? static_cast<uint16_t>(ev.num[f_query_type]) : 0;
+			c.source = source;
+			c.event_qpc = event_qpc;
+
+			std::lock_guard<std::mutex> lock(domain_mutex_);
+			c.doh = doh_seen_locked(c.name, c.client_pid, event_qpc);
+			for (const auto& a : addresses)
+			{
+				auto& records = domains_[a];
+				auto r = std::find_if(records.begin(), records.end(), [&c](const domain_record& x)
+				{
+					return x.answer.client_pid == c.client_pid && x.answer.name == c.name;
+				});
+				if (r != records.end())
+				{
+					// Same name and caller again (e.g. 3020 then 3008 of one query): refresh it.
+					// doh is sticky: one DoH answer for the name and caller marks it.
+					const bool doh = r->answer.doh || c.doh;
+					if (c.event_qpc >= r->answer.event_qpc)
+						r->answer = c;
+					r->answer.doh = doh;
+					r->received_qpc = std::max(r->received_qpc, received);
+					continue;
+				}
+				if (records.size() >= max_names_per_address)
+				{
+					records.erase(std::min_element(records.begin(), records.end(),
+					                               [](const domain_record& x, const domain_record& y)
+					                               {
+						                               return x.received_qpc < y.received_qpc;
+					                               }));
+				}
+				records.push_back(domain_record{c, received});
+			}
+			if (domains_.size() > config_.max_domain_addresses)
+				evict_oldest(domains_, [](const std::vector<domain_record>& v) { return newest_received(v); });
+		}
+
+		/// <summary>8043: a DoH query for NameQuery on behalf of ClientPID. Kept as a marker
+		/// that answers for the same name and caller match (in either delivery order).</summary>
+		void on_doh_event(const parsed_event& ev, const int64_t event_qpc, const int64_t received)
+		{
+			if (!ev.has[f_query_name])
+				return;
+			auto name = normalize_name(ev.text);
+			if (name.empty())
+				return;
+			const doh_mark mark{ev.has[f_client_pid] ? static_cast<uint32_t>(ev.num[f_client_pid]) : 0, event_qpc, received};
+			std::lock_guard<std::mutex> lock(domain_mutex_);
+			auto& marks = doh_marks_[std::move(name)];
+			if (marks.size() >= max_names_per_address)
+				marks.erase(marks.begin()); // oldest first: marks are appended in arrival order
+			marks.push_back(mark);
+			if (doh_marks_.size() > config_.max_domain_addresses)
+				evict_oldest(doh_marks_, [](const std::vector<doh_mark>& v) { return v.back().received_qpc; });
+		}
+
+		/// <summary>A DoH query (8043) for name and caller (0 matches any) written from 10 s
+		/// before to 2 s after the answer: 8043 is written when the query is sent, the answer
+		/// after the response; ETW may deliver them in either order. Lock held.</summary>
+		bool doh_seen_locked(const std::wstring& name, const uint32_t client_pid, const int64_t answer_qpc) const
+		{
+			const auto it = doh_marks_.find(name);
+			if (it == doh_marks_.end())
+				return false;
+			const auto before = us_to_qpc(10 * 1000000LL);
+			const auto after = us_to_qpc(2 * 1000000LL);
+			return std::any_of(it->second.begin(), it->second.end(), [&](const doh_mark& m)
+			{
+				return (m.client_pid == 0 || client_pid == 0 || m.client_pid == client_pid) &&
+					m.event_qpc >= answer_qpc - before && m.event_qpc <= answer_qpc + after;
+			});
 		}
 
 		void bump_generation()
@@ -3366,6 +3643,28 @@ namespace iphelper
 				while (!dns_events_.empty() && dns_events_.front().caller.received_qpc + dns_ttl < now)
 					dns_events_.pop_front();
 			}
+			if (config_.enable_domains)
+			{
+				const auto lifetime = us_to_qpc(
+					std::chrono::duration_cast<std::chrono::microseconds>(config_.domain_lifetime).count());
+				std::lock_guard<std::mutex> lock(domain_mutex_);
+				for (auto it = domains_.begin(); it != domains_.end();)
+				{
+					auto& v = it->second;
+					v.erase(std::remove_if(v.begin(), v.end(),
+					                       [&](const domain_record& r) { return r.received_qpc + lifetime < now; }),
+					        v.end());
+					it = v.empty() ? domains_.erase(it) : std::next(it);
+				}
+				for (auto it = doh_marks_.begin(); it != doh_marks_.end();)
+				{
+					auto& v = it->second;
+					v.erase(std::remove_if(v.begin(), v.end(),
+					                       [&](const doh_mark& m) { return m.received_qpc + lifetime < now; }),
+					        v.end());
+					it = v.empty() ? doh_marks_.erase(it) : std::next(it);
+				}
+			}
 		}
 
 		void record_latency(const int64_t delta_qpc)
@@ -3387,6 +3686,128 @@ namespace iphelper
 			uint32_t network_index{};
 			bool has_client_pid{};
 		};
+
+		// ------------------------------------------------------------------------
+		// Domain map (enable_domains): address -> names from DNS-Client answers
+		// ------------------------------------------------------------------------
+		struct domain_key
+		{
+			uint16_t family{};
+			std::array<uint8_t, 16> ip{}; // IPv4 in the first 4 bytes, the rest 0 (as packet_tuple)
+
+			bool operator==(const domain_key& o) const noexcept { return family == o.family && ip == o.ip; }
+		};
+
+		struct domain_key_hash
+		{
+			size_t operator()(const domain_key& k) const noexcept
+			{
+				etw::packet_tuple t;
+				t.family = k.family;
+				t.remote_ip = k.ip;
+				return etw::packet_tuple_hash{}(t);
+			}
+		};
+
+		struct domain_record
+		{
+			etw::domain_candidate answer;
+			/// <summary>Arrival of the latest answer: drives pruning and eviction</summary>
+			int64_t received_qpc{};
+		};
+
+		struct doh_mark
+		{
+			uint32_t client_pid{};
+			int64_t event_qpc{};
+			int64_t received_qpc{};
+		};
+
+		/// <summary>Names (per caller) kept per address, and DoH markers kept per name. A CDN
+		/// address shared by more names than this keeps the most recently answered ones.</summary>
+		static constexpr size_t max_names_per_address = 8;
+		/// <summary>Addresses taken from one answer (a large answer keeps its first ones)</summary>
+		static constexpr size_t max_addresses_per_answer = 64;
+
+		static int64_t newest_received(const std::vector<domain_record>& v) noexcept
+		{
+			int64_t newest = 0;
+			for (const auto& r : v)
+				newest = std::max(newest, r.received_qpc);
+			return newest;
+		}
+
+		/// <summary>Over the bound: drops the oldest quarter (by newest(value)), so a burst of
+		/// new addresses costs one O(n) pass per n/4 inserts instead of one per insert.</summary>
+		template <typename Map, typename Newest>
+		static void evict_oldest(Map& map, Newest newest)
+		{
+			std::vector<int64_t> ages;
+			ages.reserve(map.size());
+			for (const auto& kv : map)
+				ages.push_back(newest(kv.second));
+			const auto nth = ages.begin() + static_cast<std::ptrdiff_t>(ages.size() / 4);
+			std::nth_element(ages.begin(), nth, ages.end());
+			const auto cutoff = *nth;
+			for (auto it = map.begin(); it != map.end();)
+				it = newest(it->second) <= cutoff ? map.erase(it) : std::next(it);
+		}
+
+		/// <summary>QueryResults is a ';'-separated list: "104.20.26.136;172.66.157.237;" or
+		/// "2606:4700:10::ac42:9ded;..." [M26300 trace]; CNAME entries appear as
+		/// "type:  5 name;" and IPv4 answers may be written as "::ffff:a.b.c.d" [U]. Every
+		/// entry that parses as an address is taken (IPv4-mapped folded to IPv4, as the
+		/// packet tuples are); everything else is skipped.</summary>
+		static std::vector<domain_key> parse_query_results(const std::wstring& results)
+		{
+			std::vector<domain_key> out;
+			auto is_space = [](const wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
+			size_t start = 0;
+			while (start < results.size() && out.size() < max_addresses_per_answer)
+			{
+				auto end = results.find(L';', start);
+				if (end == std::wstring::npos)
+					end = results.size();
+				auto first = start;
+				auto last = end;
+				while (first < last && is_space(results[first]))
+					++first;
+				while (last > first && is_space(results[last - 1]))
+					--last;
+				start = end + 1;
+				if (first == last || last - first > 63)
+					continue;
+				const std::wstring item = results.substr(first, last - first);
+
+				domain_key k;
+				in_addr v4{};
+				in6_addr v6{};
+				if (InetPtonW(AF_INET, item.c_str(), &v4) == 1)
+				{
+					k.family = AF_INET;
+					std::memcpy(k.ip.data(), &v4, 4);
+				}
+				else if (InetPtonW(AF_INET6, item.c_str(), &v6) == 1)
+				{
+					static constexpr uint8_t mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+					if (std::memcmp(&v6, mapped_prefix, 12) == 0)
+					{
+						k.family = AF_INET;
+						std::memcpy(k.ip.data(), reinterpret_cast<const uint8_t*>(&v6) + 12, 4);
+					}
+					else
+					{
+						k.family = AF_INET6;
+						std::memcpy(k.ip.data(), &v6, 16);
+					}
+				}
+				else
+					continue;
+				if (std::find(out.begin(), out.end(), k) == out.end())
+					out.push_back(k);
+			}
+			return out;
+		}
 
 		static std::wstring normalize_name(std::wstring name)
 		{
@@ -4118,6 +4539,7 @@ namespace iphelper
 				report_.tcp_available = config_.enable_tcp && udp_provider && tcp_schema && tcp_self_test_ok &&
 					live_.load();
 				report_.dns_available = config_.enable_dns && filtered_enabled(dns_client_index) && live_.load();
+				report_.domains_available = config_.enable_domains && filtered_enabled(dns_client_index) && live_.load();
 				(void)dns_schema; // DNS schemas are checked lazily on the first DNS event
 
 				available = started_.load() && report_.udp_available;
@@ -4287,6 +4709,10 @@ namespace iphelper
 
 		mutable std::mutex dns_mutex_;
 		std::deque<dns_record> dns_events_;
+
+		mutable std::mutex domain_mutex_;
+		std::unordered_map<domain_key, std::vector<domain_record>, domain_key_hash> domains_;
+		std::unordered_map<std::wstring, std::vector<doh_mark>> doh_marks_;
 
 		std::mutex image_mutex_;
 		std::unordered_map<uint32_t, image_memo> image_memo_;

@@ -67,7 +67,7 @@ msbuild examples\cpp\packet_owner\packet_owner.vcxproj /p:Configuration=Release 
 ## Usage
 
 ```
-packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
+packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns] [--domains]
              [--flush auto|ondemand|timer] [--hold-ms N] [--late-ms N]
              [--csv file] [--udp-all] [--tcp-existing] [--stats-sec N] [--quiet] [--no-etw]
              [--no-iph-refresh] [--iph-refresh-ms N] [--gates-only] [--force-adapter]
@@ -78,6 +78,7 @@ packet_owner [--adapter <index|name>] [--udp | --tcp] [--dns]
 | `--adapter` | Adapter to filter: the 1-based index from the printed list, or (part of) its friendly name. Without it you are asked. |
 | `--udp`, `--tcp` | Attribute only UDP datagrams or only TCP SYNs. Default: both. |
 | `--dns` | Also enable DNS-Client events. For DNS queries sent by the DNS Client service (Dnscache, a `svchost.exe`), print the processes that asked for the name. |
+| `--domains` | Also enable DNS-Client answer events and name the destination of each row from the DNS answers the DNS Client logged, Windows DoH included (see "Domain mapping"). Off by default. |
 | `--flush` | How ETW buffers are delivered (see below). Default `auto`. |
 | `--hold-ms` | Budget used to classify an ETW answer as `in-budget` or `late`. Default 75 ms. Nothing is actually held. |
 | `--late-ms` | Stop waiting for an ETW owner after this many ms and report `none`. Default 2000. |
@@ -151,6 +152,12 @@ not a lock: a filter that starts between the check and `packet_owner`'s own
 +4.010s UDP 192.168.1.10:61001 -> 192.168.1.1:53 | IPH svchost.exe(1588) hit | ETW svchost.exe(1588) 1169v1 +9.80ms in-budget (event -0.28ms) | agree | DNS www.example.org type 28 via Dnscache: tier2:3006-header-PID callers firefox.exe(7720) (wire-confirmed)
 ```
 
+With `--domains` every row ends with the destination's name (illustrative):
+
+```
++5.120s TCP SYN 192.168.1.10:50610 -> 104.20.26.136:443 | IPH - miss | ETW curl.exe(6104)[header-pid] 1031v1 +7.10ms in-budget (event -0.20ms) (connected) | etw-only | domain www.example.com (exact, same-pid, DoH)
+```
+
 * `IPH`: owner from the IP Helper tables and how it was found (`hit`, `refreshed-hit` or `miss`).
 * `ETW`: owner, the event that decided (`id` `v` `version`), delivery latency (event
   received minus packet read), and `in-budget` / `late` / `none`. `(event ±x ms)` is the
@@ -178,6 +185,13 @@ not a lock: a filter that starts between the check and `packet_owner`'s own
   (`connected` / `failed` / `unknown`), `tcp_connect_status` (the 1034 status) and
   `etw_overridden_header_pid` (the replaced 1031 header PID, empty if none) and
   `etw_pid_from_outcome` (1 if the owner came from 1033/1034 because 1031 had no PID).
+* `domain` (`--domains`): `name (exact|ambiguous: all names, same-pid|other-pid N|pid-unknown, DoH)`,
+  `-` if no live answer contained the destination address, `off` if ETW is not available.
+  See "Domain mapping". CSV columns added at the end, only with `--domains`: `domain`,
+  `domain_match` (`exact` / `ambiguous` / `none` / `off`), `domain_pid_match`,
+  `domain_query_pid` (the process that asked), `domain_doh`, `domain_source` (`DNS3020` /
+  `DNS3008`), `domain_answer_offset_ms` (answer event time minus packet read; negative:
+  before) and `domain_names` (every live name for the address, most recent first).
 * `DNS ... via Dnscache`: the callers of a query sent by Dnscache. `tier1:ClientPID` comes
   from the `ClientPID` field of DNS-Client 3019/3010 (newer builds); `tier2:3006-header-PID`
   matches DNS-Client 3006 events by name and type (including DNS search suffixes).
@@ -298,6 +312,53 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
    and refreshed on the attributor's maintenance thread (every 30 s and 10 s);
    `dns_lookup()` and `dnscache_pid()` only read snapshots.
 
+## Domain mapping (`--domains`)
+
+With DNS over HTTPS the query is TLS to the resolver (on the wire: TCP to 1.1.1.1:443
+owned by Dnscache), so the name cannot be read from the packets. The DNS Client logs the
+answer instead, and that is the source of truth here:
+
+* **DNS-Client 3020** ("query response", written by Dnscache for each network answer, DoH
+  included) carries `QueryName`, `Status`, `QueryResults` and, from v1, `ClientPID`, the
+  process that asked. **3008** ("query completed", written in the calling process like
+  3006, so its header PID is the caller [unverified]) carries the same results and should
+  also cover answers served from the Dnscache cache [unverified]. Answers with a nonzero
+  status (for example 3020 status 1460 on a parallel interface) are ignored.
+* Every entry of `QueryResults` that parses as an IPv4 or IPv6 address
+  (`104.20.26.136;172.66.157.237;`, `2606:4700:10::ac42:9ded;...`) maps that address to the
+  query name; IPv4-mapped IPv6 entries are folded to IPv4, other entries (CNAME entries
+  are logged as `type: 5 <name>`) are skipped.
+* **DNS-Client 8043** (DoH query initiated: `NameQuery`, `Template`, `ClientPID`) marks
+  answers for the same name and client PID written from 10 s before to 2 s after it as
+  `DoH`, in either delivery order.
+* The map keeps up to 8 (name, asking process) pairs per address and up to 16384
+  addresses; the least recently answered go first. The events carry no TTL, so an answer
+  maps its addresses for a fixed 10 minutes after the latest answer that contained them.
+* A row is looked up when it is final, by its destination address and owner (ETW owner,
+  else IP Helper owner). If the owner asked for a name that resolved to the address, the
+  most recent such name is shown (`same-pid`); otherwise the most recent name any process
+  got (`other-pid N`, or `pid-unknown` without an owner or a client PID, e.g. 3020 v0).
+  `exact` means that set held one name, `ambiguous` that it held several (all are listed).
+
+Limits:
+
+* **Shared addresses:** CDN and hosting addresses serve many names; the row shows the
+  most recent answer, `ambiguous` with every live name. An answer older than 10 minutes,
+  or pushed out by newer ones, is forgotten, although the application may still use the
+  address (long-lived connections, its own address cache, DNS TTLs above 10 minutes).
+* **Only the Windows DNS Client is visible:** applications with their own resolver or
+  their own DoH (browsers with secure DNS set to a custom provider, many VPN and proxy
+  clients) bypass Dnscache; their rows show `-`. So do connections to literal IP addresses
+  and names from the hosts file or other sources that produce no answer event [unverified].
+* **Ordering:** the lookup runs when the row is final, normally after the packet's own
+  owner event has arrived; the answer that gave the application the address was written
+  before the packet, so it is normally delivered by then. An answer still in another ETW
+  buffer at that moment is not waited for, and the row shows `-`.
+* **3020 v0** (no `ClientPID`) gives no per-process information; on Windows 7 the
+  DNS-Client events are unavailable (event-ID filters are not honoured).
+* Measured so far: the 3020 / 8043 fields and values above, from a trace on a 26H2 host
+  with DoH to 1.1.1.1; `packet_owner --domains` itself awaits a Windows run.
+
 ## Events used
 
 | Provider / ID | Use | Confidence |
@@ -311,6 +372,7 @@ CPUs + 16 (12 / 40 on a 6-CPU machine).
 | TCPIP 1017 TcpAcceptListenerComplete, Kernel-Network 15 / 31 | Inbound connections | 1017 v1 and KN 15 v0 seen in the loopback self-test |
 | TCPIP 1300 TcpConnectionRundown (capture state) | `--tcp-existing` | Measured: v3 on 26300, v1 on 19045 |
 | DNS-Client 3006 / 3010 / 3019 | Dnscache callers (`--dns`) | Measured on 19045 (no ClientPID) and 26300 (ClientPID) |
+| DNS-Client 3020 (v1+: ClientPID) / 3008, 8043 | Address to name map, DoH marker (`--domains`) | 3020 and 8043 fields seen in a trace with DoH; 3008 per manifest only; `--domains` not run yet |
 
 Manifest sources: [jdu2600/Windows10EtwEvents](https://github.com/jdu2600/Windows10EtwEvents)
 (per-release dumps 1511 to 25H2) and
@@ -370,11 +432,12 @@ to the flush delay.
 * **One filtering process per adapter:** see above; a busy adapter is refused unless
   `--force-adapter` is given. A crashed instance does not leave the adapter busy: the
   driver resets the mode when the owning process exits.
-* **DNS cache hits are invisible:** a name answered from the Dnscache cache produces no
+* **DNS cache hits are invisible** to `--dns`: a name answered from the Dnscache cache produces no
   packet, so there is nothing to attribute. DNS-Client events are also only correlated
   with queries that Dnscache puts on the wire.
 * **DNS over HTTPS** (browsers' built-in DoH, Windows DoH) is just TLS to a resolver; the
-  name and the real caller of the lookup are not visible.
+  query packets show neither the name nor the real caller. With `--domains`, Windows DoH
+  answers still name the destinations (see "Domain mapping"); a browser's own DoH does not.
 * **Coalesced DNS queries** are attributed to all callers that asked for the same name and
   type within the correlation window; the example lists them all.
 * **Loopback traffic** does not pass the driver, so it is never reported (it is used only
