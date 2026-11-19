@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Header Files\common">
+      <UniqueIdentifier>{1c539f4d-c8d3-481e-9de4-ff01768d03e5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\ndisapi">
+      <UniqueIdentifier>{b693c8cc-f9fe-4a58-b4ac-282d15d05dae}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common\iphelper">
+      <UniqueIdentifier>{5fde0c86-06aa-4cb4-9f30-6de5cb731c12}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\iphelper\etw_packet_attributor.h">
+      <Filter>Header Files\common\iphelper</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\iphelper\process_lookup.h">
+      <Filter>Header Files\common\iphelper</Filter>
+    </ClInclude>
+    <ClInclude Include="..\common\ndisapi\simple_packet_filter.h">
+      <Filter>Header Files\common\ndisapi</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="packet_owner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="vcpkg-configuration.json" />
+    <None Include="vcpkg.json" />
+  </ItemGroup>
+</Project>

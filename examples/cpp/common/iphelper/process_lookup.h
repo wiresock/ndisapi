@@ -1,5 +1,8 @@
 #pragma once
 
+#include <mutex>
+#include <shared_mutex>
+
 namespace iphelper
 {
 	// --------------------------------------------------------------------------------
@@ -96,6 +99,14 @@ namespace iphelper
 		/// Lock to control access to UDP sessions hashtable
 		/// </summary>
 		std::shared_mutex udp_to_app_lock_;
+		/// <summary>
+		/// Serializes TCP table refreshes (protects table_buffer_tcp_). Lookups never take it.
+		/// </summary>
+		std::mutex tcp_refresh_lock_;
+		/// <summary>
+		/// Serializes UDP table refreshes (protects table_buffer_udp_). Lookups never take it.
+		/// </summary>
+		std::mutex udp_refresh_lock_;
 		/// <summary>
 		/// Default process used when process lookup in not possible via IP Helper API
 		/// Usually IP Helper API fails for system processes
@@ -210,7 +221,12 @@ namespace iphelper
 		}
 
 		/// <summary>
-		/// Updates TCP/UDP hash tables
+		/// Updates TCP/UDP hash tables.
+		/// The new table is built (GetExtended*Table plus GetOwnerModuleFrom*Entry per row)
+		/// without holding the lookup lock; the lookup lock is taken exclusively only to swap
+		/// the finished table in, so concurrent lookups (e.g. on a packet filter thread) are
+		/// not stalled for the duration of the IP Helper calls. On failure the previous
+		/// table is kept.
 		/// </summary>
 		/// <param name="tcp">set to true to update TCP table</param>
 		/// <param name="udp">set to true to update UDP table</param>
@@ -221,13 +237,13 @@ namespace iphelper
 
 			if (tcp)
 			{
-				std::lock_guard<std::shared_mutex> lock(tcp_to_app_lock_);
+				std::lock_guard<std::mutex> lock(tcp_refresh_lock_);
 				ret_tcp = initialize_tcp_table();
 			}
 
 			if (udp)
 			{
-				std::lock_guard<std::shared_mutex> lock(udp_to_app_lock_);
+				std::lock_guard<std::mutex> lock(udp_refresh_lock_);
 				ret_udp = initialize_udp_table();
 			}
 
@@ -334,15 +350,28 @@ namespace iphelper
 		}
 
 		/// @brief Initializes or updates the TCP hashtable by retrieving the extended TCP table for the selected IP address type.
-		/// @details This function retrieves the extended TCP table and processes each entry to obtain owner module information. 
-		///          It then updates the tcp_to_app_ map with the network_process information for each IP session.
-		/// @returns true if successful, false otherwise.
+		/// @details Builds a new table outside tcp_to_app_lock_ and swaps it in under a short exclusive lock.
+		///          The caller serializes refreshes (tcp_refresh_lock_, or the constructor).
+		/// @returns true if successful, false otherwise (the previous table is kept).
 		bool initialize_tcp_table()
+		{
+			tcp_hashtable_t table;
+			if (!build_tcp_table(table))
+				return false;
+			std::unique_lock<std::shared_mutex> lock(tcp_to_app_lock_);
+			tcp_to_app_.swap(table);
+			lock.unlock();
+			return true; // the old table is released here, outside the lock
+		}
+
+		/// @brief Retrieves the extended TCP table and builds a session to process map from it.
+		/// @param tcp_to_app receives the new table.
+		/// @returns true if successful, false otherwise.
+		bool build_tcp_table(tcp_hashtable_t& tcp_to_app)
 		{
 			try
 			{
 				auto table_size = table_buffer_size_tcp_;
-				tcp_to_app_.clear();
 
 				while (true) {
 					if (const uint32_t result = ::GetExtendedTcpTable(table_buffer_tcp_.get(), &table_size, FALSE, T::af_type,
@@ -361,7 +390,7 @@ namespace iphelper
 
 					for (size_t i = 0; i < table->dwNumEntries; i++) {
 						if (auto process_ptr = process_tcp_entry_v4(&table->table[i])) {
-							tcp_to_app_[net::ip_session<T>(T{table->table[i].dwLocalAddr},
+							tcp_to_app[net::ip_session<T>(T{table->table[i].dwLocalAddr},
 															T{table->table[i].dwRemoteAddr},
 															ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)),
 															ntohs(static_cast<uint16_t>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
@@ -372,7 +401,7 @@ namespace iphelper
 
 					for (size_t i = 0; i < table->dwNumEntries; i++) {
 						if (auto process_ptr = process_tcp_entry_v6(&table->table[i])) {
-							tcp_to_app_[net::ip_session<T>(T{table->table[i].ucLocalAddr},
+							tcp_to_app[net::ip_session<T>(T{table->table[i].ucLocalAddr},
 															T{table->table[i].ucRemoteAddr},
 															ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)),
 															ntohs(static_cast<uint16_t>(table->table[i].dwRemotePort)))] = std::move(process_ptr);
@@ -433,12 +462,24 @@ namespace iphelper
 		}
 
 		/// @brief Initializes/updates UDP hashtable
-		/// @details This function initializes or updates the UDP hashtable with network_process objects,
-		///          mapping IP endpoints to their owner processes.
-		/// @return true if successful, false otherwise
+		/// @details Builds a new table outside udp_to_app_lock_ and swaps it in under a short exclusive lock.
+		///          The caller serializes refreshes (udp_refresh_lock_, or the constructor).
+		/// @return true if successful, false otherwise (the previous table is kept)
 		bool initialize_udp_table() {
+			udp_hashtable_t table;
+			if (!build_udp_table(table))
+				return false;
+			std::unique_lock<std::shared_mutex> lock(udp_to_app_lock_);
+			udp_to_app_.swap(table);
+			lock.unlock();
+			return true; // the old table is released here, outside the lock
+		}
+
+		/// @brief Retrieves the extended UDP table and builds an endpoint to process map from it.
+		/// @param udp_to_app receives the new table.
+		/// @return true if successful, false otherwise
+		bool build_udp_table(udp_hashtable_t& udp_to_app) {
 			auto table_size = table_buffer_size_udp_;
-			udp_to_app_.clear();
 
 			try {
 				do {
@@ -464,7 +505,7 @@ namespace iphelper
 
 					for (size_t i = 0; i < table->dwNumEntries; i++) {
 						if (auto process_ptr = process_udp_entry_v4(&table->table[i])) {
-							udp_to_app_[net::ip_endpoint<T>(
+							udp_to_app[net::ip_endpoint<T>(
 								T{ table->table[i].dwLocalAddr },
 								ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
 						}
@@ -475,7 +516,7 @@ namespace iphelper
 
 					for (size_t i = 0; i < table->dwNumEntries; i++) {
 						if (auto process_ptr = process_udp_entry_v6(&table->table[i])) {
-							udp_to_app_[net::ip_endpoint<T>(
+							udp_to_app[net::ip_endpoint<T>(
 								T{ table->table[i].ucLocalAddr },
 								ntohs(static_cast<uint16_t>(table->table[i].dwLocalPort)))] = std::move(process_ptr);
 						}
